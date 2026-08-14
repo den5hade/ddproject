@@ -1,0 +1,38 @@
+name: deploy-marker
+
+# Pushes the GPU image to the registry. The GPU VPS itself is ephemeral:
+# on boot it pulls the latest image (see infrastructure/marker-vps/scripts/startup.sh).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/marker-worker/**"
+      - "packages/**"
+      - "infrastructure/marker-vps/**"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/deploy-marker.yml"
+
+jobs:
+  build-and-push:
+    name: Build & push marker-worker GPU image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/marker-worker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/pdf-ai-platform/marker-worker:latest
+            ghcr.io/pdf-ai-platform/marker-worker:${{ github.sha }}

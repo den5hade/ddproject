@@ -1,0 +1,16 @@
+[Unit]
+Description=Marker GPU worker (stateless compute node)
+After=docker.service network-online.target tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/marker-vps
+ExecStart=/usr/local/bin/docker compose down ; /usr/local/bin/docker compose pull && /usr/local/bin/docker compose up -d
+ExecStop=/usr/local/bin/docker compose down
+TimeoutStartSec=600
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

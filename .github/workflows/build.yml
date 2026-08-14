@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_USER: ${{ github.actor }}
+  REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  images:
+    name: Build & push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        app: [account-api, marker-orchestrator, ai-worker, marker-worker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/pdf-ai-platform/${{ matrix.app }}:latest
+            ${{ env.REGISTRY }}/pdf-ai-platform/${{ matrix.app }}:${{ github.sha }}
+
+  web:
+    name: Build & push web SPA
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/pdf-ai-platform/web:latest
+            ${{ env.REGISTRY }}/pdf-ai-platform/web:${{ github.sha }}

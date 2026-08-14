@@ -1,0 +1,17 @@
+# GPU VPS: stateless compute node. Only the marker-worker image runs here.
+# On boot: docker login -> pull image -> docker compose up -> READY.
+# To switch GPU providers, only the image URL / env below change.
+
+services:
+  marker-worker:
+    image: ${MARKER_WORKER_IMAGE:-registry.example.com/pdf-ai-platform/marker-worker:latest}
+    env_file: .env
+    restart: unless-stopped
+    # NVIDIA GPU runtime (works on GPU VPS; remove for CPU dev test runs)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

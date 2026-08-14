@@ -1,0 +1,33 @@
+name: deploy-main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/account-api/**"
+      - "apps/marker-orchestrator/**"
+      - "apps/ai-worker/**"
+      - "apps/web/**"
+      - "infrastructure/main-vps/**"
+      - ".github/workflows/deploy-main.yml"
+
+jobs:
+  deploy:
+    name: Deploy to main VPS
+    runs-on: ubuntu-latest
+    environment: main-vps
+    steps:
+      - uses: actions/checkout@v4
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MAIN_VPS_SSH_KEY }}
+      - name: Pull and restart on the main VPS
+        env:
+          MAIN_VPS_HOST: ${{ secrets.MAIN_VPS_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no root@"$MAIN_VPS_HOST" '
+            cd /opt/pdf-ai-platform
+            git pull
+            docker compose -f infrastructure/main-vps/docker-compose.yml pull
+            docker compose -f infrastructure/main-vps/docker-compose.yml up -d
+          '

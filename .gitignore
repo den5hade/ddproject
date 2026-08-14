@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtual environments
+.venv/
+.venvs/
+
+# Node
+node_modules/
+apps/web/dist/
+*.tsbuildinfo
+
+# Environment files (keep examples)
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# dev
+.dev

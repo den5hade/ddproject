@@ -1,0 +1,26 @@
+[project]
+name = "ai-worker"
+version = "0.1.0"
+description = "Consumes converted docs, extracts data per schema with an LLM, embeds and stores in Qdrant."
+requires-python = ">=3.12"
+dependencies = [
+    "aio-pika>=9.4",
+    "openai>=1.50",
+    "qdrant-client>=1.12",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pdf-contracts",
+    "pdf-messaging",
+    "pdf-storage",
+    "pdf-observability",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.uv]
+package = false

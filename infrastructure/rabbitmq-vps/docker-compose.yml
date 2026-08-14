@@ -1,0 +1,27 @@
+# RabbitMQ on its own VPS. Runs 24/7 (unlike the GPU VPS).
+#
+# Networking (security): join ALL VPSes (main, rabbitmq, marker) to one
+# Tailscale/WireGuard overlay network. In production bind the ports below to the
+# tailnet interface IP (e.g. "100.64.0.10:5672:5672") so the broker is never
+# exposed publicly; the management UI (15672) must stay tailnet-only.
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-pdf}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-change-me}
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # management UI (tailnet only)
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  rabbitmqdata:

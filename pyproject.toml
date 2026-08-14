@@ -1,0 +1,30 @@
+# Virtual workspace root.
+# This pyproject.toml defines no runnable project itself:
+# every Python service and shared package below is a workspace member
+# with its own pyproject.toml. A single uv.lock at the root pins
+# identical dependency versions across the whole monorepo.
+
+[tool.uv.workspace]
+members = [
+    "apps/account-api",
+    "apps/ai-worker",
+    "apps/marker-orchestrator",
+    "apps/marker-worker",
+    "packages/contracts",
+    "packages/messaging",
+    "packages/storage",
+    "packages/observability",
+]
+
+[tool.uv.sources]
+pdf-contracts = { workspace = true }
+pdf-messaging = { workspace = true }
+pdf-storage = { workspace = true }
+pdf-observability = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

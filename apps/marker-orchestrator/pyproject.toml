@@ -1,0 +1,25 @@
+[project]
+name = "marker-orchestrator"
+version = "0.1.0"
+description = "Decides when the GPU compute node should exist (queue depth, heartbeat, provider API)."
+requires-python = ">=3.12"
+dependencies = [
+    "aio-pika>=9.4",
+    "httpx>=0.27",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pdf-contracts",
+    "pdf-messaging",
+    "pdf-storage",
+    "pdf-observability",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.uv]
+package = false
