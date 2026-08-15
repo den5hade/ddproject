@@ -32,8 +32,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
-        sa.UniqueConstraint("email", name=op.f("uq_users_email")),
-        sa.UniqueConstraint("phone", name=op.f("uq_users_phone")),
     )
     op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
     op.create_index(op.f("ix_users_phone"), "users", ["phone"], unique=True)
