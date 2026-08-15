@@ -87,7 +87,7 @@ class AuthService:
 
         current.revoke()
         await self._sessions.save(current)
-        self._dispatch_events(current, "revoked")
+        self._dispatch_events(current)
 
         user = await self._users.get_by_id(current.user_id)
         if user is None:

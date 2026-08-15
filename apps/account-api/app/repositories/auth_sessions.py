@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -5,6 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.auth_session import AuthSession
 from app.models.auth_session import AuthSessionRow
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
 
 
 class AuthSessionRepository:
@@ -40,10 +47,10 @@ class AuthSessionRepository:
             device_id=row.device_id,
             platform=row.platform,
             app_version=row.app_version,
-            expires_at=row.expires_at,
-            revoked_at=row.revoked_at,
-            created_at=row.created_at,
-            last_used_at=row.last_used_at,
+            expires_at=_as_utc(row.expires_at),
+            revoked_at=_as_utc(row.revoked_at),
+            created_at=_as_utc(row.created_at),
+            last_used_at=_as_utc(row.last_used_at),
         )
 
     async def save(self, auth_session: AuthSession) -> None:
