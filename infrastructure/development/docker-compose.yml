@@ -1,13 +1,15 @@
 # Local development stack: mirrors the production layout with a local RabbitMQ.
 #   docker compose -f infrastructure/development/docker-compose.yml up -d
+# Dev-only credentials default below; override via infrastructure/development/.env
+# (copy from .env.example). Never reuse these in production.
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: pdf
-      POSTGRES_PASSWORD: pdf123
-      POSTGRES_DB: pdf_platform
+      POSTGRES_USER: ${POSTGRES_USER:-pdf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdf123}
+      POSTGRES_DB: ${POSTGRES_DB:-pdf_platform}
     ports:
       - "5432:5432"
     volumes:
@@ -16,8 +18,8 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     environment:
-      RABBITMQ_DEFAULT_USER: pdf
-      RABBITMQ_DEFAULT_PASS: pdf123
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pdf}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-pdf123}
     ports:
       - "5672:5672"
       - "15672:15672" # management UI: http://localhost:15672
@@ -26,8 +28,8 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "9000:9000" # S3 API
       - "9001:9001" # console
