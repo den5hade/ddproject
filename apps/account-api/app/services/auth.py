@@ -69,7 +69,7 @@ class AuthService:
             identity, detect_channel(identity), code, expires_at
         )
         await self._session.commit()
-        logger.info("otp_requested", user_id=str(user.id), identity=identity)
+        logger.info("otp_requested user_id=%s identity=%s", user.id, identity)
 
     async def verify_otp(self, identity: str, code: str, client: ClientInfo) -> TokenResponse:
         if not await self._otp_service.verify(identity, code):
@@ -143,7 +143,7 @@ class AuthService:
     def _dispatch_events(auth_session: AuthSession) -> None:
         for event in auth_session.pop_events():
             logger.info(
-                "session_event",
-                event=type(event).__name__,
-                session_id=str(event.session_id),
+                "session_event event=%s session_id=%s",
+                type(event).__name__,
+                event.session_id,
             )

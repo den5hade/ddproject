@@ -32,7 +32,12 @@ class RabbitNotificationGateway:
 
     async def send_otp(self, identity: str, channel: str, code: str, expires_at: datetime) -> None:
         if self._publisher is None:
-            logger.info("otp_delivered_via_log", identity=identity, channel=channel, code=code)
+            logger.info(
+                "otp_delivered_via_log identity=%s channel=%s code=%s",
+                identity,
+                channel,
+                code,
+            )
             return
         event = AuthOtpRequested(
             request_id=uuid4(),

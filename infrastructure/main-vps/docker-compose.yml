@@ -41,6 +41,13 @@ services:
     depends_on:
       - qdrant
 
+  notification-worker:
+    build:
+      context: ../..
+      dockerfile: apps/notification-worker/Dockerfile
+    env_file: .env
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
