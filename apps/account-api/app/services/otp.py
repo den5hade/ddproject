@@ -63,7 +63,7 @@ class OtpService:
         if stored is None:
             return False
 
-        if not constant_time_equals(stored, code):
+        if not constant_time_equals(stored, code):  # type: ignore
             attempts_key = self._attempts_key(identity)
             attempts = await self._redis.incr(attempts_key)
             if attempts == 1:
