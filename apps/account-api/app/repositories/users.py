@@ -17,6 +17,11 @@ class UserRepository:
     async def get_by_id(self, user_id: UUID) -> User | None:
         return await self._session.get(User, user_id)
 
+    async def get_by_identity(self, identity: str) -> User | None:
+        column = User.email if EMAIL_RE.match(identity) else User.phone
+        result = await self._session.execute(select(User).where(column == identity))
+        return result.scalar_one_or_none()
+
     async def get_or_create_by_identity(
         self, identity: str, user_type: UserType = UserType.USER
     ) -> tuple[User, bool]:
