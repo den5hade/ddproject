@@ -10,6 +10,7 @@ members = [
     "apps/ai-worker",
     "apps/marker-orchestrator",
     "apps/marker-worker",
+    "apps/notification-worker",
     "packages/contracts",
     "packages/messaging",
     "packages/storage",

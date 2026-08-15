@@ -44,6 +44,11 @@ services:
     volumes:
       - qdrantdata:/qdrant/storage
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379" # OTP store, rate limiting
+
 volumes:
   pgdata:
   miniodata:
