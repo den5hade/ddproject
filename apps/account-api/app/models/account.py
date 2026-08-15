@@ -25,14 +25,14 @@ class Account(Base):
     )
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_normalized: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True, index=True, comment="lowercase email"
+        String(255), unique=True, nullable=True, comment="lowercase email"
     )
     email_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     phone_e164: Mapped[str | None] = mapped_column(
-        String(32), unique=True, nullable=True, index=True, comment="phone in E.164"
+        String(32), unique=True, nullable=True, comment="phone in E.164"
     )
     phone_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

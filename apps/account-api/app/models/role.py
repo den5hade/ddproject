@@ -12,7 +12,7 @@ class Role(Base):
     __tablename__ = "roles"
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(255))
 
 
@@ -22,7 +22,7 @@ class Permission(Base):
     __tablename__ = "permissions"
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    code: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(128), unique=True)
     name: Mapped[str] = mapped_column(String(255))
 
 

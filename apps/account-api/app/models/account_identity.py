@@ -29,7 +29,7 @@ class AccountIdentity(Base):
     )
     value: Mapped[str] = mapped_column(String(255), comment="value as supplied")
     value_normalized: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, comment="unique normalized form"
+        String(255), unique=True, comment="unique normalized form"
     )
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

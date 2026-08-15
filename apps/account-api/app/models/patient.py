@@ -16,7 +16,7 @@ class Patient(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     person_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("persons.id", ondelete="CASCADE"), unique=True, index=True
+        Uuid, ForeignKey("persons.id", ondelete="CASCADE"), unique=True
     )
     medical_record_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[PatientStatus] = mapped_column(

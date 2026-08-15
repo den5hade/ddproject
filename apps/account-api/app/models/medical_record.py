@@ -15,7 +15,7 @@ class MedicalRecord(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     patient_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("patients.id", ondelete="CASCADE"), unique=True, index=True
+        Uuid, ForeignKey("patients.id", ondelete="CASCADE"), unique=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

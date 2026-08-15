@@ -11,7 +11,30 @@ sys.path.append(str(Path(__file__).resolve().parents[2] / "apps/account-api"))
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
-from app.models import AuthSessionRow, User  # noqa: E402,F401
+from app.models import (  # noqa: E402,F401
+    Account,
+    AccountIdentity,
+    AccountRole,
+    AuditLog,
+    AuthSessionRow,
+    Document,
+    DocumentExtraction,
+    DocumentProcessingJob,
+    DocumentVersion,
+    Encounter,
+    MedicalRecord,
+    Organization,
+    OrganizationMembership,
+    Patient,
+    PatientAccessGrant,
+    Permission,
+    Person,
+    Role,
+    RolePermission,
+    Specialist,
+    SpecialistSpecialty,
+    Specialty,
+)
 
 config = context.config
 
