@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from uuid import UUID, uuid4
 
@@ -16,7 +18,7 @@ class AuthSessionRow(Base):
     id: Mapped[UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid4, comment="session id"
     )
-    user_id: Mapped[UUID] = mapped_column(
+    account_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     user_type: Mapped[UserType] = mapped_column(
@@ -41,4 +43,4 @@ class AuthSessionRow(Base):
         DateTime(timezone=True), default=utcnow
     )
 
-    user: Mapped[Account] = relationship(lazy="joined")
+    account: Mapped[Account] = relationship(lazy="joined")

@@ -1,4 +1,4 @@
+from app.repositories.account import AccountRepository
 from app.repositories.auth_sessions import AuthSessionRepository
-from app.repositories.users import UserRepository
 
-__all__ = ["AuthSessionRepository", "UserRepository"]
+__all__ = ["AccountRepository", "AuthSessionRepository"]

@@ -11,9 +11,10 @@ from app.core.security import (
     hash_refresh_token,
 )
 from app.domain.auth_session import AuthSession
-from app.models.user import User
+from app.domain.user_type import UserType
+from app.models.account import Account
+from app.repositories.account import AccountRepository
 from app.repositories.auth_sessions import AuthSessionRepository
-from app.repositories.users import UserRepository
 from app.schemas.auth import TokenResponse
 from app.services.notifications import NotificationGateway, detect_channel
 from app.services.otp import OTP_TTL_SECONDS, OtpService
@@ -54,7 +55,7 @@ class AuthService:
         notifier: NotificationGateway,
     ) -> None:
         self._session = session
-        self._users = UserRepository(session)
+        self._accounts = AccountRepository(session)
         self._sessions = AuthSessionRepository(session)
         self._otp_service = otp_service
         self._notifier = notifier
@@ -62,22 +63,22 @@ class AuthService:
     async def request_otp(self, identity: str) -> None:
         if not await self._otp_service.can_request(identity):
             raise RateLimitError("too many OTP requests, retry later")
-        user, _created = await self._users.get_or_create_by_identity(identity)
+        account, _created = await self._accounts.get_or_create_by_identity(identity)
         code = await self._otp_service.issue(identity)
         expires_at = datetime.now(UTC) + timedelta(seconds=OTP_TTL_SECONDS)
         await self._notifier.send_otp(
             identity, detect_channel(identity), code, expires_at
         )
         await self._session.commit()
-        logger.info("otp_requested user_id=%s identity=%s", user.id, identity)
+        logger.info("otp_requested account_id=%s identity=%s", account.id, identity)
 
     async def verify_otp(self, identity: str, code: str, client: ClientInfo) -> TokenResponse:
         if not await self._otp_service.verify(identity, code):
             raise OtpVerificationError("invalid or expired OTP code")
-        user = await self._users.get_by_identity(identity)
-        if user is None:
-            raise OtpVerificationError("no user for identity")
-        return await self._establish_session(user, client)
+        account = await self._accounts.get_by_identity(identity)
+        if account is None:
+            raise OtpVerificationError("no account for identity")
+        return await self._establish_session(account, client)
 
     async def refresh(self, refresh_token: str, client: ClientInfo) -> TokenResponse:
         hmac = hash_refresh_token(refresh_token)
@@ -89,11 +90,11 @@ class AuthService:
         await self._sessions.save(current)
         self._dispatch_events(current)
 
-        user = await self._users.get_by_id(current.user_id)
-        if user is None:
-            raise RefreshTokenError("session user no longer exists")
+        account = await self._accounts.get_by_id(current.account_id)
+        if account is None:
+            raise RefreshTokenError("session account no longer exists")
         return await self._establish_session(
-            user,
+            account,
             client,
             reuse=current,
         )
@@ -109,12 +110,12 @@ class AuthService:
         await self._session.commit()
 
     async def _establish_session(
-        self, user: User, client: ClientInfo, reuse: AuthSession | None = None
+        self, account: Account, client: ClientInfo, reuse: AuthSession | None = None
     ) -> TokenResponse:
         refresh_token = generate_refresh_token()
         auth_session = AuthSession.create(
-            user_id=user.id,
-            user_type=user.user_type,
+            account_id=account.id,
+            user_type=UserType.USER,
             refresh_token_hmac=hash_refresh_token(refresh_token),
             user_agent=client.user_agent,
             ip_address=client.ip_address,
@@ -133,7 +134,7 @@ class AuthService:
         self._dispatch_events(auth_session)
         await self._session.commit()
 
-        access_token = create_access_token(user.id, user.user_type, auth_session.id)
+        access_token = create_access_token(account.id, auth_session.user_type, auth_session.id)
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh_token,

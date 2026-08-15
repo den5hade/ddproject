@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.bus import get_publisher
 from app.core.database import get_db
 from app.core.security import ExpiredTokenError, InvalidTokenError, decode_access_token
-from app.models.user import User
-from app.repositories.users import UserRepository
+from app.models.account import Account
+from app.repositories.account import AccountRepository
 from app.services.auth import AuthService, ClientInfo
 from app.services.notifications import RabbitNotificationGateway
 from app.services.otp import OtpService
@@ -16,10 +16,10 @@ from app.services.otp import OtpService
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
+async def get_current_account(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     session: AsyncSession = Depends(get_db),
-) -> User:
+) -> Account:
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -37,12 +37,12 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
         ) from exc
 
-    user = await UserRepository(session).get_by_id(UUID(claims["sub"]))
-    if user is None:
+    account = await AccountRepository(session).get_by_id(UUID(claims["sub"]))
+    if account is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="user not found"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="account not found"
         )
-    return user
+    return account
 
 
 async def get_otp_service() -> OtpService:

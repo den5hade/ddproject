@@ -20,7 +20,7 @@ class AuthSession:
     """
 
     id: UUID
-    user_id: UUID
+    account_id: UUID
     user_type: UserType
     refresh_token_hmac: str  # HMAC, NOT plain SHA-256
     user_agent: str
@@ -39,7 +39,7 @@ class AuthSession:
     @classmethod
     def create(
         cls,
-        user_id: UUID,
+        account_id: UUID,
         user_type: UserType,
         refresh_token_hmac: str,
         user_agent: str,
@@ -51,7 +51,7 @@ class AuthSession:
     ) -> "AuthSession":
         session = cls(
             id=uuid4(),
-            user_id=user_id,
+            account_id=account_id,
             user_type=user_type,
             refresh_token_hmac=refresh_token_hmac,
             user_agent=user_agent,
@@ -69,7 +69,7 @@ class AuthSession:
         self.revoked_at = _utcnow()
         self._domain_events.append(
             SessionRevokedEvent(
-                entity_id=self.user_id,
+                entity_id=self.account_id,
                 user_type=str(self.user_type.value),
                 session_id=self.id,
             )

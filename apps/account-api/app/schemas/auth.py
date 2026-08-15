@@ -2,7 +2,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.domain.user_type import UserType
+from app.domain.account import AccountStatus
 
 
 class RequestOtpRequest(BaseModel):
@@ -36,5 +36,5 @@ class UserResponse(BaseModel):
     id: UUID
     email: str | None
     phone: str | None
-    user_type: UserType
+    status: AccountStatus
     is_subscribed: bool

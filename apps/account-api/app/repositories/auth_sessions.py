@@ -21,7 +21,7 @@ class AuthSessionRepository:
     def to_row(self, auth_session: AuthSession) -> AuthSessionRow:
         return AuthSessionRow(
             id=auth_session.id,
-            user_id=auth_session.user_id,
+            account_id=auth_session.account_id,
             user_type=auth_session.user_type,
             refresh_token_hmac=auth_session.refresh_token_hmac,
             user_agent=auth_session.user_agent,
@@ -39,7 +39,7 @@ class AuthSessionRepository:
     def from_row(row: AuthSessionRow) -> AuthSession:
         return AuthSession(
             id=row.id,
-            user_id=row.user_id,
+            account_id=row.account_id,
             user_type=row.user_type,
             refresh_token_hmac=row.refresh_token_hmac,
             user_agent=row.user_agent,

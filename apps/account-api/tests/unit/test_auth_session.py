@@ -8,7 +8,7 @@ from app.domain.user_type import UserType
 
 def _session(**kwargs) -> AuthSession:
     defaults = dict(
-        user_id=uuid4(),
+        account_id=uuid4(),
         user_type=UserType.USER,
         refresh_token_hmac="0" * 64,
         user_agent="pytest",

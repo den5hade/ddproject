@@ -8,18 +8,18 @@
 
 ```
                 ┌────────────────────────── account-api ──────────────────────────┐
- Client        │                                                                 │
+ Client        │                                                                  │
  ───┐          │   POST /auth/request-otp ──────► AuthService.request_otp()       │
     │  body    │          │  ┌──────────┐   ┌───► OtpService (Redis)              │
     │  identity│          └──┤ can_req/ │   │    otp:code / otp:attempts /        │
-    ├──────────►           ┌─┤  issue    │   │    otp:ratelimit (TTL 5 min)       │
+    ├──────────►           ┌─┤  issue   │   │    otp:ratelimit (TTL 5 min)        │
     │  OTP over│           │ └──────────┘   │    └─► code stored, 6 digits        │
     │  email/  │           │  publish       │                                     │
     │  SMS     │◄──────────┼────────────────┼── AuthOtpRequested ─┐               │
     └──────────┤           │                │   routing "auth.otp.requested"      │
                │           │                │           │                         │
                │   POST /auth/verify ───────┼───────────┘  (RabbitMQ topic:       │
-               │      code + identity       │       pdf.events)    ▼             │
+               │      code + identity       │       pdf.events)    ▼              │
                │   ◄───────── access_token ─┼─────────────────┐  notification-    │
                │            refresh_token   │                 │  worker (email /  │
                │   (JSON body)              │                 │  SMS provider)    │
@@ -49,8 +49,8 @@ One-time codes are identity-based: `identity` is either a valid **email** or a
 1. **Rate limit** — `OtpService.can_request()` increments
    `otp:ratelimit:<identity>` in Redis. A brand-new key gets a 60 s TTL; more
    than **1 request per 60 s** raises `RateLimitError` → HTTP `429`.
-2. **User upsert** — `UserRepository.get_or_create_by_identity()` looks up
-   `users` by `email`/`phone` and creates the row on first login.
+2. **Account upsert** — `AccountRepository.get_or_create_by_identity()` looks up
+   `accounts` by `email`/`phone` and creates the row on first login.
 3. **Issuance** — `generate_otp()` produces a 6-digit, cryptographically random
    code (`secrets.randbelow`). `OtpService.issue()` stores it under
    `otp:code:<identity>` with a **5-minute TTL** and resets the attempts counter.
@@ -101,8 +101,8 @@ Signed with the configured `JWT_SECRET_KEY` / `JWT_ALGORITHM` (HS256), short
 
 ```json
 {
-  "sub": "7f…a3",            // user UUID
-  "user_type": "user",       // user | subscriber
+  "sub": "7f…a3",            // account UUID
+  "user_type": "user",       // session snapshot (user | subscriber)
   "sid": "c2…19",            // auth session UUID
   "type": "access",          // decode rejects anything else
   "iat": "…",
@@ -111,7 +111,7 @@ Signed with the configured `JWT_SECRET_KEY` / `JWT_ALGORITHM` (HS256), short
 ```
 
 `decode_access_token()` (in `app/core/security.py`) raises `ExpiredTokenError`
-or `InvalidTokenError` on failure; `get_current_user` maps both to `401`.
+or `InvalidTokenError` on failure; `get_current_account` maps both to `401`.
 
 ### Refresh token (opaque, rotating)
 
@@ -128,7 +128,7 @@ Each successful login creates one row in `auth_sessions` via the
 | Field | Purpose |
 | --- | --- |
 | `id` | Session UUID (also embedded in the JWT as `sid`) |
-| `user_id`, `user_type` | Owning user |
+| `account_id`, `user_type` | Owning account (session snapshot of the type) |
 | `refresh_token_hmac` | HMAC of the refresh token, not the token itself |
 | `user_agent`, `ip_address` | Detected from the request |
 | `device_id`, `platform`, `app_version` | Optional, passed by the client |
@@ -167,12 +167,12 @@ future step). OTP delivery itself already goes through RabbitMQ.
 
 ## 5. Protected endpoint example (`/auth/me`)
 
-`get_current_user` (in `app/dependencies/auth.py`):
+`get_current_account` (in `app/dependencies/auth.py`):
 
 1. `HTTPBearer` extracts the token — missing → `401`.
 2. `decode_access_token` validates signature, expiry and `type=access` →
    failures → `401` with `WWW-Authenticate: Bearer`.
-3. `UserRepository.get_by_id(claims["sub"])` loads the user → missing → `401`.
+3. `AccountRepository.get_by_id(claims["sub"])` loads the account → missing → `401`.
 
 ## Error model
 
