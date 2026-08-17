@@ -1,12 +1,12 @@
 # DB_MODELS.md — Реализованная модель данных account-api
 
-> Это справочник по **реализованной** схеме БД (`migrations/0002_medical_models.py`),
-> а не только проектные рассуждения. Модели — SQLAlchemy 2.0 (`app/models/*`),
+> Это справочник по **реализованной** схеме БД (`../../migrations/alembic/versions/0002_medical_models.py`),
+> а не только проектные рассуждения. Модели — SQLAlchemy 2.0 (`../../apps/account-api/app/models/*`),
 > UUID PK, UTC-таймстампы, enum-колонки хранятся как VARCHAR (`native_enum=False`).
 
 Легенда статусов:
 
-- ✅ **IMPLEMENTED** — создано миграцией `0002`, модель в `app/models/`.
+- ✅ **IMPLEMENTED** — создано миграцией `0002`, модель в `../../apps/account-api/app/models/`.
 - ⏳ **DEFERRED** — заложено в дизайне (DB_MODELS.md §36), реализуется позже.
 
 ---
@@ -70,7 +70,7 @@ observations   diagnoses   medications   patient_consents
 
 ## accounts — техническая учётная запись ✅
 
-`app/models/account.py` → `Account`
+`../../apps/account-api/app/models/account.py` → `Account`
 
 | column            | type                | constraints / notes                          |
 |-------------------|---------------------|----------------------------------------------|
@@ -94,7 +94,7 @@ observations   diagnoses   medications   patient_consents
 
 ## account_identities — нормализованная идентичность ✅
 
-`app/models/account_identity.py` → `AccountIdentity`; относится к `accounts.id` (CASCADE).
+`../../apps/account-api/app/models/account_identity.py` → `AccountIdentity`; относится к `accounts.id` (CASCADE).
 
 | column          | notes                                      |
 |-----------------|--------------------------------------------|
@@ -107,7 +107,7 @@ observations   diagnoses   medications   patient_consents
 
 ## persons — физическое лицо ✅
 
-`app/models/person.py` → `Person`
+`../../apps/account-api/app/models/person.py` → `Person`
 
 | column       | type            | notes                                   |
 |--------------|-----------------|-----------------------------------------|
@@ -122,7 +122,7 @@ observations   diagnoses   medications   patient_consents
 
 # 4. RBAC: роли и права ✅
 
-`app/models/role.py`
+`../../apps/account-api/app/models/role.py`
 
 | table             | columns                          | constraints                       |
 |-------------------|----------------------------------|-----------------------------------|
@@ -147,7 +147,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## patients
 
-`app/models/patient.py` → `Patient`
+`../../apps/account-api/app/models/patient.py` → `Patient`
 
 | column | notes |
 |--------|-------|
@@ -158,7 +158,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## specialists
 
-`app/models/specialist.py` → `Specialist`, `Specialty`, `SpecialistSpecialty`
+`../../apps/account-api/app/models/specialist.py` → `Specialist`, `Specialty`, `SpecialistSpecialty`
 
 - `specialists`: id, person_id (FK → persons, index), status;
 - `specialties`: id, code (**UNIQUE**), name — справочник;
@@ -167,7 +167,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## organizations / organization_memberships
 
-`app/models/organization.py` → `Organization`, `OrganizationMembership`
+`../../apps/account-api/app/models/organization.py` → `Organization`, `OrganizationMembership`
 
 - `organizations`: id, name, type (`OrganizationType`: clinic/hospital/private_practice/laboratory), status;
 - `organization_memberships`: id, organization_id, account_id —
@@ -178,7 +178,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 # 6. Medical Record — центральная сущность ✅
 
-`app/models/medical_record.py` → `MedicalRecord`
+`../../apps/account-api/app/models/medical_record.py` → `MedicalRecord`
 
 | column | notes |
 |--------|-------|
@@ -193,7 +193,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 # 7. Encounters — приём/контакт с врачом ✅
 
-`app/models/encounter.py` → `Encounter`
+`../../apps/account-api/app/models/encounter.py` → `Encounter`
 
 | column | notes |
 |--------|-------|
@@ -211,7 +211,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 # 8. Documents и версии ✅
 
-`app/models/document.py` → `Document`, `DocumentVersion`
+`../../apps/account-api/app/models/document.py` → `Document`, `DocumentVersion`
 
 **documents**
 
@@ -249,7 +249,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## document_processing_jobs
 
-`app/models/processing_job.py` → `DocumentProcessingJob`
+`../../apps/account-api/app/models/processing_job.py` → `DocumentProcessingJob`
 
 | column | notes |
 |--------|-------|
@@ -264,7 +264,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## document_extractions — структурированные данные из документа
 
-`app/models/extraction.py` → `DocumentExtraction`
+`../../apps/account-api/app/models/extraction.py` → `DocumentExtraction`
 
 | column | notes |
 |--------|-------|
@@ -284,7 +284,7 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 ## patient_access_grants
 
-`app/models/access_grant.py` → `PatientAccessGrant`
+`../../apps/account-api/app/models/access_grant.py` → `PatientAccessGrant`
 
 | column | notes |
 |--------|-------|
@@ -309,7 +309,7 @@ AND organizacija AND grant.active AND NOT expires AND grant.can_... AND resource
 
 # 11. Audit Log ✅
 
-`app/models/audit_log.py` → `AuditLog`
+`../../apps/account-api/app/models/audit_log.py` → `AuditLog`
 
 | column | notes |
 |--------|-------|
@@ -332,8 +332,8 @@ AND organizacija AND grant.active AND NOT expires AND grant.can_... AND resource
 | таблица `users` | таблица `accounts` (+ person_id, status, нормализованные идентичности) |
 | `users.user_type` (single role) | `account_roles` / `roles` (несколько ролей) |
 | `auth_sessions.user_id` → | `auth_sessions.account_id` |
-| модель `User` | модель `Account` (`app/models/account.py`) |
-| `UserRepository` | `AccountRepository` (`app/repositories/account.py`) |
+| модель `User` | модель `Account` (`../../apps/account-api/app/models/account.py`) |
+| `UserRepository` | `AccountRepository` (`../../apps/account-api/app/repositories/account.py`) |
 
 Схема эволюционировала от `User → Documents` к
 `Account → Person → Patient/Specialist → MedicalRecord → Documents/Encounters/MedicalData`

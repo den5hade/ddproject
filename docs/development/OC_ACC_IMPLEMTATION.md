@@ -1,6 +1,6 @@
 # ACC_IMPLEMTATION.md — план реализации account-api: schemas, routes, services
 
-> Статус: план. Схема БД уже реализована (`migrations/0002`, см. `DB_MODELS.md`),
+> Статус: план. Схема БД уже реализована (`../../migrations/alembic/versions/0002`, см. [DB_MODELS.md](../data/DB_MODELS.md)),
 > auth-флоу работает. Этот документ — инструкция по слоям: домен → schema (Pydantic)
 > → repository → service → route → dependency, с порядком милестоунов и тестами.
 
@@ -16,35 +16,35 @@
   `OrganizationMembership`, `MedicalRecord`, `Document`, `DocumentVersion`,
   `DocumentProcessingJob`, `DocumentExtraction`, `PatientAccessGrant`, `AuditLog` —
   модели SQLAlchemy + миграция `0002` (проверена на PG, downgrade-safe).
-- Конвенции: `Base` из `app/core/database.py`; enums в `app/domain/`; `utcnow()`
-  из `app/models/utils.py`; репозиторий = класс на `AsyncSession`; сервис = бизнес-логика.
+- Конвенции: `Base` из `apps/account-api/app/core/database.py`; enums в `apps/account-api/app/domain/`; `utcnow()`
+  из `apps/account-api/app/models/utils.py`; репозиторий = класс на `AsyncSession`; сервис = бизнес-логика.
 
-**Пустые заглушки (создать):** `app/api/v1/documents.py`, `jobs.py`, `users.py`;
-`app/services/documents.py`, `jobs.py`, `storage.py`.
+**Пустые заглушки (создать):** `apps/account-api/app/api/v1/documents.py`, `jobs.py`, `users.py`;
+`apps/account-api/app/services/documents.py`, `jobs.py`, `storage.py`.
 
 ---
 
 # 2. Слои и правила добавления кода
 
 ```text
-domain (enums, aggregate-правила)         app/domain/*
+domain (enums, aggregate-правила)         apps/account-api/app/domain/*
   │
-Pydantic schema (request/response)        app/schemas/<domain>.py
+Pydantic schema (request/response)        apps/account-api/app/schemas/<domain>.py
   │
-repository (только SQL, без логики)       app/repositories/<entity>.py
+repository (только SQL, без логики)       apps/account-api/app/repositories/<entity>.py
   │
-service (инварианты, события, commit)     app/services/<domain>.py
+service (инварианты, события, commit)     apps/account-api/app/services/<domain>.py
   │
-router (HTTP, Depends, ошибки→HTTP)       app/api/v1/<resource>.py
+router (HTTP, Depends, ошибки→HTTP)       apps/account-api/app/api/v1/<resource>.py
   │
-dependencies (auth/ABAC/RBAC)             app/dependencies/*
+dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 ```
 
 Правила:
 - **Репозиторий не коммитит** — только select/insert/flush, возвращает модели или ORM-объекты.
 - **Сервис коммитит** один раз в конце операции, поднимает доменные исключения
   (например `PatientAccessDeniedError`), которые router преобразует в `HTTPException`.
-- **Enum-значения** переиспользуются из `app/domain/*` (тип-безопасно).
+- **Enum-значения** переиспользуются из `apps/account-api/apps/account-api/app/domain/*` (тип-безопасно).
 - **Доступ** к чужим данным всегда через dependency `require_patient_access` (§7), не вручную.
 - **JSON-колонки** (`data`, `metadata`) — `sa.JSON` (портативно, тесты на sqlite).
 
@@ -54,11 +54,11 @@ dependencies (auth/ABAC/RBAC)             app/dependencies/*
 
 Цель: роли и права существуют в БД, выдаются аккаунтам, проверяются зависимостями.
 
-### Schemas — `app/schemas/rbac.py`
+### Schemas — `apps/account-api/app/schemas/rbac.py`
 `RoleResponse`, `PermissionResponse`, `RoleCreate`, `PermissionCreate`,
 `AccountRoleAssignRequest` (role_codes: list[str]), `AccountRolesResponse`.
 
-### Repositories — `app/repositories/rbac.py` (новый)
+### Repositories — `apps/account-api/app/repositories/rbac.py` (новый)
 `RbacRepository`:
 - `list_roles() / list_permissions()`
 - `get_role_by_code(code) / get_permission_by_code(code)`
@@ -68,17 +68,17 @@ dependencies (auth/ABAC/RBAC)             app/dependencies/*
 - `assign_roles(account_id, role_codes)`, `list_account_roles(account_id)`
 - `account_permissions(account_id) -> set[PermissionCode]` (join через role_permissions).
 
-### Service — `app/services/rbac.py`
+### Service — `apps/account-api/app/services/rbac.py`
 `RbacService`: `seed()` (вызывается в `lifespan` при старте), `assign_roles`, `get_permissions`.
 Исключения: `RoleNotFoundError`, `PermissionNotFoundError`.
 
-### Routes — `app/api/v1/admin.py` (+ регистрация в `api/v1/__init__.py`)
+### Routes — `apps/account-api/app/api/v1/admin.py` (+ регистрация в `api/v1/__init__.py`)
 - `POST /admin/rbac/seed` (вручную/для тестов)
 - `POST /admin/accounts/{id}/roles` — выдать роли
 - `GET /admin/accounts/{id}/roles`
 - `GET /admin/accounts/{id}/permissions`
 
-### Dependencies — `app/dependencies/rbac.py`
+### Dependencies — `apps/account-api/app/dependencies/rbac.py`
 - `require_roles(*codes)` — проверяет `AccountRole` текущего аккаунта → иначе `403`.
 - `require_permission(code)` — проверяет права через RBAC → `403`.
 
@@ -86,19 +86,19 @@ dependencies (auth/ABAC/RBAC)             app/dependencies/*
 
 # 4. Milestone M2 — Person + Patient + MedicalRecord (регистрация пациента)
 
-### Schemas — `app/schemas/profile.py`, `app/schemas/patient.py`
+### Schemas — `apps/account-api/app/schemas/profile.py`, `apps/account-api/app/schemas/patient.py`
 `PersonResponse`, `PersonUpdate` (first/last/middle_name, date_of_birth, sex);
 `PatientResponse` (id, person, medical_record_id, status);
 `PatientCreateRequest` (брать person из аккаунта или создать).
 
 ### Repositories
-- `app/repositories/person.py` → `PersonRepository(session)`: `get(id)`, `save(person)`.
-- `app/repositories/patient.py` → `PatientRepository(session)`: `create(person_id)`,
+- `apps/account-api/app/repositories/person.py` → `PersonRepository(session)`: `get(id)`, `save(person)`.
+- `apps/account-api/app/repositories/patient.py` → `PatientRepository(session)`: `create(person_id)`,
   `get_by_id`, `get_by_person_id`, `get_by_account(account_id)` (через account.person_id)
   + фабричный метод `PatientRepository.create_with_medical_record(...)`, создающий
   `Patient` **и** `MedicalRecord` в одной транзакции (инвариант: пациент ⇒ есть карта).
 
-### Service — `app/services/patient.py`
+### Service — `apps/account-api/app/services/patient.py`
 `PatientService`:
 - `ensure_patient_for_account(account)` — если у аккаунта ещё нет пациента, создать
   `Person` (из данных аккаунта, имя можно пустое), привязать `account.person_id`,
@@ -107,7 +107,7 @@ dependencies (auth/ABAC/RBAC)             app/dependencies/*
 - `update_person(account, data)`.
 Исключения: `PatientAlreadyExistsError`, `PersonNotFoundError`.
 
-### Routes — `app/api/v1/patients.py`
+### Routes — `apps/account-api/app/api/v1/patients.py`
 - `GET /patients/me` → `PatientResponse` (создаёт при первом обращении)
 - `PATCH /patients/me` → обновить person
 - `GET /patients/{id}` — только владелец (account.person_id == patient.person_id)
@@ -120,13 +120,13 @@ dependencies (auth/ABAC/RBAC)             app/dependencies/*
 Цель: пациент/врач загружают файл, создаётся `Document`, `DocumentVersion`,
 ставится `DocumentProcessingJob`, публикуется `document_uploaded` в шину.
 
-### Schemas — `app/schemas/document.py`
+### Schemas — `apps/account-api/app/schemas/document.py`
 `DocumentCreate` (medical_record_id, encounter_id?, document_type, title,
 original_filename, mime_type, size_bytes), `DocumentResponse`,
 `DocumentVersionResponse`, `UploadUrlResponse` (upload_url, storage_key),
 `DocumentExtractionResponse`, `JobResponse`.
 
-### Repositories — `app/repositories/document.py`
+### Repositories — `apps/account-api/app/repositories/document.py`
 `DocumentRepository`: `create(...)`, `get(id)`, `list_by_medical_record(mr_id)`,
 `list_by_encounter(enc_id)`, `count_owned(medical_record_id)` (для квоты).
 `DocumentVersionRepository`: `create(document_id, version, s3_key, ...)`,
@@ -134,7 +134,7 @@ original_filename, mime_type, size_bytes), `DocumentResponse`,
 `ProcessingJobRepository`: `create(document_id, version_id, job_type)`, `get`, `update_status`.
 `ExtractionRepository`: `save(extraction)`, `list_by_document`.
 
-### Service — `app/services/documents.py` (заполнить заглушку)
+### Service — `apps/account-api/app/services/documents.py` (заполнить заглушку)
 `DocumentService` (замыкается на `pdf-storage` + `pdf-messaging` + `pdf-contracts`):
 - `create_upload(document, account)` — сохранить метаданные, сформировать
   `storage_key` (`medical-records/<mr>/<doc>/v1.<ext>`), вернуть presigned upload URL.
@@ -148,14 +148,14 @@ original_filename, mime_type, size_bytes), `DocumentResponse`,
 Врачи-специалисты после приёма: документ с `uploaded_by_account_id=специалист`,
 `encounter_id=<приём>` — права проверяются через access grant (`can_upload_documents`).
 
-### Routes — `app/api/v1/documents.py` (заполнить заглушку)
+### Routes — `apps/account-api/app/api/v1/documents.py` (заполнить заглушку)
 - `POST /patients/{patient_id}/documents` → `UploadUrlResponse`
 - `POST /documents/{id}/upload-confirm` → финализация (+ событие в шину)
 - `GET /documents/{id}` , `GET /documents/{id}/versions`
 - `POST /documents/{id}/versions`
 - `GET /documents/{id}/extractions`
 
-### Jobs status — `app/api/v1/jobs.py`, `app/services/jobs.py`
+### Jobs status — `apps/account-api/app/api/v1/jobs.py`, `apps/account-api/app/services/jobs.py`
 - `GET /jobs/{id}` — статус обработки (`document_processing_jobs`).
 - `GET /documents/{id}/jobs` — список job'ов документа.
 (Ответы ai-worker/marker-worker приходят событиями `document_converted`,
@@ -165,14 +165,14 @@ original_filename, mime_type, size_bytes), `DocumentResponse`,
 
 # 6. Milestone M4 — Encounters
 
-### Schemas — `app/schemas/encounter.py`
+### Schemas — `apps/account-api/app/schemas/encounter.py`
 `EncounterCreate` (type, started_at, reason, summary?), `EncounterResponse`,
 `EncounterUpdate` (status, ended_at, summary).
 
-### Repository — `app/repositories/encounter.py`
+### Repository — `apps/account-api/app/repositories/encounter.py`
 `EncounterRepository`: `create`, `get`, `list_by_medical_record(mr_id)`, `update`.
 
-### Service — `app/services/encounter.py`
+### Service — `apps/account-api/app/services/encounter.py`
 `EncounterService`:
 - `create_encounter(account, patient_id, data)` — только специалист с
   `can_create_encounters` или владелец; заполняет `specialist_id` из аккаунта
@@ -182,7 +182,7 @@ original_filename, mime_type, size_bytes), `DocumentResponse`,
   или специалист с grant `can_edit_medical_data`.
 Исключения: `EncounterNotFoundError`, `EncounterAccessDeniedError`.
 
-### Routes — `app/api/v1/encounters.py`
+### Routes — `apps/account-api/app/api/v1/encounters.py`
 - `POST /patients/{id}/encounters`
 - `GET /patients/{id}/encounters`
 - `GET /encounters/{id}`
@@ -195,22 +195,22 @@ original_filename, mime_type, size_bytes), `DocumentResponse`,
 
 Цель: "Dr. Ivanov имеет право видеть карту пациента №123" — явная таблица + аудит.
 
-### Schemes — `app/schemas/access.py`, `app/schemas/audit.py`
+### Schemes — `apps/account-api/app/schemas/access.py`, `apps/account-api/app/schemas/audit.py`
 `AccessGrantCreate` (account_id/специалист, organization_id?, flags, access_reason,
 expires_at?), `AccessGrantResponse`, `AccessGrantUpdate`; `AuditLogResponse`.
 
-### Repository — `app/repositories/access.py`, `app/repositories/audit.py`
+### Repository — `apps/account-api/app/repositories/access.py`, `apps/account-api/app/repositories/audit.py`
 `AccessGrantRepository`: `create`, `get`, `list_by_patient(patient_id)`,
 `find_active_for(patient_id, account_id)`, `revoke`.
 `AuditLogRepository`: `record(entry)`, `query(patient_id, actor, action, limit, offset)`.
 
-### Service — `app/services/access.py`, `app/services/audit.py`
+### Service — `apps/account-api/app/services/access.py`, `apps/account-api/app/services/audit.py`
 `AccessService`: `grant(patient_id, account_id, flags, ...)`,
 `revoke(grant_id)`, `check(patient_id, account_id, *perms) -> bool`
 (правило: `status=active AND (expires_at IS NULL OR expires_at>now) AND flag`).
 `AuditService`: обёртка — `record(action, resource_type, resource_id, patient_id, actor, request)`;
 
-### Dependencies — `app/dependencies/access.py` (ядро ABAC)
+### Dependencies — `apps/account-api/app/dependencies/access.py` (ядро ABAC)
 `require_patient_access(patient_id, *, can_view_documents=False, can_upload_documents=False,
 can_view_extractions=False, can_view_analytics=False, can_create_encounters=False,
 can_edit_medical_data=False)` — логика проверки (§33):
@@ -228,7 +228,7 @@ AND resource принадлежит medical_record пациента
 
 Несоблюдение → `403` (или `404`, чтобы не раскрывать существование пациента).
 
-### Routes — `app/api/v1/access.py`
+### Routes — `apps/account-api/app/api/v1/access.py`
 - `POST /patients/{id}/access-grants` (владелец пациента)
 - `GET /patients/{id}/access-grants`
 - `PATCH /patients/{id}/access-grants/{gid}`
@@ -238,13 +238,13 @@ AND resource принадлежит medical_record пациента
 - В `dependencies/access.py` каждый успешный/отказанный доступ пишет `AuditLog`
   (action `VIEW_PATIENT`, `VIEW_DOCUMENT`, `VIEW_MEDICAL_RECORD`, `GRANT_ACCESS`...).
 - `POST /auth/verify|refresh` → `LOGIN`; `POST /auth/logout` → `LOGOUT`.
-- Router `app/api/v1/audit.py`: `GET /audit-logs?patient_id=&actor_id=&limit=` (admin).
+- Router `apps/account-api/app/api/v1/audit.py`: `GET /audit-logs?patient_id=&actor_id=&limit=` (admin).
 
 ---
 
 # 8. Milestone M6 — аналитика (деferred)
 
-Добавить по мере развития (модели НЕ созданы; дизайн в DB_MODELS.md §13):
+Добавить по мере развития (модели НЕ созданы; дизайн в [DB_MODELS.md](../data/DB_MODELS.md) §deferred):
 - `observations`, `diagnoses`, `medications`, `patient_consents` — миграция `0003`.
 - Сервисы: из `DocumentExtraction.data` выплескивать нормализованные `Observation`
   (value_numeric/text/unit, reference_low/high, observed_at, source_document/encounter),

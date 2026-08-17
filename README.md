@@ -7,6 +7,9 @@ vector database.
 See [STRUCTURE.md](./STRUCTURE.md) for the full layout, the RabbitMQ-on-a-separate-VPS
 setup and how the web frontend fits in.
 
+Documentation lives in [docs/](./docs/README.md) — start there for the
+architecture, services, data, security and API behavior.
+
 ## Quickstart
 
 Prerequisites: [uv](https://docs.astral.sh/uv/) ≥ 0.8, Docker, Node ≥ 20.

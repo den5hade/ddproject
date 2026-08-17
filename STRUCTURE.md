@@ -3,6 +3,10 @@
 This describes the monorepo layout, the build/dependency model, and how every
 deployment piece fits together.
 
+> Platform documentation (architecture, services, data, security, API,
+> deployment, ADRs) lives in [docs/](docs/README.md). Start there for *how the
+> system works*; this file is the layout/deployment reference.
+
 ## 1. Physical architecture
 
 ```text

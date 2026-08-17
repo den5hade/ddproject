@@ -42,7 +42,7 @@
 
 One-time codes are identity-based: `identity` is either a valid **email** or a
 **phone number**. The channel is detected from the value
-(`detect_channel` in `app/services/notifications.py`).
+(`detect_channel` in `../../apps/account-api/app/services/notifications.py`).
 
 ## 1. Request OTP (`request_otp`)
 
@@ -110,7 +110,7 @@ Signed with the configured `JWT_SECRET_KEY` / `JWT_ALGORITHM` (HS256), short
 }
 ```
 
-`decode_access_token()` (in `app/core/security.py`) raises `ExpiredTokenError`
+`decode_access_token()` (in `../../apps/account-api/app/core/security.py`) raises `ExpiredTokenError`
 or `InvalidTokenError` on failure; `get_current_account` maps both to `401`.
 
 ### Refresh token (opaque, rotating)
@@ -123,7 +123,7 @@ The HMAC secret is `AUTH_HMAC_KEY`; it must be set in production.
 ## 4. Session lifecycle
 
 Each successful login creates one row in `auth_sessions` via the
-`AuthSession` aggregate (`app/domain/auth_session.py`):
+`AuthSession` aggregate (`../../apps/account-api/app/domain/auth_session.py`):
 
 | Field | Purpose |
 | --- | --- |
@@ -167,7 +167,7 @@ future step). OTP delivery itself already goes through RabbitMQ.
 
 ## 5. Protected endpoint example (`/auth/me`)
 
-`get_current_account` (in `app/dependencies/auth.py`):
+`get_current_account` (in `../../apps/account-api/app/dependencies/auth.py`):
 
 1. `HTTPBearer` extracts the token — missing → `401`.
 2. `decode_access_token` validates signature, expiry and `type=access` →

@@ -3,6 +3,11 @@
 User cabinet API: registration, OTP auth, refresh-token sessions, PDF/image
 uploads to S3.
 
+> Architecture and behavior docs live in the repo-wide [docs/](../../docs/README.md):
+> [Account API](../../docs/services/ACCOUNT_API.md),
+> [DB models](../../docs/data/DB_MODELS.md),
+> [Authentication](../../docs/security/AUTHENTICATION.md).
+
 ## How it works
 
 ### Registration & OTP auth (`POST /v1/auth/*`)
