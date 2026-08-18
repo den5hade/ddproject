@@ -23,6 +23,19 @@ Rules:
 - JSON columns use `sa.JSON` (portable; tests run on sqlite).
 - No large router functions — keep HTTP/Depends/error mapping at the edge.
 
+### Dependency injection (account-api)
+
+- Providers are `get_*` async functions in `app/dependencies/*`.
+- Each dependency file ends with an `Annotated` alias:
+  `<Name> = Annotated[<Class>, Depends(get_*)]` (e.g. `PatientServiceDep`,
+  `CurrentAccount`).
+- Route signatures use only the alias name (`service: PatientServiceDep`,
+  `account: CurrentAccount`) — no `Depends(...)` in signatures.
+- Argument-taking factories (`require_roles`, `require_permission`) stay as
+  `Depends(...)` in the router's `dependencies=[...]`.
+- Non-default `Annotated` params must precede params with defaults (Python
+  syntax); if a route takes an optional body, reorder so deps come first.
+
 ## Boundary rules
 
 - Medical/structured data → PostgreSQL; binaries → S3; embeddings → Qdrant;

@@ -32,8 +32,8 @@ Each phase must end with a **working vertical slice**, not just a set of tables.
 | Milestone | Scope | Status |
 |-----------|-------|--------|
 | M0 | Foundation: migration `0002` schema, auth flow (OTP + JWT + refresh rotation) | ✅ |
-| M1 | RBAC: seed roles/permissions, `POST /admin/rbac/seed`, assign roles, `require_roles` / `require_permission` | ◼ |
-| M2 | Person + Patient + MedicalRecord (`GET /patients/me`, `PATCH /patients/me`) | ◼ |
+| M1 | RBAC: seed roles/permissions, `POST /admin/rbac/seed`, assign roles, `require_roles` / `require_permission` | ✅ |
+| M2 | Person + Patient + MedicalRecord (`POST /patients`, `GET /patients/me`, `PATCH /patients/me`) | ✅ |
 | M3 | Documents + Versions + Storage + Processing Jobs (presigned upload, `upload-confirm`, jobs) | ◼ |
 | M4 | Encounters (create/list/get/update, docs per encounter) | ◼ |
 | M5 | Access Grants + ABAC + Audit Log (`require_patient_access`) | ◼ |
@@ -50,7 +50,7 @@ Dependency rule: **M3 and M4 must not ship without the M5 dependency
 |-----------|-------|--------|
 | M1 | Infrastructure: monorepo, Docker, PostgreSQL, RabbitMQ, MinIO, Qdrant, Alembic, CI, logging | ✅ (foundation in place) |
 | M2 | Authentication: account, email/phone, OTP, JWT/session, roles, permissions, `/me` | ✅ |
-| M3 | Patient: person, patient, medical record, basic profile | ◼ |
+| M3 | Patient: person, patient, medical record, basic profile | ✅ |
 | M4 | Documents: upload init, presigned S3 upload, document/version, status, download, delete, RabbitMQ job | ◼ |
 | M5 | Marker: marker-worker, S3 download, conversion, artifact upload, RabbitMQ events, retry/DLQ | ◼ |
 | M6 | GPU orchestration: queue monitoring, provider API, start/stop, heartbeat, scale threshold, idle shutdown | ◼ |

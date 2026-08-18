@@ -11,6 +11,10 @@
 **Готово и работает:**
 - Auth: `POST /auth/request-otp`, `POST /auth/verify`, `POST /auth/refresh`,
   `POST /auth/logout`, `GET /auth/me` (OTP email/phone по Redis + RabbitMQ-нотификации).
+- **M1 RBAC** (§3): seed ролей/прав (идемпотентно, на старте + `POST /admin/rbac/seed`),
+  выдача ролей, `require_roles` / `require_permission` (403), admin-руты.
+- **M2 Person/Patient/MR** (§4): `POST /patients`, `GET|PATCH /patients/me`,
+  `GET /patients/{id}` (владелец или активный access grant, иначе `404`).
 - `Account`, `AccountIdentity`, `Role`, `Permission`, `AccountRole`, `RolePermission`,
   `Patient`, `Specialist`, `Specialty`, `SpecialistSpecialty`, `Organization`,
   `OrganizationMembership`, `MedicalRecord`, `Document`, `DocumentVersion`,
@@ -44,13 +48,25 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 - **Репозиторий не коммитит** — только select/insert/flush, возвращает модели или ORM-объекты.
 - **Сервис коммитит** один раз в конце операции, поднимает доменные исключения
   (например `PatientAccessDeniedError`), которые router преобразует в `HTTPException`.
-- **Enum-значения** переиспользуются из `apps/account-api/apps/account-api/app/domain/*` (тип-безопасно).
+- **Enum-значения** переиспользуются из `apps/account-api/app/domain/*` (тип-безопасно).
 - **Доступ** к чужим данным всегда через dependency `require_patient_access` (§7), не вручную.
 - **JSON-колонки** (`data`, `metadata`) — `sa.JSON` (портативно, тесты на sqlite).
+- **DI (FastAPI)**: провайдеры `get_*` живут в `apps/account-api/app/dependencies/*`.
+  Внизу файла объявляется `Annotated`-алиас `<Name> = Annotated[<Class>, Depends(get_*)]`;
+  роутеры в сигнатуре используют только имя алиаса (`account: CurrentAccount`,
+  `service: PatientServiceDep`) без `Depends(...)`. Фабрики с аргументами
+  (`require_roles`, `require_permission`) остаются `Depends(...)` в `dependencies=[...]`
+  роутера. Обязательные `Annotated`-параметры ставятся до параметров со значением
+  по умолчанию (синтаксис Python).
 
 ---
 
 # 3. Milestone M1 — RBAC: seed ролей/прав + админ-управление
+
+> **Статус: реализован.** `schemas/rbac.py`, `repositories/rbac.py`,
+> `services/rbac.py`, `api/v1/admin.py`, `dependencies/rbac.py`, seed на старте
+> (`main.py` lifespan) + unit/API-тесты (`test_rbac_repository.py`,
+> `test_rbac_api.py`).
 
 Цель: роли и права существуют в БД, выдаются аккаунтам, проверяются зависимостями.
 
@@ -85,6 +101,15 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 ---
 
 # 4. Milestone M2 — Person + Patient + MedicalRecord (регистрация пациента)
+
+> **Статус: реализован.** `schemas/profile.py`, `schemas/patient.py`,
+> `repositories/person.py`, `repositories/patient.py`, `services/patient.py`,
+> `dependencies/patient.py`, `api/v1/patients.py` + unit/API-тесты
+> (`test_patient_service.py`, `test_patients_api.py`).
+> Отличия от плана: добавлен явный `POST /patients` (201 / 409;
+> `PatientAlreadyExistsError`); `GET /patients/{id}` для не-владельца без гранта
+> возвращает `404` (не раскрывает существование пациента). Inline-проверка гранта
+> здесь — временная замена `require_patient_access` из M5 (см. §7).
 
 ### Schemas — `apps/account-api/app/schemas/profile.py`, `apps/account-api/app/schemas/patient.py`
 `PersonResponse`, `PersonUpdate` (first/last/middle_name, date_of_birth, sex);

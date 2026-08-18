@@ -9,9 +9,13 @@ tests/                       cross-service (integration)
 apps/account-api/tests/
   conftest.py                fixtures (app_client, db, mocks)
   test_auth_flow.py          registration → OTP → token → /auth/me
+  test_rbac_api.py           admin + RBAC API (seed, roles, permissions)
+  test_patients_api.py       patients API (create/me/patch/{id}, owner or grant)
   unit/
     test_auth_session.py
     test_otp.py
+    test_patient_service.py  Person/Patient/MR invariants, grants
+    test_rbac_repository.py  seed idempotence, role→permission joins
     test_security.py
 ```
 

@@ -57,6 +57,68 @@ Rules:
   dependency, never ad-hoc checks.
 - **JSON columns** (`data`, `metadata`) are `sa.JSON`.
 
+## Dependency injection
+
+Providers are `get_*` async functions in `app/dependencies/*`, one per concern.
+Each dependency file ends with an `Annotated` alias that routers consume directly
+(no `Depends(...)` in route signatures):
+
+```python
+# app/dependencies/patient.py
+async def get_patient_service(session: AsyncSession = Depends(get_db)) -> PatientService:
+    return PatientService(session)
+
+PatientServiceDep = Annotated[PatientService, Depends(get_patient_service)]
+```
+
+```python
+# app/api/v1/patients.py
+async def get_my_patient(
+    account: CurrentAccount,
+    service: PatientServiceDep,
+) -> PatientResponse:
+```
+
+Rules:
+
+- Route signatures reference only the alias name.
+- `CurrentAccount` (from `dependencies/auth.py`) injects the authenticated `Account`.
+- Argument-taking factories (`require_roles`, `require_permission`) keep
+  `Depends(...)` in the router's `dependencies=[...]` list.
+- Non-default `Annotated` params must precede params with defaults (Python syntax).
+
+Aliases in use:
+
+| Alias | Injects | Defined in |
+|---|---|---|
+| `CurrentAccount` | `Account` | `dependencies/auth.py` |
+| `AuthServiceDep` | `AuthService` | `dependencies/auth.py` |
+| `OtpServiceDep` | `OtpService` | `dependencies/auth.py` |
+| `RbacServiceDep` | `RbacService` | `dependencies/rbac.py` |
+| `PatientServiceDep` | `PatientService` | `dependencies/patient.py` |
+
+## Implemented endpoints
+
+### Auth — `api/v1/auth.py`
+
+- `POST /auth/request-otp`, `POST /auth/verify`, `POST /auth/refresh`,
+  `POST /auth/logout`, `GET /auth/me`
+
+### Admin / RBAC — `api/v1/admin.py` (requires `user.manage`)
+
+- `POST /admin/rbac/seed` — idempotent seed
+- `POST /admin/accounts/{account_id}/roles` — assign roles
+- `GET /admin/accounts/{account_id}/roles`
+- `GET /admin/accounts/{account_id}/permissions`
+
+### Patients — `api/v1/patients.py`
+
+- `POST /patients` — explicit create (201; 409 if patient already exists)
+- `GET /patients/me` — lazy-create patient + medical record on first access
+- `PATCH /patients/me` — update own `Person`
+- `GET /patients/{patient_id}` — owner or specialist with an active access grant,
+  otherwise `404` (hides existence)
+
 ## Storage & messaging
 
 - PostgreSQL for all structured data (see [data/DB_MODELS.md](../data/DB_MODELS.md)).
