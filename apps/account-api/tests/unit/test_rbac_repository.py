@@ -1,11 +1,10 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domain.account import PermissionCode, RoleCode, RoleNotFoundError
 from app.models.role import Permission, Role, RolePermission
 from app.repositories.rbac import ROLE_PERMISSIONS, RbacRepository
+from sqlalchemy import func, select
 
 
 async def _seed(db_session) -> RbacRepository:

@@ -71,12 +71,14 @@ class RbacRepository:
         return list(result.scalars().all())
 
     async def get_role_by_code(self, code: str | RoleCode) -> Role | None:
-        result = await self._session.execute(select(Role).where(Role.code == str(code)))
+        value = code.value if isinstance(code, RoleCode) else code
+        result = await self._session.execute(select(Role).where(Role.code == value))
         return result.scalar_one_or_none()
 
     async def get_permission_by_code(self, code: str | PermissionCode) -> Permission | None:
+        value = code.value if isinstance(code, PermissionCode) else code
         result = await self._session.execute(
-            select(Permission).where(Permission.code == str(code))
+            select(Permission).where(Permission.code == value)
         )
         return result.scalar_one_or_none()
 
