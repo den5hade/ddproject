@@ -1,12 +1,11 @@
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
-
 from app.domain.access import GrantStatus
 from app.models.access_grant import PatientAccessGrant
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.person import Person
+from sqlalchemy import func, select
 
 
 def _identity() -> str:

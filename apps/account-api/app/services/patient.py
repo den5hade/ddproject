@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.access import GrantStatus
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
-from app.models.account import Account
 from app.models.access_grant import PatientAccessGrant
+from app.models.account import Account
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.person import Person

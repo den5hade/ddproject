@@ -2,8 +2,6 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
-
 from app.domain.access import GrantStatus
 from app.domain.medical import (
     PatientAlreadyExistsError,
@@ -17,6 +15,7 @@ from app.models.person import Person
 from app.schemas.patient import PatientCreateRequest
 from app.schemas.profile import PersonUpdate
 from app.services.patient import PatientService
+from sqlalchemy import func, select
 
 
 async def _account(db_session) -> Account:

@@ -9,18 +9,15 @@ from app.domain.medical import (
     MembershipStatus,
     OrganizationStatus,
     OrganizationType,
+    PatientAlreadyExistsError,
     PatientStatus,
+    PersonNotFoundError,
     ProcessingJobStatus,
     ProcessingJobType,
     Sex,
     SpecialistStatus,
 )
 from app.domain.user_type import UserType
-
-from app.domain.medical import (
-    PatientAlreadyExistsError,
-    PersonNotFoundError,
-)
 
 __all__ = [
     "AccountStatus",
