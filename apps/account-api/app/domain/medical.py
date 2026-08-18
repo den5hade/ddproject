@@ -96,3 +96,11 @@ class ExtractionStatus(str, Enum):
     EXTRACTING = "extracting"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class PersonNotFoundError(Exception):
+    """A person does not exist for the given id."""
+
+
+class PatientAlreadyExistsError(Exception):
+    """An account already has a patient bound to it."""

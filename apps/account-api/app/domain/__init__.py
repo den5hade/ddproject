@@ -17,6 +17,11 @@ from app.domain.medical import (
 )
 from app.domain.user_type import UserType
 
+from app.domain.medical import (
+    PatientAlreadyExistsError,
+    PersonNotFoundError,
+)
+
 __all__ = [
     "AccountStatus",
     "AuditAction",
@@ -30,8 +35,10 @@ __all__ = [
     "MembershipStatus",
     "OrganizationStatus",
     "OrganizationType",
+    "PatientAlreadyExistsError",
     "PatientStatus",
     "PermissionCode",
+    "PersonNotFoundError",
     "ProcessingJobStatus",
     "ProcessingJobType",
     "RoleCode",
