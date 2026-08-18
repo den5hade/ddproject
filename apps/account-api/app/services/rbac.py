@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.account import PermissionCode, RoleNotFoundError
-from app.models.role import Role
+from app.models.role import Permission, Role
 from app.repositories.rbac import RbacRepository
 
 logger = logging.getLogger("account_api.rbac")
@@ -26,8 +26,18 @@ class RbacService:
         logger.info("roles_assigned account_id=%s roles=%s", account_id, role_codes)
         return roles
 
+    async def list_account_roles(self, account_id: UUID) -> list[Role]:
+        return await self._rbac.list_account_roles(account_id)
+
     async def get_permissions(self, account_id: UUID) -> set[PermissionCode]:
         return await self._rbac.account_permissions(account_id)
+
+    async def list_account_permissions(self, account_id: UUID) -> list[Permission]:
+        return [
+            permission
+            for permission in await self._rbac.list_permissions()
+            if permission.code in await self._rbac.account_permissions(account_id)
+        ]
 
 
 __all__ = ["RbacService", "RoleNotFoundError"]
