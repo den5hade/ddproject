@@ -1,3 +1,4 @@
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -80,3 +81,8 @@ def client_info(
         platform=platform,
         app_version=app_version,
     )
+
+
+CurrentAccount = Annotated[Account, Depends(get_current_account)]
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+OtpServiceDep = Annotated[OtpService, Depends(get_otp_service)]

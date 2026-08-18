@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
-from app.dependencies.auth import client_info, get_auth_service, get_current_account
+from app.dependencies.auth import AuthServiceDep, CurrentAccount, client_info
 from app.models.account import Account
 from app.schemas.auth import (
     RefreshRequest,
@@ -11,7 +11,6 @@ from app.schemas.auth import (
     VerifyOtpRequest,
 )
 from app.services.auth import (
-    AuthService,
     OtpVerificationError,
     RateLimitError,
     RefreshTokenError,
@@ -23,7 +22,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/request-otp", status_code=status.HTTP_202_ACCEPTED, response_model=None)
 async def request_otp(
     payload: RequestOtpRequest,
-    service: AuthService = Depends(get_auth_service),
+    service: AuthServiceDep,
 ) -> dict | JSONResponse:
     try:
         await service.request_otp(payload.identity)
@@ -39,7 +38,7 @@ async def request_otp(
 async def verify_otp(
     payload: VerifyOtpRequest,
     request: Request,
-    service: AuthService = Depends(get_auth_service),
+    service: AuthServiceDep,
 ) -> TokenResponse | JSONResponse:
     client = client_info(
         request,
@@ -57,7 +56,7 @@ async def verify_otp(
 async def refresh(
     payload: RefreshRequest,
     request: Request,
-    service: AuthService = Depends(get_auth_service),
+    service: AuthServiceDep,
 ) -> TokenResponse | JSONResponse:
     client = client_info(
         request,
@@ -74,7 +73,7 @@ async def refresh(
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def logout(
     payload: RefreshRequest,
-    service: AuthService = Depends(get_auth_service),
+    service: AuthServiceDep,
 ) -> None | JSONResponse:
     try:
         await service.logout(payload.refresh_token)
@@ -84,5 +83,5 @@ async def logout(
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(account: Account = Depends(get_current_account)) -> Account:
+async def me(account: CurrentAccount) -> Account:
     return account

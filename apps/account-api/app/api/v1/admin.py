@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies.rbac import get_rbac_service, require_permission
+from app.dependencies.rbac import RbacServiceDep, require_permission
 from app.domain.account import PermissionCode
 from app.schemas.rbac import (
     AccountRoleAssignRequest,
@@ -10,7 +10,7 @@ from app.schemas.rbac import (
     PermissionResponse,
     RoleResponse,
 )
-from app.services.rbac import RbacService, RoleNotFoundError
+from app.services.rbac import RoleNotFoundError
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
     response_model=None,
     dependencies=[Depends(require_permission(PermissionCode.USER_MANAGE))],
 )
-async def seed_rbac(service: RbacService = Depends(get_rbac_service)) -> None:
+async def seed_rbac(service: RbacServiceDep) -> None:
     await service.seed()
 
 
@@ -33,7 +33,7 @@ async def seed_rbac(service: RbacService = Depends(get_rbac_service)) -> None:
 async def assign_account_roles(
     account_id: UUID,
     payload: AccountRoleAssignRequest,
-    service: RbacService = Depends(get_rbac_service),
+    service: RbacServiceDep,
 ) -> AccountRolesResponse:
     try:
         roles = await service.assign_roles(account_id, payload.role_codes)
@@ -52,7 +52,7 @@ async def assign_account_roles(
 )
 async def list_account_roles(
     account_id: UUID,
-    service: RbacService = Depends(get_rbac_service),
+    service: RbacServiceDep,
 ) -> AccountRolesResponse:
     roles = await service.list_account_roles(account_id)
     return AccountRolesResponse(
@@ -68,7 +68,7 @@ async def list_account_roles(
 )
 async def list_account_permissions(
     account_id: UUID,
-    service: RbacService = Depends(get_rbac_service),
+    service: RbacServiceDep,
 ) -> list[PermissionResponse]:
     permissions = await service.list_account_permissions(account_id)
     return [PermissionResponse.model_validate(permission) for permission in permissions]

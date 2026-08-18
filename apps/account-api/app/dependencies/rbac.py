@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,3 +50,6 @@ def require_permission(code: PermissionCode) -> Callable[..., Account]:
         return account
 
     return dependency
+
+
+RbacServiceDep = Annotated[RbacService, Depends(get_rbac_service)]

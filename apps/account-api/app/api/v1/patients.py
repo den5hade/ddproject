@@ -1,14 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
-from app.dependencies.auth import get_current_account
-from app.dependencies.patient import get_patient_service
+from app.dependencies.auth import CurrentAccount
+from app.dependencies.patient import PatientServiceDep
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
-from app.models.account import Account
 from app.schemas.patient import PatientCreateRequest, PatientResponse
 from app.schemas.profile import PersonUpdate
-from app.services.patient import PatientContext, PatientService
+from app.services.patient import PatientContext
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -24,9 +23,9 @@ def _to_response(context: PatientContext) -> PatientResponse:
 
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_patient(
+    account: CurrentAccount,
+    service: PatientServiceDep,
     payload: PatientCreateRequest | None = None,
-    account: Account = Depends(get_current_account),
-    service: PatientService = Depends(get_patient_service),
 ) -> PatientResponse:
     try:
         context = await service.create_patient(account, payload)
@@ -39,8 +38,8 @@ async def create_patient(
 
 @router.get("/me", response_model=PatientResponse)
 async def get_my_patient(
-    account: Account = Depends(get_current_account),
-    service: PatientService = Depends(get_patient_service),
+    account: CurrentAccount,
+    service: PatientServiceDep,
 ) -> PatientResponse:
     return _to_response(await service.get_patient(account))
 
@@ -48,8 +47,8 @@ async def get_my_patient(
 @router.patch("/me", response_model=PatientResponse)
 async def update_my_person(
     payload: PersonUpdate,
-    account: Account = Depends(get_current_account),
-    service: PatientService = Depends(get_patient_service),
+    account: CurrentAccount,
+    service: PatientServiceDep,
 ) -> PatientResponse:
     try:
         context = await service.update_person(account, payload)
@@ -63,8 +62,8 @@ async def update_my_person(
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(
     patient_id: UUID,
-    account: Account = Depends(get_current_account),
-    service: PatientService = Depends(get_patient_service),
+    account: CurrentAccount,
+    service: PatientServiceDep,
 ) -> PatientResponse:
     context = await service.get_patient_for_view(account, patient_id)
     if context is None:
