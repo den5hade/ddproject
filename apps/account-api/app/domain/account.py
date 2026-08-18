@@ -41,3 +41,11 @@ class PermissionCode(str, Enum):
 
     USER_MANAGE = "user.manage"
     ORGANIZATION_MANAGE = "organization.manage"
+
+
+class RoleNotFoundError(Exception):
+    """A role code does not exist in the roles table."""
+
+
+class PermissionNotFoundError(Exception):
+    """A permission code does not exist in the permissions table."""
