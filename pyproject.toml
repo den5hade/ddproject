@@ -11,6 +11,7 @@ members = [
     "apps/marker-orchestrator",
     "apps/marker-worker",
     "apps/notification-worker",
+    "apps/objectstorage-worker",
     "packages/contracts",
     "packages/messaging",
     "packages/storage",
