@@ -3,6 +3,8 @@ from app.domain.account import AccountStatus, IdentityKind, PermissionCode, Role
 from app.domain.medical import (
     DocumentStatus,
     DocumentType,
+    EncounterAccessDeniedError,
+    EncounterNotFoundError,
     EncounterStatus,
     EncounterType,
     ExtractionStatus,
@@ -24,6 +26,8 @@ __all__ = [
     "AuditAction",
     "DocumentStatus",
     "DocumentType",
+    "EncounterAccessDeniedError",
+    "EncounterNotFoundError",
     "EncounterStatus",
     "EncounterType",
     "ExtractionStatus",

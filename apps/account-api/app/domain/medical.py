@@ -128,3 +128,11 @@ class UnsupportedFileTypeError(Exception):
 
 class JobNotFoundError(Exception):
     """A processing job does not exist for the given id."""
+
+
+class EncounterNotFoundError(Exception):
+    """An encounter (or its owning patient) does not exist for the given id."""
+
+
+class EncounterAccessDeniedError(Exception):
+    """The account has no access right to view/update the encounter."""
