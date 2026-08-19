@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -5,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
+from app.consumers.document_events import run_consumer
 from app.core.bus import close_publisher
 from app.core.config import settings
 from app.core.database import async_session_factory
@@ -17,12 +19,14 @@ logger = logging.getLogger("account_api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    consumer_task = asyncio.create_task(run_consumer())
     try:
         async with async_session_factory() as session:
             await RbacService(session).seed()
     except Exception:
         logger.warning("rbac_seed_failed at startup", exc_info=True)
     yield
+    consumer_task.cancel()
     await close_redis()
     await close_publisher()
 

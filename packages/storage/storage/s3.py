@@ -81,7 +81,8 @@ class CloudS3:
             response = self.client.head_object(
                 Bucket=self._config.s3_bucket_name, Key=key
             )
-            return {k: response[k] for k in ("ContentLength", "ETag", "ContentType") if k in response}
+            keys = ("ContentLength", "ETag", "ContentType")
+            return {k: response[k] for k in keys if k in response}
         except ClientError as exc:
             code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             if code == 404:

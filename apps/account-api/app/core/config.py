@@ -85,6 +85,24 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # ------------------------------------------------------------------
+    # Documents / object storage pipeline
+    # ------------------------------------------------------------------
+    storage_temp_dir: str = "./tmp/uploads"
+    max_upload_bytes: int = 50 * 1024 * 1024
+    document_events_queue: str = "document_events"
+    document_events_routing_keys: str = (
+        "document.stored,document.converted,document.analysis.completed,document.processing.failed"
+    )
+
+    @cached_property
+    def document_events_routing_key_list(self) -> list[str]:
+        return [
+            key.strip()
+            for key in self.document_events_routing_keys.split(",")
+            if key.strip()
+        ]
+
+    # ------------------------------------------------------------------
     # AI Feature (cloud.ru model API)
     # ------------------------------------------------------------------
     ai_feature: bool = False

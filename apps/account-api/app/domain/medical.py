@@ -104,3 +104,27 @@ class PersonNotFoundError(Exception):
 
 class PatientAlreadyExistsError(Exception):
     """An account already has a patient bound to it."""
+
+
+class DocumentNotFoundError(Exception):
+    """A document (or its owning patient) does not exist for the given id."""
+
+
+class DocumentAccessDeniedError(Exception):
+    """The account has no access right to view/upload the document."""
+
+
+class DocumentQuotaExceededError(Exception):
+    """The medical record reached its free-plan document limit."""
+
+
+class FileTooLargeError(Exception):
+    """The uploaded binary exceeds the configured size limit."""
+
+
+class UnsupportedFileTypeError(Exception):
+    """The uploaded file is neither a supported PDF nor an image."""
+
+
+class JobNotFoundError(Exception):
+    """A processing job does not exist for the given id."""

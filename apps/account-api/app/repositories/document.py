@@ -145,6 +145,16 @@ class ProcessingJobRepository:
     async def get(self, job_id: UUID) -> DocumentProcessingJob | None:
         return await self._session.get(DocumentProcessingJob, job_id)
 
+    async def get_by_version(
+        self, document_version_id: UUID
+    ) -> DocumentProcessingJob | None:
+        result = await self._session.execute(
+            select(DocumentProcessingJob)
+            .where(DocumentProcessingJob.document_version_id == document_version_id)
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def list_by_document(self, document_id: UUID) -> list[DocumentProcessingJob]:
         result = await self._session.execute(
             select(DocumentProcessingJob)

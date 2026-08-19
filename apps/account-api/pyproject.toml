@@ -17,6 +17,7 @@ dependencies = [
     "pdf-messaging",
     "pdf-storage",
     "pdf-observability",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]
