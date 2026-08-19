@@ -1,10 +1,10 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.dependencies.auth import CurrentAccount
+from app.dependencies.access import require_job_access
 from app.dependencies.documents import JobServiceDep
-from app.domain.medical import DocumentAccessDeniedError, DocumentNotFoundError, JobNotFoundError
+from app.domain.medical import JobNotFoundError
 from app.models.processing_job import DocumentProcessingJob
 from app.schemas.document import JobResponse
 
@@ -28,19 +28,17 @@ def _job_response(job: DocumentProcessingJob) -> JobResponse:
     )
 
 
-@router.get("/{job_id}", response_model=JobResponse)
+@router.get(
+    "/{job_id}", response_model=JobResponse, dependencies=[Depends(require_job_access())]
+)
 async def get_job(
     job_id: UUID,
-    account: CurrentAccount,
     service: JobServiceDep,
 ) -> JobResponse:
     try:
-        job = await service.get_job(account, job_id)
-    except (JobNotFoundError, DocumentNotFoundError, DocumentAccessDeniedError) as exc:
-        code = (
-            status.HTTP_404_NOT_FOUND
-            if isinstance(exc, (JobNotFoundError, DocumentNotFoundError))
-            else status.HTTP_403_FORBIDDEN
-        )
-        raise HTTPException(status_code=code, detail=str(exc)) from exc
+        job = await service.get_job(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     return _job_response(job)

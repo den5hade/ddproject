@@ -1,12 +1,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 
+from app.dependencies.access import require_document_access, require_patient_access
 from app.dependencies.auth import CurrentAccount
 from app.dependencies.documents import DocumentServiceDep, JobServiceDep
+from app.domain.access import AuditAction
 from app.domain.medical import (
-    DocumentAccessDeniedError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentType,
@@ -98,7 +99,6 @@ def _http_error(exc: Exception) -> HTTPException:
     codes = {
         DocumentNotFoundError: status.HTTP_404_NOT_FOUND,
         JobNotFoundError: status.HTTP_404_NOT_FOUND,
-        DocumentAccessDeniedError: status.HTTP_403_FORBIDDEN,
         DocumentQuotaExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
         FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
         UnsupportedFileTypeError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -114,6 +114,13 @@ def _http_error(exc: Exception) -> HTTPException:
     "/patients/{patient_id}/documents",
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            require_patient_access(
+                can_upload_documents=True, action=AuditAction.UPLOAD_DOCUMENT
+            )
+        )
+    ],
 )
 async def create_document(
     patient_id: UUID,
@@ -131,7 +138,6 @@ async def create_document(
         document = await service.create_document(account, patient_id, payload, upload)
     except (
         DocumentNotFoundError,
-        DocumentAccessDeniedError,
         DocumentQuotaExceededError,
         FileTooLargeError,
         UnsupportedFileTypeError,
@@ -140,34 +146,52 @@ async def create_document(
     return _document_response(document)
 
 
-@router.get("/documents/{document_id}", response_model=DocumentResponse)
+@router.get(
+    "/documents/{document_id}",
+    response_model=DocumentResponse,
+    dependencies=[
+        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
+    ],
+)
 async def get_document(
     document_id: UUID,
-    account: CurrentAccount,
     service: DocumentServiceDep,
 ) -> DocumentResponse:
     try:
-        document = await service.get_document(account, document_id)
-    except (DocumentNotFoundError, DocumentAccessDeniedError) as exc:
+        document = await service.get_document(document_id)
+    except DocumentNotFoundError as exc:
         raise _http_error(exc) from exc
     return _document_response(document)
 
 
-@router.get("/documents/{document_id}/versions", response_model=list[DocumentVersionResponse])
+@router.get(
+    "/documents/{document_id}/versions",
+    response_model=list[DocumentVersionResponse],
+    dependencies=[
+        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
+    ],
+)
 async def list_versions(
     document_id: UUID,
-    account: CurrentAccount,
     service: DocumentServiceDep,
 ) -> list[DocumentVersionResponse]:
     try:
-        versions = await service.get_versions(account, document_id)
-    except (DocumentNotFoundError, DocumentAccessDeniedError) as exc:
+        versions = await service.get_versions(document_id)
+    except DocumentNotFoundError as exc:
         raise _http_error(exc) from exc
     return [_version_response(version) for version in versions]
 
 
 @router.post(
-    "/documents/{document_id}/versions", response_model=DocumentVersionResponse
+    "/documents/{document_id}/versions",
+    response_model=DocumentVersionResponse,
+    dependencies=[
+        Depends(
+            require_document_access(
+                flag="can_upload_documents", action=AuditAction.UPLOAD_DOCUMENT
+            )
+        )
+    ],
 )
 async def create_version(
     document_id: UUID,
@@ -185,7 +209,6 @@ async def create_version(
         version = await service.add_version(account, document_id, payload, upload)
     except (
         DocumentNotFoundError,
-        DocumentAccessDeniedError,
         FileTooLargeError,
         UnsupportedFileTypeError,
     ) as exc:
@@ -194,46 +217,55 @@ async def create_version(
 
 
 @router.get(
-    "/documents/{document_id}/extractions", response_model=list[DocumentExtractionResponse]
+    "/documents/{document_id}/extractions",
+    response_model=list[DocumentExtractionResponse],
+    dependencies=[
+        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
+    ],
 )
 async def list_extractions(
     document_id: UUID,
-    account: CurrentAccount,
     service: DocumentServiceDep,
 ) -> list[DocumentExtractionResponse]:
     try:
-        extractions = await service.get_extractions(account, document_id)
-    except (DocumentNotFoundError, DocumentAccessDeniedError) as exc:
+        extractions = await service.get_extractions(document_id)
+    except DocumentNotFoundError as exc:
         raise _http_error(exc) from exc
     return [_extraction_response(extraction) for extraction in extractions]
 
 
-@router.get("/documents/{document_id}/jobs", response_model=list[JobResponse])
+@router.get(
+    "/documents/{document_id}/jobs",
+    response_model=list[JobResponse],
+    dependencies=[
+        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
+    ],
+)
 async def list_jobs(
     document_id: UUID,
-    account: CurrentAccount,
     service: JobServiceDep,
 ) -> list[JobResponse]:
     try:
-        jobs = await service.list_jobs(account, document_id)
-    except (DocumentNotFoundError, DocumentAccessDeniedError) as exc:
+        jobs = await service.list_jobs(document_id)
+    except DocumentNotFoundError as exc:
         raise _http_error(exc) from exc
     return [_job_response(job) for job in jobs]
 
 
-@router.get("/documents/{document_id}/download", response_model=DownloadUrlResponse)
+@router.get(
+    "/documents/{document_id}/download",
+    response_model=DownloadUrlResponse,
+    dependencies=[
+        Depends(require_document_access(action=AuditAction.DOWNLOAD_DOCUMENT))
+    ],
+)
 async def download_document(
     document_id: UUID,
-    account: CurrentAccount,
     service: DocumentServiceDep,
     version_id: UUID | None = None,
 ) -> DownloadUrlResponse:
     try:
-        url = await service.get_download_url(account, document_id, version_id)
-    except (
-        DocumentNotFoundError,
-        DocumentAccessDeniedError,
-        StorageUnavailableError,
-    ) as exc:
+        url = await service.get_download_url(document_id, version_id)
+    except (DocumentNotFoundError, StorageUnavailableError) as exc:
         raise _http_error(exc) from exc
     return DownloadUrlResponse(download_url=url, expires_in=900)

@@ -12,14 +12,12 @@ from contracts.events import (
     DocumentUploadRequested,
 )
 from fastapi import UploadFile
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from storage import ALLOWED_MIME_TYPES
 
 from app.core.config import settings
-from app.domain.access import GrantStatus
 from app.domain.medical import (
-    DocumentAccessDeniedError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentStatus,
@@ -29,7 +27,6 @@ from app.domain.medical import (
     ProcessingJobType,
     UnsupportedFileTypeError,
 )
-from app.models.access_grant import PatientAccessGrant
 from app.models.account import Account
 from app.models.document import Document, DocumentVersion
 from app.models.extraction import DocumentExtraction
@@ -99,8 +96,6 @@ class DocumentService:
         upload: UploadFile,
     ) -> Document:
         patient, medical_record = await self._patient_and_record(patient_id)
-        if not await self._can_upload(account, patient):
-            raise DocumentAccessDeniedError("no permission to upload documents for this patient")
         if (
             not account.is_subscribed
             and await self._documents.count_owned(medical_record.id) >= FREE_DOCUMENT_LIMIT
@@ -176,10 +171,10 @@ class DocumentService:
         data: DocumentCreateRequest,
         upload: UploadFile,
     ) -> DocumentVersion:
-        document = await self.get_document(account, document_id)
+        document = await self.get_document(document_id)
         patient = await self._document_patient(document)
-        if patient is None or not await self._can_upload(account, patient):
-            raise DocumentAccessDeniedError("no permission to upload documents for this patient")
+        if patient is None:
+            raise DocumentNotFoundError("document has no owning patient")
         filename = os.path.basename(upload.filename or "")
         if not filename:
             raise UnsupportedFileTypeError("missing original filename")
@@ -228,40 +223,30 @@ class DocumentService:
         return version
 
     # ------------------------------------------------------------------- reads
-    async def get_document(self, account: Account, document_id: UUID) -> Document:
+    async def get_document(self, document_id: UUID) -> Document:
         document = await self._documents.get(document_id)
         if document is None:
             raise DocumentNotFoundError("document not found")
-        patient = await self._document_patient(document)
-        if patient is None or not await self._can_view(account, patient):
-            raise DocumentAccessDeniedError("no access to this document")
         return document
 
-    async def list_documents(self, account: Account, patient_id: UUID) -> list[Document]:
-        patient, medical_record = await self._patient_and_record(patient_id)
-        if not await self._can_view(account, patient):
-            raise DocumentAccessDeniedError("no access to this patient's documents")
+    async def list_documents(self, patient_id: UUID) -> list[Document]:
+        _patient, medical_record = await self._patient_and_record(patient_id)
         return await self._documents.list_by_medical_record(medical_record.id)
 
-    async def get_versions(
-        self, account: Account, document_id: UUID
-    ) -> list[DocumentVersion]:
-        document = await self.get_document(account, document_id)
+    async def get_versions(self, document_id: UUID) -> list[DocumentVersion]:
+        document = await self.get_document(document_id)
         return await self._versions.list_by_document(document.id)
 
-    async def get_extractions(
-        self, account: Account, document_id: UUID
-    ) -> list[DocumentExtraction]:
-        document = await self.get_document(account, document_id)
+    async def get_extractions(self, document_id: UUID) -> list[DocumentExtraction]:
+        document = await self.get_document(document_id)
         return await self._extractions.list_by_document(document.id)
 
     async def get_download_url(
         self,
-        account: Account,
         document_id: UUID,
         version_id: UUID | None = None,
     ) -> str:
-        document = await self.get_document(account, document_id)
+        document = await self.get_document(document_id)
         version = (
             await self._versions.get(version_id)
             if version_id is not None
@@ -451,36 +436,6 @@ class DocumentService:
         if medical_record is None:
             return None
         return await self._patients.get_by_id(medical_record.patient_id)
-
-    async def _can_upload(self, account: Account, patient: Patient) -> bool:
-        if account.person_id == patient.person_id:
-            return True
-        return await self._has_active_grant(account.id, patient.id, "can_upload_documents")
-
-    async def _can_view(self, account: Account, patient: Patient) -> bool:
-        if account.person_id == patient.person_id:
-            return True
-        return await self._has_active_grant(account.id, patient.id, "can_view_documents")
-
-    async def _has_active_grant(
-        self, account_id: UUID, patient_id: UUID, flag: str
-    ) -> bool:
-        now = datetime.now(UTC)
-        result = await self._session.scalar(
-            select(PatientAccessGrant.id)
-            .where(
-                PatientAccessGrant.patient_id == patient_id,
-                PatientAccessGrant.account_id == account_id,
-                PatientAccessGrant.status == GrantStatus.ACTIVE,
-                getattr(PatientAccessGrant, flag).is_(True),
-                or_(
-                    PatientAccessGrant.expires_at.is_(None),
-                    PatientAccessGrant.expires_at > now,
-                ),
-            )
-            .limit(1)
-        )
-        return result is not None
 
 
 __all__ = ["DocumentService", "FREE_DOCUMENT_LIMIT"]

@@ -27,9 +27,8 @@ async def get_document_service(
 
 async def get_job_service(
     session: AsyncSession = Depends(get_db),
-    document_service: DocumentService = Depends(get_document_service),
 ) -> JobService:
-    return JobService(session, document_service=document_service)
+    return JobService(session)
 
 
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]

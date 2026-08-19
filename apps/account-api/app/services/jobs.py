@@ -4,43 +4,26 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.medical import JobNotFoundError
-from app.models.account import Account
 from app.models.processing_job import DocumentProcessingJob
-from app.repositories.document import DocumentRepository, ProcessingJobRepository
-from app.services.documents import DocumentService
+from app.repositories.document import ProcessingJobRepository
 
 logger = logging.getLogger("account_api.jobs")
 
 
 class JobService:
-    """Job status reads; access is delegated to DocumentService checks."""
+    """Job status reads; access is enforced by the ABAC ``require_job_access``."""
 
-    def __init__(
-        self,
-        session: AsyncSession,
-        document_service: DocumentService | None = None,
-    ) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._jobs = ProcessingJobRepository(session)
-        self._documents = DocumentRepository(session)
-        self._document_service = document_service
 
-    def _docs(self, session: AsyncSession) -> DocumentService:
-        if self._document_service is None:
-            self._document_service = DocumentService(session)
-        return self._document_service
-
-    async def get_job(self, account: Account, job_id: UUID) -> DocumentProcessingJob:
+    async def get_job(self, job_id: UUID) -> DocumentProcessingJob:
         job = await self._jobs.get(job_id)
         if job is None:
             raise JobNotFoundError("job not found")
-        await self._docs(self._session).get_document(account, job.document_id)
         return job
 
-    async def list_jobs(
-        self, account: Account, document_id: UUID
-    ) -> list[DocumentProcessingJob]:
-        await self._docs(self._session).get_document(account, document_id)
+    async def list_jobs(self, document_id: UUID) -> list[DocumentProcessingJob]:
         return await self._jobs.list_by_document(document_id)
 
 
