@@ -134,7 +134,7 @@ async def test_encounter_documents_linked(app_client, fake_redis):
     )
     encounter_id = created.json()["id"]
 
-    files = {"upload": (b"scan.pdf", b"%PDF-1.4 test", "application/pdf")}
+    files = {"upload": ("scan.pdf", b"%PDF-1.4 test", "application/pdf")}
     resp = await app_client.post(
         f"/api/v1/patients/{patient_id}/documents",
         headers=headers,

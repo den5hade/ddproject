@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from app.domain.access import GrantStatus
 from app.domain.medical import (
     EncounterAccessDeniedError,
     EncounterNotFoundError,
