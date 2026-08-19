@@ -1,9 +1,8 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from app.domain.medical import (
-    EncounterAccessDeniedError,
     EncounterNotFoundError,
     EncounterStatus,
     EncounterType,
@@ -87,16 +86,6 @@ async def test_create_encounter_specialist_with_grant(db_session):
     assert encounter.summary == "severe"
 
 
-async def test_create_encounter_specialist_without_grant_denied(db_session):
-    service = EncounterService(db_session)
-    owner = await _account(db_session)
-    specialist, _ = await _specialist_account(db_session)
-    patient = await _patient(db_session, owner)
-
-    with pytest.raises(EncounterAccessDeniedError):
-        await service.create_encounter(specialist, patient.id, _create_data())
-
-
 async def test_create_encounter_unknown_patient_raises(db_session):
     service = EncounterService(db_session)
     owner = await _account(db_session)
@@ -136,19 +125,9 @@ async def test_list_encounters_owner(db_session):
     await service.create_encounter(owner, patient.id, _create_data())
     await service.create_encounter(owner, patient.id, _create_data(reason="second"))
 
-    encounters = await service.list_encounters(owner, patient.id)
+    encounters = await service.list_encounters(patient.id)
 
-    assert encounters is not None
     assert len(encounters) == 2
-
-
-async def test_list_encounters_stranger_returns_none(db_session):
-    service = EncounterService(db_session)
-    owner = await _account(db_session)
-    stranger = await _account(db_session)
-    patient = await _patient(db_session, owner)
-
-    assert await service.list_encounters(stranger, patient.id) is None
 
 
 async def test_list_encounters_specialist_with_grant(db_session):
@@ -159,9 +138,8 @@ async def test_list_encounters_specialist_with_grant(db_session):
     await service.create_encounter(owner, patient.id, _create_data())
     await _grant(db_session, patient.id, specialist.id)
 
-    encounters = await service.list_encounters(specialist, patient.id)
+    encounters = await service.list_encounters(patient.id)
 
-    assert encounters is not None
     assert len(encounters) == 1
 
 
@@ -171,7 +149,7 @@ async def test_get_encounter_owner(db_session):
     patient = await _patient(db_session, owner)
     created = await service.create_encounter(owner, patient.id, _create_data())
 
-    encounter = await service.get_encounter(owner, created.id)
+    encounter = await service.get_encounter(created.id)
 
     assert encounter.id == created.id
 
@@ -184,28 +162,16 @@ async def test_get_encounter_grant_recipient(db_session):
     created = await service.create_encounter(owner, patient.id, _create_data())
     await _grant(db_session, patient.id, specialist.id)
 
-    encounter = await service.get_encounter(specialist, created.id)
+    encounter = await service.get_encounter(created.id)
 
     assert encounter.id == created.id
 
 
-async def test_get_encounter_denied(db_session):
-    service = EncounterService(db_session)
-    owner = await _account(db_session)
-    stranger = await _account(db_session)
-    patient = await _patient(db_session, owner)
-    created = await service.create_encounter(owner, patient.id, _create_data())
-
-    with pytest.raises(EncounterAccessDeniedError):
-        await service.get_encounter(stranger, created.id)
-
-
 async def test_get_encounter_not_found(db_session):
     service = EncounterService(db_session)
-    owner = await _account(db_session)
 
     with pytest.raises(EncounterNotFoundError):
-        await service.get_encounter(owner, uuid4())
+        await service.get_encounter(uuid4())
 
 
 async def test_update_encounter_owner(db_session):
@@ -215,7 +181,6 @@ async def test_update_encounter_owner(db_session):
     created = await service.create_encounter(owner, patient.id, _create_data())
 
     updated = await service.update_encounter(
-        owner,
         created.id,
         EncounterUpdate(status=EncounterStatus.COMPLETED, summary="done"),
     )
@@ -233,41 +198,7 @@ async def test_update_encounter_with_edit_grant(db_session):
     await _grant(db_session, patient.id, specialist.id, can_edit_medical_data=True)
 
     updated = await service.update_encounter(
-        specialist, created.id, EncounterUpdate(status=EncounterStatus.CANCELLED)
+        created.id, EncounterUpdate(status=EncounterStatus.CANCELLED)
     )
 
     assert updated.status == EncounterStatus.CANCELLED
-
-
-async def test_update_encounter_denied_without_flag(db_session):
-    service = EncounterService(db_session)
-    owner = await _account(db_session)
-    specialist, _ = await _specialist_account(db_session)
-    patient = await _patient(db_session, owner)
-    created = await service.create_encounter(owner, patient.id, _create_data())
-    await _grant(db_session, patient.id, specialist.id)
-
-    with pytest.raises(EncounterAccessDeniedError):
-        await service.update_encounter(
-            specialist, created.id, EncounterUpdate(status=EncounterStatus.COMPLETED)
-        )
-
-
-async def test_update_encounter_expired_grant_denied(db_session):
-    service = EncounterService(db_session)
-    owner = await _account(db_session)
-    specialist, _ = await _specialist_account(db_session)
-    patient = await _patient(db_session, owner)
-    created = await service.create_encounter(owner, patient.id, _create_data())
-    await _grant(
-        db_session,
-        patient.id,
-        specialist.id,
-        can_edit_medical_data=True,
-        expires_at=datetime.now(UTC) - timedelta(days=1),
-    )
-
-    with pytest.raises(EncounterAccessDeniedError):
-        await service.update_encounter(
-            specialist, created.id, EncounterUpdate(status=EncounterStatus.COMPLETED)
-        )

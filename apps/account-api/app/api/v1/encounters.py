@@ -1,12 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.dependencies.access import require_encounter_access, require_patient_access
 from app.dependencies.auth import CurrentAccount
 from app.dependencies.encounter import EncounterServiceDep
+from app.domain.access import AuditAction
 from app.domain.medical import (
     DocumentType,
-    EncounterAccessDeniedError,
     EncounterNotFoundError,
 )
 from app.models.document import Document
@@ -59,7 +60,6 @@ def _document_response(document: Document) -> DocumentResponse:
 def _http_error(exc: Exception) -> HTTPException:
     codes = {
         EncounterNotFoundError: status.HTTP_404_NOT_FOUND,
-        EncounterAccessDeniedError: status.HTTP_403_FORBIDDEN,
     }
     return HTTPException(
         status_code=codes.get(type(exc), status.HTTP_400_BAD_REQUEST),
@@ -71,6 +71,13 @@ def _http_error(exc: Exception) -> HTTPException:
     "/patients/{patient_id}/encounters",
     response_model=EncounterResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            require_patient_access(
+                can_create_encounters=True, action=AuditAction.CREATE_ENCOUNTER
+            )
+        )
+    ],
 )
 async def create_encounter(
     patient_id: UUID,
@@ -80,62 +87,90 @@ async def create_encounter(
 ) -> EncounterResponse:
     try:
         encounter = await service.create_encounter(account, patient_id, payload)
-    except (EncounterNotFoundError, EncounterAccessDeniedError) as exc:
-        raise _http_error(exc) from exc
-    return _encounter_response(encounter)
-
-
-@router.get("/patients/{patient_id}/encounters", response_model=list[EncounterResponse])
-async def list_encounters(
-    patient_id: UUID,
-    account: CurrentAccount,
-    service: EncounterServiceDep,
-) -> list[EncounterResponse]:
-    encounters = await service.list_encounters(account, patient_id)
-    if encounters is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="patient not found"
-        )
-    return [_encounter_response(encounter) for encounter in encounters]
-
-
-@router.get("/encounters/{encounter_id}", response_model=EncounterResponse)
-async def get_encounter(
-    encounter_id: UUID,
-    account: CurrentAccount,
-    service: EncounterServiceDep,
-) -> EncounterResponse:
-    try:
-        encounter = await service.get_encounter(account, encounter_id)
-    except (EncounterNotFoundError, EncounterAccessDeniedError) as exc:
-        raise _http_error(exc) from exc
-    return _encounter_response(encounter)
-
-
-@router.patch("/encounters/{encounter_id}", response_model=EncounterResponse)
-async def update_encounter(
-    encounter_id: UUID,
-    payload: EncounterUpdate,
-    account: CurrentAccount,
-    service: EncounterServiceDep,
-) -> EncounterResponse:
-    try:
-        encounter = await service.update_encounter(account, encounter_id, payload)
-    except (EncounterNotFoundError, EncounterAccessDeniedError) as exc:
+    except EncounterNotFoundError as exc:
         raise _http_error(exc) from exc
     return _encounter_response(encounter)
 
 
 @router.get(
-    "/encounters/{encounter_id}/documents", response_model=list[DocumentResponse]
+    "/patients/{patient_id}/encounters",
+    response_model=list[EncounterResponse],
+    dependencies=[
+        Depends(
+            require_patient_access(
+                action=AuditAction.VIEW_MEDICAL_RECORD,
+                deny_status=status.HTTP_404_NOT_FOUND,
+            )
+        )
+    ],
+)
+async def list_encounters(
+    patient_id: UUID,
+    service: EncounterServiceDep,
+) -> list[EncounterResponse]:
+    try:
+        encounters = await service.list_encounters(patient_id)
+    except EncounterNotFoundError as exc:
+        raise _http_error(exc) from exc
+    return [_encounter_response(encounter) for encounter in encounters]
+
+
+@router.get(
+    "/encounters/{encounter_id}",
+    response_model=EncounterResponse,
+    dependencies=[
+        Depends(
+            require_encounter_access(action=AuditAction.VIEW_MEDICAL_RECORD)
+        )
+    ],
+)
+async def get_encounter(
+    encounter_id: UUID,
+    service: EncounterServiceDep,
+) -> EncounterResponse:
+    try:
+        encounter = await service.get_encounter(encounter_id)
+    except EncounterNotFoundError as exc:
+        raise _http_error(exc) from exc
+    return _encounter_response(encounter)
+
+
+@router.patch(
+    "/encounters/{encounter_id}",
+    response_model=EncounterResponse,
+    dependencies=[
+        Depends(
+            require_encounter_access(
+                flag="can_edit_medical_data", action=AuditAction.UPDATE_ENCOUNTER
+            )
+        )
+    ],
+)
+async def update_encounter(
+    encounter_id: UUID,
+    payload: EncounterUpdate,
+    service: EncounterServiceDep,
+) -> EncounterResponse:
+    try:
+        encounter = await service.update_encounter(encounter_id, payload)
+    except EncounterNotFoundError as exc:
+        raise _http_error(exc) from exc
+    return _encounter_response(encounter)
+
+
+@router.get(
+    "/encounters/{encounter_id}/documents",
+    response_model=list[DocumentResponse],
+    dependencies=[
+        Depends(require_encounter_access(action=AuditAction.VIEW_DOCUMENT))
+    ],
 )
 async def list_encounter_documents(
     encounter_id: UUID,
-    account: CurrentAccount,
     service: EncounterServiceDep,
 ) -> list[DocumentResponse]:
     try:
-        documents = await service.list_encounter_documents(account, encounter_id)
-    except (EncounterNotFoundError, EncounterAccessDeniedError) as exc:
+        documents = await service.list_encounter_documents(encounter_id)
+    except EncounterNotFoundError as exc:
         raise _http_error(exc) from exc
     return [_document_response(document) for document in documents]

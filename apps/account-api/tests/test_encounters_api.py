@@ -1,7 +1,9 @@
 from uuid import UUID, uuid4
 
 from app.domain.access import GrantStatus
+from app.domain.account import RoleCode
 from app.models.access_grant import PatientAccessGrant
+from app.repositories.rbac import RbacRepository
 
 
 def _identity() -> str:
@@ -49,6 +51,9 @@ async def _grant(
     edit_medical_data=False,
 ) -> None:
     async with db_factory() as session:
+        rbac = RbacRepository(session)
+        await rbac.seed_defaults()
+        await rbac.assign_roles(account_id, [RoleCode.SPECIALIST.value])
         session.add(
             PatientAccessGrant(
                 patient_id=patient_id,
