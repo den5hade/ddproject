@@ -10,12 +10,15 @@ from app.core.security import (
     generate_refresh_token,
     hash_refresh_token,
 )
+from app.domain.access import AuditAction
+from app.domain.account import AccountStatus
 from app.domain.auth_session import AuthSession
 from app.domain.user_type import UserType
 from app.models.account import Account
 from app.repositories.account import AccountRepository
 from app.repositories.auth_sessions import AuthSessionRepository
 from app.schemas.auth import TokenResponse
+from app.services.audit import AuditService
 from app.services.notifications import NotificationGateway, detect_channel
 from app.services.otp import OTP_TTL_SECONDS, OtpService
 
@@ -59,6 +62,7 @@ class AuthService:
         self._sessions = AuthSessionRepository(session)
         self._otp_service = otp_service
         self._notifier = notifier
+        self._audit = AuditService(session)
 
     async def request_otp(self, identity: str) -> None:
         if not await self._otp_service.can_request(identity):
@@ -78,6 +82,8 @@ class AuthService:
         account = await self._accounts.get_by_identity(identity)
         if account is None:
             raise OtpVerificationError("no account for identity")
+        if account.status != AccountStatus.ACTIVE:
+            account.status = AccountStatus.ACTIVE
         return await self._establish_session(account, client)
 
     async def refresh(self, refresh_token: str, client: ClientInfo) -> TokenResponse:
@@ -99,7 +105,7 @@ class AuthService:
             reuse=current,
         )
 
-    async def logout(self, refresh_token: str) -> None:
+    async def logout(self, refresh_token: str, client: ClientInfo | None = None) -> None:
         hmac = hash_refresh_token(refresh_token)
         current = await self._sessions.get_by_refresh_hmac(hmac)
         if current is None:
@@ -107,6 +113,16 @@ class AuthService:
         current.revoke()
         await self._sessions.save(current)
         self._dispatch_events(current)
+        await self._audit.record(
+            action=AuditAction.LOGOUT,
+            resource_type="account",
+            resource_id=current.account_id,
+            actor_account_id=current.account_id,
+            ip_address=client.ip_address if client else "",
+            user_agent=client.user_agent if client else "",
+            metadata={"session_id": str(current.id)},
+            commit=False,
+        )
         await self._session.commit()
 
     async def _establish_session(
@@ -132,6 +148,16 @@ class AuthService:
 
         await self._sessions.save(auth_session)
         self._dispatch_events(auth_session)
+        await self._audit.record(
+            action=AuditAction.LOGIN,
+            resource_type="account",
+            resource_id=account.id,
+            actor_account_id=account.id,
+            ip_address=client.ip_address,
+            user_agent=client.user_agent,
+            metadata={"session_id": str(auth_session.id)},
+            commit=False,
+        )
         await self._session.commit()
 
         access_token = create_access_token(account.id, auth_session.user_type, auth_session.id)

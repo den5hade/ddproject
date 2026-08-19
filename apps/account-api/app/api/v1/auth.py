@@ -73,10 +73,12 @@ async def refresh(
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def logout(
     payload: RefreshRequest,
+    request: Request,
     service: AuthServiceDep,
 ) -> None | JSONResponse:
+    client = client_info(request)
     try:
-        await service.logout(payload.refresh_token)
+        await service.logout(payload.refresh_token, client)
     except RefreshTokenError as exc:
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": str(exc)})
     return None
