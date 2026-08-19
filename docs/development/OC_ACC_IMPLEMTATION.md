@@ -1,6 +1,7 @@
 # ACC_IMPLEMTATION.md — план реализации account-api: schemas, routes, services
 
-> Статус: реализованы M1 (RBAC), M2 (Person/Patient/MR) и M3 (Documents+Storage+Jobs).
+> Статус: реализованы M1 (RBAC), M2 (Person/Patient/MR), M3 (Documents+Storage+Jobs)
+> и M4 (Encounters).
 > Схема БД уже реализована (`../../migrations/alembic/versions/0002`, см. [DB_MODELS.md](../data/DB_MODELS.md)),
 > auth-флоу работает. Этот документ — инструкция по слоям: домен → schema (Pydantic)
 > → repository → service → route → dependency, с порядком милестоунов и тестами.
@@ -26,6 +27,11 @@
   `document.upload.requested`, валидирует, считает sha256 и загружает файл в S3
   под immutable-ключом (`packages/storage` → `CloudS3`, `build_key`),
   публикует `document.stored` / `document.processing.failed`.
+- **M4 Encounters** (§6): `POST|GET /patients/{id}/encounters`,
+  `GET|PATCH /encounters/{id}`, `GET /encounters/{id}/documents`; сервис
+  резолвит `specialist_id` (account → person → specialist) и
+  `organization_id` (активное членство) инлайн-запросами; доступ —
+  owner или активный грант (временные inline-проверки до M5).
 - `Account`, `AccountIdentity`, `Role`, `Permission`, `AccountRole`, `RolePermission`,
   `Patient`, `Specialist`, `Specialty`, `SpecialistSpecialty`, `Organization`,
   `OrganizationMembership`, `MedicalRecord`, `Document`, `DocumentVersion`,
@@ -253,6 +259,17 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 
 # 6. Milestone M4 — Encounters
 
+> **Статус: реализован.** `schemas/encounter.py`, `repositories/encounter.py`,
+> `services/encounter.py`, `dependencies/encounter.py`, `api/v1/encounters.py`
+> + unit/API-тесты (`test_encounter_service.py`, `test_encounters_api.py`).
+> Отличия от плана: `specialist_id` / `organization_id` резолвятся
+> инлайн-запросами в сервисе (без отдельных репозиториев); доступ —
+> инлайн-проверки owner/активный грант (как в M3), до M5 их заменит
+> `require_patient_access` (§7). `GET /patients/{id}/encounters` для
+> постороннего возвращает `404` (не раскрывает существование пациента),
+> прямые `GET/PATCH /encounters/{id}` без доступа — `403`
+> (`EncounterAccessDeniedError`), `PATCH` с пустым телом — `422`.
+
 ### Schemas — `apps/account-api/app/schemas/encounter.py`
 `EncounterCreate` (type, started_at, reason, summary?), `EncounterResponse`,
 `EncounterUpdate` (status, ended_at, summary).
@@ -265,9 +282,13 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 - `create_encounter(account, patient_id, data)` — только специалист с
   `can_create_encounters` или владелец; заполняет `specialist_id` из аккаунта
   (аккаунт → person → specialist), `organization_id` из членства (если есть).
+- `list_encounters(account, patient_id)` — владелец или grant-получатель;
+  иначе `None` (router → `404`, не раскрывает существование пациента).
 - `get_encounter(account, id)` — владелец или grant-получатель.
 - `update_encounter(account, id, data)` (status/ended_at/summary) — владелец пациента
   или специалист с grant `can_edit_medical_data`.
+- `list_encounter_documents(account, id)` — доступ через `get_encounter`,
+  документы по `DocumentRepository.list_by_encounter`.
 Исключения: `EncounterNotFoundError`, `EncounterAccessDeniedError`.
 
 ### Routes — `apps/account-api/app/api/v1/encounters.py`
@@ -354,7 +375,7 @@ M6 analytics (deferred)
 Зависимости:
 - M3 и M4 **не публиковать** без M5-dependency `require_patient_access`
   (иначе утечка данных). M5 можно реализовывать параллельно.
-  Сейчас в M3 проверка доступа инлайн в `DocumentService` (owner или активный grant) —
+  Сейчас в M3/M4 проверка доступа инлайн (owner или активный grant) —
   при M5 заменить на `require_patient_access` (§7).
 - Storage/шина из пакетов: `packages/storage` (`CloudS3`, presigned GET),
   `messaging` (publisher/consumer), `packages/contracts` (события
@@ -378,6 +399,11 @@ M6 analytics (deferred)
   `apps/objectstorage-worker/tests/test_processor.py`; storage: `packages/storage/tests/test_keys.py`;
   contracts: `packages/contracts/tests/test_events.py`.
 - **RBAC**: seed идемпотентен; account без роли → `403` на admin.
+- **Encounters**: `tests/unit/test_encounter_service.py` (create owner /
+  специалист с `can_create_encounters`, resolve specialist/org, denied,
+  `can_edit_medical_data` на update, истёкший грант),
+  `tests/test_encounters_api.py` (201/403/404, документы приёма через
+  `encounter_id`).
 - **path**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps`.
 - Переключатель `ai_feature`/мессенджеры — мокать в тестах (как `RabbitNotificationGateway(None)`).
 
