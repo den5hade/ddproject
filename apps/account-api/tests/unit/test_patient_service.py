@@ -1,13 +1,11 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import date
 from uuid import uuid4
 
 import pytest
-from app.domain.access import GrantStatus
 from app.domain.medical import (
     PatientAlreadyExistsError,
     Sex,
 )
-from app.models.access_grant import PatientAccessGrant
 from app.models.account import Account
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
@@ -23,13 +21,6 @@ async def _account(db_session) -> Account:
     db_session.add(account)
     await db_session.flush()
     return account
-
-
-async def _grant(db_session, patient_id, account_id, **kwargs) -> PatientAccessGrant:
-    grant = PatientAccessGrant(patient_id=patient_id, account_id=account_id, **kwargs)
-    db_session.add(grant)
-    await db_session.commit()
-    return grant
 
 
 async def test_ensure_patient_for_account_is_idempotent(db_session):
@@ -113,72 +104,3 @@ async def test_update_person_persists_and_clears_nullable(db_session):
     person = await db_session.get(Person, context.person.id)
     assert person.date_of_birth is None
     assert person.first_name == "Alex"
-
-
-async def test_get_patient_for_view_owner(db_session):
-    service = PatientService(db_session)
-    account = await _account(db_session)
-    context = await service.ensure_patient_for_account(account)
-
-    viewed = await service.get_patient_for_view(account, context.patient.id)
-    assert viewed is not None
-    assert viewed.patient.id == context.patient.id
-
-
-async def test_get_patient_for_view_hides_from_stranger(db_session):
-    service = PatientService(db_session)
-    account = await _account(db_session)
-    stranger = await _account(db_session)
-    context = await service.ensure_patient_for_account(account)
-
-    assert await service.get_patient_for_view(stranger, context.patient.id) is None
-
-
-async def test_get_patient_for_view_unknown_patient_returns_none(db_session):
-    service = PatientService(db_session)
-    account = await _account(db_session)
-
-    assert await service.get_patient_for_view(account, uuid4()) is None
-
-
-async def test_get_patient_for_view_active_grant(db_session):
-    service = PatientService(db_session)
-    owner = await _account(db_session)
-    specialist = await _account(db_session)
-    context = await service.ensure_patient_for_account(owner)
-
-    await _grant(db_session, context.patient.id, specialist.id, status=GrantStatus.ACTIVE)
-
-    viewed = await service.get_patient_for_view(specialist, context.patient.id)
-    assert viewed is not None
-
-
-async def test_get_patient_for_view_revoked_or_expired_grant(db_session):
-    service = PatientService(db_session)
-    owner = await _account(db_session)
-    context = await service.ensure_patient_for_account(owner)
-
-    revoked_specialist = await _account(db_session)
-    await _grant(
-        db_session,
-        context.patient.id,
-        revoked_specialist.id,
-        status=GrantStatus.REVOKED,
-    )
-    assert (
-        await service.get_patient_for_view(revoked_specialist, context.patient.id)
-        is None
-    )
-
-    expired_specialist = await _account(db_session)
-    await _grant(
-        db_session,
-        context.patient.id,
-        expired_specialist.id,
-        status=GrantStatus.ACTIVE,
-        expires_at=datetime.now(UTC) - timedelta(days=1),
-    )
-    assert (
-        await service.get_patient_for_view(expired_specialist, context.patient.id)
-        is None
-    )

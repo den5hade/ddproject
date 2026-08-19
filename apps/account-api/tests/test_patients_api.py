@@ -1,10 +1,12 @@
 from uuid import UUID, uuid4
 
 from app.domain.access import GrantStatus
+from app.domain.account import RoleCode
 from app.models.access_grant import PatientAccessGrant
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.person import Person
+from app.repositories.rbac import RbacRepository
 from sqlalchemy import func, select
 
 
@@ -36,6 +38,9 @@ async def _account_id(client, token: str) -> UUID:
 
 async def _grant(db_factory, patient_id: UUID, account_id: UUID) -> None:
     async with db_factory() as session:
+        rbac = RbacRepository(session)
+        await rbac.seed_defaults()
+        await rbac.assign_roles(account_id, [RoleCode.SPECIALIST.value])
         session.add(
             PatientAccessGrant(
                 patient_id=patient_id, account_id=account_id, status=GrantStatus.ACTIVE

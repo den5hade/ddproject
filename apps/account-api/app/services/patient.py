@@ -1,15 +1,12 @@
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.access import GrantStatus
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
-from app.models.access_grant import PatientAccessGrant
 from app.models.account import Account
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
@@ -70,17 +67,11 @@ class PatientService:
         await self._session.commit()
         return await self._build_context(context.patient)
 
-    async def get_patient_for_view(
-        self, account: Account, patient_id: UUID
-    ) -> PatientContext | None:
-        """Return the patient context iff the account owns it or holds an active grant."""
+    async def get_context(self, patient_id: UUID) -> PatientContext:
+        """Build the full patient context; access is enforced by the ABAC dependency."""
         patient = await self._patient.get_by_id(patient_id)
         if patient is None:
-            return None
-        if not self._is_owner(account, patient) and not await self._has_active_grant(
-            account, patient_id
-        ):
-            return None
+            raise PersonNotFoundError("patient not found")
         return await self._build_context(patient)
 
     async def _ensure(
@@ -126,27 +117,6 @@ class PatientService:
         return PatientContext(
             patient=patient, person=person, medical_record=medical_record
         )
-
-    @staticmethod
-    def _is_owner(account: Account, patient: Patient) -> bool:
-        return account.person_id == patient.person_id
-
-    async def _has_active_grant(self, account: Account, patient_id: UUID) -> bool:
-        now = datetime.now(UTC)
-        result = await self._session.scalar(
-            select(PatientAccessGrant.id)
-            .where(
-                PatientAccessGrant.patient_id == patient_id,
-                PatientAccessGrant.account_id == account.id,
-                PatientAccessGrant.status == GrantStatus.ACTIVE,
-                or_(
-                    PatientAccessGrant.expires_at.is_(None),
-                    PatientAccessGrant.expires_at > now,
-                ),
-            )
-            .limit(1)
-        )
-        return result is not None
 
 
 __all__ = ["PatientContext", "PatientService"]

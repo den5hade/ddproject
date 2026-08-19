@@ -1,9 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.dependencies.access import require_patient_access
 from app.dependencies.auth import CurrentAccount
 from app.dependencies.patient import PatientServiceDep
+from app.domain.access import AuditAction
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
 from app.schemas.patient import PatientCreateRequest, PatientResponse
 from app.schemas.profile import PersonUpdate
@@ -59,15 +61,26 @@ async def update_my_person(
     return _to_response(context)
 
 
-@router.get("/{patient_id}", response_model=PatientResponse)
+@router.get(
+    "/{patient_id}",
+    response_model=PatientResponse,
+    dependencies=[
+        Depends(
+            require_patient_access(
+                action=AuditAction.VIEW_PATIENT,
+                deny_status=status.HTTP_404_NOT_FOUND,
+            )
+        )
+    ],
+)
 async def get_patient(
     patient_id: UUID,
-    account: CurrentAccount,
     service: PatientServiceDep,
 ) -> PatientResponse:
-    context = await service.get_patient_for_view(account, patient_id)
-    if context is None:
+    try:
+        context = await service.get_context(patient_id)
+    except PersonNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="patient not found"
-        )
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     return _to_response(context)
