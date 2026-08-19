@@ -1,4 +1,10 @@
-from app.domain.access import AuditAction, GrantStatus
+from app.domain.access import (
+    AccessReason,
+    AuditAction,
+    GrantStatus,
+    PatientAccessDeniedError,
+    PatientAccessGrantNotFoundError,
+)
 from app.domain.account import AccountStatus, IdentityKind, PermissionCode, RoleCode
 from app.domain.medical import (
     DocumentStatus,
@@ -22,6 +28,7 @@ from app.domain.medical import (
 from app.domain.user_type import UserType
 
 __all__ = [
+    "AccessReason",
     "AccountStatus",
     "AuditAction",
     "DocumentStatus",
@@ -36,6 +43,8 @@ __all__ = [
     "MembershipStatus",
     "OrganizationStatus",
     "OrganizationType",
+    "PatientAccessDeniedError",
+    "PatientAccessGrantNotFoundError",
     "PatientAlreadyExistsError",
     "PatientStatus",
     "PermissionCode",
