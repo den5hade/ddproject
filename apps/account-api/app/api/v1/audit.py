@@ -13,7 +13,18 @@ router = APIRouter(prefix="/audit-logs", tags=["audit"])
 
 
 def _log_response(entry: AuditLog) -> AuditLogResponse:
-    return AuditLogResponse.model_validate(entry)
+    return AuditLogResponse(
+        id=entry.id,
+        actor_account_id=entry.actor_account_id,
+        action=entry.action,
+        resource_type=entry.resource_type,
+        resource_id=entry.resource_id,
+        patient_id=entry.patient_id,
+        ip_address=entry.ip_address,
+        user_agent=entry.user_agent,
+        metadata_=entry.metadata_,
+        created_at=entry.created_at,
+    )
 
 
 @router.get(
