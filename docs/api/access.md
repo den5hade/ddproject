@@ -13,7 +13,9 @@ Manage who may access a patient's medical data.
 
 ## Authorization
 
-Grant CRUD: patient owner only.
+Grant CRUD: patient owner only (`require_patient_owner`); recipient/others →
+`403`. Unauthenticated → `401`. Unknown patient → `404`. Empty `PATCH` body →
+`422`.
 
 ## Behavior
 
@@ -23,7 +25,8 @@ Grant CRUD: patient owner only.
   `can_edit_medical_data`.
 - Optional `expires_at`; `access_reason`
   (`treatment/consultation/diagnosis/follow_up`).
-- Every grant/revoke writes an audit entry.
+- Every grant/revoke writes an audit entry. Grant access is evaluated only for
+  active accounts holding the `specialist` role.
 
 ## Contract
 

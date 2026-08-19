@@ -1,7 +1,7 @@
 # ACC_IMPLEMTATION.md — план реализации account-api: schemas, routes, services
 
-> Статус: реализованы M1 (RBAC), M2 (Person/Patient/MR), M3 (Documents+Storage+Jobs)
-> и M4 (Encounters).
+> Статус: реализованы M1 (RBAC), M2 (Person/Patient/MR), M3 (Documents+Storage+Jobs),
+> M4 (Encounters) и M5 (Access Grants + ABAC + Audit).
 > Схема БД уже реализована (`../../migrations/alembic/versions/0002`, см. [DB_MODELS.md](../data/DB_MODELS.md)),
 > auth-флоу работает. Этот документ — инструкция по слоям: домен → schema (Pydantic)
 > → repository → service → route → dependency, с порядком милестоунов и тестами.
@@ -16,7 +16,8 @@
 - **M1 RBAC** (§3): seed ролей/прав (идемпотентно, на старте + `POST /admin/rbac/seed`),
   выдача ролей, `require_roles` / `require_permission` (403), admin-руты.
 - **M2 Person/Patient/MR** (§4): `POST /patients`, `GET|PATCH /patients/me`,
-  `GET /patients/{id}` (владелец или активный access grant, иначе `404`).
+  `GET /patients/{id}` (через `require_patient_access`; владелец или активный
+  access grant, иначе `404`).
 - **M3 Documents+Storage+Jobs** (§5): `POST /patients/{patient_id}/documents` (multipart),
   `GET /documents/{id}`, `POST|GET /documents/{id}/versions`,
   `GET /documents/{id}/extractions`, `GET /documents/{id}/jobs`,
@@ -31,7 +32,13 @@
   `GET|PATCH /encounters/{id}`, `GET /encounters/{id}/documents`; сервис
   резолвит `specialist_id` (account → person → specialist) и
   `organization_id` (активное членство) инлайн-запросами; доступ —
-  owner или активный грант (временные inline-проверки до M5).
+  через `require_patient_access` / `require_encounter_access` (§7).
+- **M5 Access Grants + ABAC + Audit** (§7): `POST|GET /patients/{id}/access-grants`,
+  `PATCH|DELETE /patients/{id}/access-grants/{grant_id}` (владелец пациента),
+  `GET /audit-logs` (только `system_admin`); ядро ABAC
+  `require_patient_access` + обёртки `require_document_access` /
+  `require_encounter_access` / `require_job_access`; каждый allow/deny пишется
+  в `audit_logs`; `verify_otp` активирует аккаунт; `LOGIN`/`LOGOUT` аудируются.
 - `Account`, `AccountIdentity`, `Role`, `Permission`, `AccountRole`, `RolePermission`,
   `Patient`, `Specialist`, `Specialty`, `SpecialistSpecialty`, `Organization`,
   `OrganizationMembership`, `MedicalRecord`, `Document`, `DocumentVersion`,
@@ -124,8 +131,8 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 > (`test_patient_service.py`, `test_patients_api.py`).
 > Отличия от плана: добавлен явный `POST /patients` (201 / 409;
 > `PatientAlreadyExistsError`); `GET /patients/{id}` для не-владельца без гранта
-> возвращает `404` (не раскрывает существование пациента). Inline-проверка гранта
-> здесь — временная замена `require_patient_access` из M5 (см. §7).
+> возвращает `404` (не раскрывает существование пациента). Доступ — через
+> `require_patient_access` из M5 (§7), inline-проверки удалены.
 
 ### Schemas — `apps/account-api/app/schemas/profile.py`, `apps/account-api/app/schemas/patient.py`
 `PersonResponse`, `PersonUpdate` (first/last/middle_name, date_of_birth, sex);
@@ -171,9 +178,8 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 > multipart-файлом в `account-api` (стейджится в общий temp-каталог
 > `storage_temp_dir`), а в S3 его кладёт `objectstorage-worker` по событию
 > `document.upload.requested`. Presigned **download**-URL выдаётся отдельным
-> рутом. Инлайн-проверка гранта (owner или активный grant с
-> `can_view_documents`/`can_upload_documents`) — временная замена
-> `require_patient_access` из M5 (см. §7).
+> рутом. Доступ — через `require_patient_access` из M5 (§7), inline-проверки
+> грантов (owner/grant с `can_view_documents`/`can_upload_documents`) удалены.
 
 Цель: пациент/врач загружают файл, создаётся `Document`, `DocumentVersion`,
 ставится `DocumentProcessingJob`, файл попадает в S3, публикуются события
@@ -263,12 +269,12 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 > `services/encounter.py`, `dependencies/encounter.py`, `api/v1/encounters.py`
 > + unit/API-тесты (`test_encounter_service.py`, `test_encounters_api.py`).
 > Отличия от плана: `specialist_id` / `organization_id` резолвятся
-> инлайн-запросами в сервисе (без отдельных репозиториев); доступ —
-> инлайн-проверки owner/активный грант (как в M3), до M5 их заменит
-> `require_patient_access` (§7). `GET /patients/{id}/encounters` для
-> постороннего возвращает `404` (не раскрывает существование пациента),
-> прямые `GET/PATCH /encounters/{id}` без доступа — `403`
-> (`EncounterAccessDeniedError`), `PATCH` с пустым телом — `422`.
+> инлайн-запросами в сервисе (без отдельных репозиториев); доступ — через
+> `require_patient_access` / `require_encounter_access` из M5 (§7).
+> `GET /patients/{id}/encounters` и `GET /patients/{id}/documents` для
+> постороннего возвращают `404` (не раскрывают существование пациента),
+> прямые `GET/PATCH /encounters/{id}` без доступа — `403`, `PATCH` с пустым
+> телом — `422`.
 
 ### Schemas — `apps/account-api/app/schemas/encounter.py`
 `EncounterCreate` (type, started_at, reason, summary?), `EncounterResponse`,
@@ -302,7 +308,33 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 
 # 7. Milestone M5 — Access Grants + ABAC + Audit Log
 
-Цель: "Dr. Ivanov имеет право видеть карту пациента №123" — явная таблица + аудит.
+> **Статус: реализован.** `schemas/access.py`, `schemas/audit.py`,
+> `repositories/access.py`, `repositories/audit.py`, `services/access.py`,
+> `services/audit.py`, `dependencies/access.py`, `api/v1/access.py`,
+> `api/v1/audit.py` + unit/API-тесты (`test_access_service.py`,
+> `test_access_api.py`).
+>
+> Отличия от плана / решения по ходу:
+> - Правило доступа (§33) применено **strict**: не-владелец обязан иметь
+>   роль `specialist` (просто активного гранта у `client` недостаточно).
+> - `verify_otp` теперь активирует аккаунт (`status → active`), иначе правило
+>   `account.status==active` заблокировало бы весь доступ (до M5 аккаунт
+>   оставался `pending`).
+> - Grant CRUD — только владелец пациента (`require_patient_owner`); владелец
+>   гранта-получатель не может управлять выданными грантами.
+> - M2/M3/M4 переведены на ABAC-зависимости: `require_patient_access`
+>   (M2 `GET /patients/{id}`, M3 документы, M4 list/создание), обёртки
+>   `require_document_access` / `require_encounter_access` / `require_job_access`
+>   для прямых read-рутов. Специалист обязан иметь роль `specialist` ДО выдачи
+>   гранта (тесты `_grant` seed-ят RBAC).
+> - `AuditService.record` коммитит по умолчанию — аудит переживает read-only-руты
+>   и записывается до raise deny-исключений.
+> - `GET /audit-logs` — только `system_admin` (match параметров: patient_id,
+>   actor_id, action; limit ≤ 500). Ответ сериализует колонку `metadata` как
+>   `metadata` (вализация через `metadata_` + алиас, т.к. `Base.metadata`
+>   занято SQLAlchemy).
+> - `AccessGrantUpdate` полностью пустой → 422 (валидатор "хотя бы одно поле"),
+>   при этом можно явно сбросить `expires_at: null`.
 
 ### Schemes — `apps/account-api/app/schemas/access.py`, `apps/account-api/app/schemas/audit.py`
 `AccessGrantCreate` (account_id/специалист, organization_id?, flags, access_reason,
@@ -375,8 +407,8 @@ M6 analytics (deferred)
 Зависимости:
 - M3 и M4 **не публиковать** без M5-dependency `require_patient_access`
   (иначе утечка данных). M5 можно реализовывать параллельно.
-  Сейчас в M3/M4 проверка доступа инлайн (owner или активный grant) —
-  при M5 заменить на `require_patient_access` (§7).
+  **M5 реализован**: проверка доступа во всех медицинских рутах идёт через
+  `require_patient_access` (§7); inline-проверки из M2/M3/M4 удалены.
 - Storage/шина из пакетов: `packages/storage` (`CloudS3`, presigned GET),
   `messaging` (publisher/consumer), `packages/contracts` (события
   `document.upload.requested`, `document.uploaded`, `document.stored`,
@@ -404,6 +436,11 @@ M6 analytics (deferred)
   `can_edit_medical_data` на update, истёкший грант),
   `tests/test_encounters_api.py` (201/403/404, документы приёма через
   `encounter_id`).
+- **Access + Audit**: `tests/unit/test_access_service.py` (grant/update/revoke/
+  list, `allows`: владелец, роль specialist, нет роли / нет флага / истёкший /
+  отозванный / неактивный аккаунт), `tests/test_access_api.py` (grant CRUD:
+  201/200/403/404/422, `LOGIN`/`LOGOUT`, `GET /audit-logs`: только admin,
+  фильтры patient_id/actor_id/action, `metadata` в ответе).
 - **path**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps`.
 - Переключатель `ai_feature`/мессенджеры — мокать в тестах (как `RabbitNotificationGateway(None)`).
 
@@ -411,11 +448,15 @@ M6 analytics (deferred)
 
 # 11. Чек-лист правил безопасности (инварианты RV)
 
-- [ ] Ни один route медицинских данных не отдаёт чужие карты без `require_patient_access`.
-- [ ] `PatientAccessGrant` проверяется и по `expires_at`, и по `status`.
-- [ ] `system_admin` **не** получает автоматический доступ к медкартам (least privilege);
+- [x] Ни один route медицинских данных не отдаёт чужие карты без `require_patient_access`.
+      (M5: все медицинские руты gated через `require_patient_access` /
+      `require_document_access` / `require_encounter_access` / `require_job_access`.)
+- [x] `PatientAccessGrant` проверяется и по `expires_at`, и по `status`.
+      (M5: `allows()` + `find_active_for`.)
+- [x] `system_admin` **не** получает автоматический доступ к медкартам (least privilege);
       при необходимости — отдельный `medical_data_admin` + audit.
-- [ ] Каждый доступ/отказ пишется в `audit_logs` (actor, patient, action, ip, user_agent).
-- [ ] Refresh-токены хранятся только как HMAC (`hash_refresh_token`), никогда в plain. (Уже так.)
-- [ ] Загруженный (pending) документ не отдаётся на download, пока не сохранён
+- [x] Каждый доступ/отказ пишется в `audit_logs` (actor, patient, action, ip, user_agent).
+      (M5: `_enforce_patient_access` пишет `allow`/`deny`; `LOGIN`/`LOGOUT` в auth-сервисе.)
+- [x] Refresh-токены хранятся только как HMAC (`hash_refresh_token`), никогда в plain. (Уже так.)
+- [x] Загруженный (pending) документ не отдаётся на download, пока не сохранён
       в S3 (`s3_key` заполняется только событием `document.stored`).
