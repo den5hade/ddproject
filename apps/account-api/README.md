@@ -49,10 +49,13 @@ Key methods:
 
 Once registered, a user can upload **PDF or image** files:
 
-1. Client requests a presigned S3 upload URL.
-2. Upload worker moves the object into cloud.ru **S3-compatible object storage**.
-3. Document metadata and processing jobs are tracked via the pdf-contracts
-   event bus (uploaded -> conversion requested -> converted -> completed).
+1. Client posts the binary as a multipart upload through account-api.
+2. account-api stages the file in a shared temp dir (`STORAGE_TEMP_DIR`) and
+   publishes `document.upload.requested`.
+3. objectstorage-worker normalizes/validates the file and moves it into the
+   cloud.ru **S3-compatible object storage** under an immutable ID key.
+4. Document metadata and processing jobs are tracked via the pdf-contracts
+   event bus (upload requested -> stored -> uploaded -> converted -> completed).
 
 **Quota:**
 - Free (not subscribed) users are limited to **10 documents**.

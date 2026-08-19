@@ -101,7 +101,10 @@ class DocumentService:
         patient, medical_record = await self._patient_and_record(patient_id)
         if not await self._can_upload(account, patient):
             raise DocumentAccessDeniedError("no permission to upload documents for this patient")
-        if await self._documents.count_owned(medical_record.id) >= FREE_DOCUMENT_LIMIT:
+        if (
+            not account.is_subscribed
+            and await self._documents.count_owned(medical_record.id) >= FREE_DOCUMENT_LIMIT
+        ):
             raise DocumentQuotaExceededError(
                 f"free plan allows at most {FREE_DOCUMENT_LIMIT} documents"
             )

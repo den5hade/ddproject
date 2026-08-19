@@ -15,10 +15,10 @@ Where data lives and how it moves between components.
 ## Pipeline flow
 
 ```text
-Upload
+Upload (multipart POST → account-api → shared temp dir)
   │
   ▼
-S3  (presigned upload, binary never proxied through account-api)
+objectstorage-worker (normalize → validate → S3 immutable key)
   │
   ▼
 document.uploaded
@@ -45,14 +45,16 @@ PostgreSQL    Embeddings → Qdrant
 ```text
 Client ── HTTPS ── nginx ── /api/* ── account-api ── PostgreSQL
                           │
-                          └─ presigned URL ── S3 (direct client upload)
+                          └─ multipart upload → STORAGE_TEMP_DIR → objectstorage-worker → S3
+                          └─ download → presigned GET URL ── S3 (client reads object directly)
 ```
 
 ## Key invariants
 
 - Medical/structured data → PostgreSQL only.
 - Binary artifacts → S3 only, referenced by key, never by local path.
-- S3 keys are never exposed to clients; downloads/uploads use **presigned URLs**.
+- S3 keys are never exposed to clients; downloads use **presigned GET URLs**,
+  uploads go through account-api + objectstorage-worker (never directly to S3).
 - AI output → Pydantic validation → domain service → repository → PostgreSQL.
 - Qdrant is derived from PostgreSQL artifacts and can be rebuilt.
 

@@ -75,8 +75,9 @@ See [AI_WORKER.md](../services/AI_WORKER.md).
 ## web — Main VPS (built assets)
 
 React + Vite SPA. Talks only to `/api/*` (proxied by nginx → same origin, no
-CORS). PDFs upload **directly to S3 via presigned URLs**; large files never
-pass through the servers.
+CORS). PDFs/post images upload **through account-api** (multipart); binaries
+are staged in a shared temp dir and moved to S3 by objectstorage-worker, so
+large files never pass through nginx persistence layers.
 
 ## Shared packages (`packages/`)
 

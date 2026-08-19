@@ -32,7 +32,7 @@ class StorageConfig(BaseSettings):
     s3_key_id: str = ""
     s3_key_secret: str = ""
     s3_bucket_name: str = ""
-    s3_region: str = "us-east-1"
+    s3_region: str = ""
 
 
 class CloudS3:
@@ -78,9 +78,7 @@ class CloudS3:
     def head(self, key: str) -> dict[str, Any] | None:
         """Return the object metadata or ``None`` when the key does not exist."""
         try:
-            response = self.client.head_object(
-                Bucket=self._config.s3_bucket_name, Key=key
-            )
+            response = self.client.head_object(Bucket=self._config.s3_bucket_name, Key=key)
             keys = ("ContentLength", "ETag", "ContentType")
             return {k: response[k] for k in keys if k in response}
         except ClientError as exc:
@@ -143,18 +141,14 @@ class CloudS3:
             ExpiresIn=expires_in,
         )
 
-    def presigned_get(
-        self, key: str, expires_in: int = 900, filename: str | None = None
-    ) -> str:
+    def presigned_get(self, key: str, expires_in: int = 900, filename: str | None = None) -> str:
         params: dict[str, Any] = {
             "Bucket": self._config.s3_bucket_name,
             "Key": key,
         }
         if filename:
             params["ResponseContentDisposition"] = f'attachment; filename="{filename}"'
-        return self.client.generate_presigned_url(
-            "get_object", Params=params, ExpiresIn=expires_in
-        )
+        return self.client.generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
 
 
 def _file_size(local_path: str) -> int:

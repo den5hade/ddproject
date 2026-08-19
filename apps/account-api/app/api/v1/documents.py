@@ -9,6 +9,7 @@ from app.domain.medical import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
+    DocumentType,
     FileTooLargeError,
     JobNotFoundError,
     UnsupportedFileTypeError,
@@ -99,7 +100,7 @@ def _http_error(exc: Exception) -> HTTPException:
         JobNotFoundError: status.HTTP_404_NOT_FOUND,
         DocumentAccessDeniedError: status.HTTP_403_FORBIDDEN,
         DocumentQuotaExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
-        FileTooLargeError: status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
         UnsupportedFileTypeError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
         StorageUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     }
@@ -119,8 +120,13 @@ async def create_document(
     upload: UploadFile,
     account: CurrentAccount,
     service: DocumentServiceDep,
-    payload: Annotated[DocumentCreateRequest, Form()],
+    document_type: Annotated[DocumentType, Form()] = DocumentType.OTHER,
+    title: Annotated[str, Form()] = "",
+    encounter_id: Annotated[UUID | None, Form()] = None,
 ) -> DocumentResponse:
+    payload = DocumentCreateRequest(
+        document_type=document_type, title=title, encounter_id=encounter_id
+    )
     try:
         document = await service.create_document(account, patient_id, payload, upload)
     except (
@@ -168,8 +174,13 @@ async def create_version(
     upload: UploadFile,
     account: CurrentAccount,
     service: DocumentServiceDep,
-    payload: Annotated[DocumentCreateRequest, Form()],
+    document_type: Annotated[DocumentType, Form()] = DocumentType.OTHER,
+    title: Annotated[str, Form()] = "",
+    encounter_id: Annotated[UUID | None, Form()] = None,
 ) -> DocumentVersionResponse:
+    payload = DocumentCreateRequest(
+        document_type=document_type, title=title, encounter_id=encounter_id
+    )
     try:
         version = await service.add_version(account, document_id, payload, upload)
     except (

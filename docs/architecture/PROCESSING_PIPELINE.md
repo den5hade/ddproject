@@ -41,17 +41,20 @@ PostgreSQL      Embeddings
 
 | | |
 |---|---|
-| Input | Original file (PDF/JPEG/PNG) |
-| Output | Object in S3; `DocumentVersion` v1 row |
-| Owner | account-api (`DocumentService.finalize_upload`) |
-| Queue | — (synchronous; RabbitMQ event published after) |
-| Retry | n/a |
-| Failure state | `document.status = pending` (never visible as processed) |
+| Input | Original file (PDF/JPEG/PNG) via multipart `POST` |
+| Output | Object in S3 under immutable key; `DocumentVersion` v1 row |
+| Owner | account-api (`DocumentService.create_document`) → objectstorage-worker (`StorageProcessor`) |
+| Queue | `document.upload` event → `document.stored` |
+| Retry | worker re-processes on transient failures; idempotent via `storage_key` head-check |
+| Failure state | `document.status = pending` → `failed` on permanent failure |
 | Idempotency key | `document_version_id` |
 
-Workflow: `POST /patients/{patient_id}/documents` (presigned URL) → client
-uploads directly to S3 → `POST /documents/{id}/upload-confirm` → create
-`DocumentProcessingJob(PDF_CONVERSION)` → publish `document.uploaded`.
+Workflow: `POST /patients/{patient_id}/documents` (multipart) → account-api
+stages the file in the shared temp dir, creates `DocumentVersion` v1 +
+`DocumentProcessingJob(PDF_CONVERSION)` → publishes `document.upload.requested`
+→ objectstorage-worker validates, computes SHA-256, uploads to S3 → publishes
+`document.stored` → account-api stores the key, sets `status = processing`,
+publishes `document.uploaded`.
 
 ### 2. Marker conversion
 

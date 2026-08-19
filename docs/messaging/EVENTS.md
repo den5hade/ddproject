@@ -7,13 +7,18 @@ Event contracts shared by all services. Defined in `packages/contracts`
 
 ```text
 auth.otp.requested
-document.uploaded
-document.conversion.requested
-document.converted
-document.analysis.requested
-document.analysis.completed
-document.processing.failed
+document.upload.requested      account-api → objectstorage-worker (temp_path, no binary)
+document.stored                objectstorage-worker → account-api (key, checksum)
+document.uploaded              account-api → marker orchestrator
+document.conversion.requested  marker orchestrator → marker-worker
+document.converted             marker-worker → account-api / ai-worker
+document.analysis.requested    ai orchestrator → ai-worker
+document.analysis.completed    ai-worker → account-api
+document.processing.failed     any worker → account-api (permanent failure)
 ```
+
+Consumers: account-api owns every DB state transition; workers stay stateless
+and only publish.
 
 ## Versioning
 
@@ -32,26 +37,32 @@ every schema change. Consumers should tolerate `schema_version <= N`.
 ```json
 {
   "event_id": "uuid",
-  "event_type": "document.converted",
   "schema_version": 1,
   "document_id": "uuid",
-  "document_version_id": "uuid",
+  "document_version_id": "uuid | null",
   "patient_id": "uuid",
-  "storage_key": "...",
-  "occurred_at": "..."
+  "occurred_at": "datetime"
+  "..."   // event-specific fields (storage_key, checksum, error_code, ...)
 }
 ```
 
 ## Typed contracts (Python)
 
 ```python
-class DocumentConverted(BaseModel):
+class DocumentEvent(BaseModel):
     event_id: UUID
+    schema_version: int = 1
     document_id: UUID
-    document_version_id: UUID
+    document_version_id: UUID | None = None
     patient_id: UUID
-    output_storage_key: str
-    occurred_at: datetime
+    occurred_at: datetime = Field(default_factory=...)
+
+
+class DocumentStored(DocumentEvent):
+    storage_key: str
+    mime_type: str
+    size_bytes: int
+    checksum: str
 ```
 
 ## Correlation

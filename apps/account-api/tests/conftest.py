@@ -46,8 +46,10 @@ def fake_redis():
 async def app_client(db_factory, fake_redis):
     from app.core.database import get_db
     from app.dependencies.auth import get_auth_service, get_otp_service
+    from app.dependencies.documents import get_document_service
     from app.main import app
     from app.services.auth import AuthService
+    from app.services.documents import DocumentService
     from app.services.notifications import RabbitNotificationGateway
     from app.services.otp import OtpService
 
@@ -65,9 +67,15 @@ async def app_client(db_factory, fake_redis):
             notifier=RabbitNotificationGateway(None),
         )
 
+    async def _override_get_document_service(
+        session=Depends(get_db),
+    ) -> DocumentService:
+        return DocumentService(session=session, publisher=None)
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_otp_service] = _override_get_otp_service
     app.dependency_overrides[get_auth_service] = _override_get_auth_service
+    app.dependency_overrides[get_document_service] = _override_get_document_service
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

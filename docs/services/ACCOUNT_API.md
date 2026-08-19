@@ -9,22 +9,24 @@ Authentication (passwordless OTP, JWT access, rotating refresh)
 Authorization (RBAC roles/permissions + ABAC via access grants)
 Patients
 Medical Records
-Documents metadata + versions
+Documents metadata + versions + processing jobs
 Encounters
 Access grants
 Audit log
 Analytics API
-Presigned S3 upload/download URLs
+Presigned S3 download URLs
+Document pipeline: stage uploads, publish document.upload.requested,
+consume document.stored / converted / analysis.completed / processing.failed
 ```
 
 ## Does NOT
 
 ```text
 run Marker
-process PDFs
+process PDFs / generate markdown
 run LLM
 generate embeddings
-store binary files locally
+persist binaries locally (staging in STORAGE_TEMP_DIR is transient)
 own the medical database writes (structured data goes through services/repositories)
 ```
 
@@ -96,6 +98,9 @@ Aliases in use:
 | `OtpServiceDep` | `OtpService` | `dependencies/auth.py` |
 | `RbacServiceDep` | `RbacService` | `dependencies/rbac.py` |
 | `PatientServiceDep` | `PatientService` | `dependencies/patient.py` |
+| `DocumentServiceDep` | `DocumentService` | `dependencies/documents.py` |
+| `JobServiceDep` | `JobService` | `dependencies/documents.py` |
+| `StorageServiceDep` | `StorageService` | `dependencies/documents.py` |
 
 ## Implemented endpoints
 
@@ -119,10 +124,24 @@ Aliases in use:
 - `GET /patients/{patient_id}` — owner or specialist with an active access grant,
   otherwise `404` (hides existence)
 
+### Documents — `api/v1/documents.py`
+
+- `POST /patients/{patient_id}/documents` — multipart upload (title,
+  document_type, encounter_id as form fields)
+- `GET /documents/{id}`, `GET /documents/{id}/versions`,
+  `GET /documents/{id}/extractions`, `GET /documents/{id}/jobs`
+- `POST /documents/{id}/versions` — upload a new version
+- `GET /documents/{id}/download?version_id=` — presigned GET URL
+
+### Jobs — `api/v1/jobs.py`
+
+- `GET /jobs/{job_id}` — single processing job
+
 ## Storage & messaging
 
 - PostgreSQL for all structured data (see [data/DB_MODELS.md](../data/DB_MODELS.md)).
-- S3 for binaries via presigned URLs (see [data/STORAGE.md](../data/STORAGE.md)).
+- S3 for binaries: uploads staged through objectstorage-worker, downloads via
+  presigned GET (see [data/STORAGE.md](../data/STORAGE.md)).
 - RabbitMQ for events (see [messaging/](../messaging/)).
 - Shared packages: `pdf-contracts`, `pdf-messaging`, `pdf-storage`,
   `pdf-observability`.

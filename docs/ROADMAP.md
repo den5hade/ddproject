@@ -34,7 +34,7 @@ Each phase must end with a **working vertical slice**, not just a set of tables.
 | M0 | Foundation: migration `0002` schema, auth flow (OTP + JWT + refresh rotation) | ✅ |
 | M1 | RBAC: seed roles/permissions, `POST /admin/rbac/seed`, assign roles, `require_roles` / `require_permission` | ✅ |
 | M2 | Person + Patient + MedicalRecord (`POST /patients`, `GET /patients/me`, `PATCH /patients/me`) | ✅ |
-| M3 | Documents + Versions + Storage + Processing Jobs (presigned upload, `upload-confirm`, jobs) | ◼ |
+| M3 | Documents + Versions + Storage + Processing Jobs (worker-backed upload, versions, download, jobs) | ✅ |
 | M4 | Encounters (create/list/get/update, docs per encounter) | ◼ |
 | M5 | Access Grants + ABAC + Audit Log (`require_patient_access`) | ◼ |
 | M6 | Analytics (observations/diagnoses/medications/consents) | ⏳ |
