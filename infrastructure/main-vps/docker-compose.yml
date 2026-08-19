@@ -20,8 +20,12 @@ services:
       context: ../..
       dockerfile: apps/account-api/Dockerfile
     env_file: .env
+    environment:
+      STORAGE_TEMP_DIR: /app/uploads
     expose:
       - "8000"
+    volumes:
+      - uploads:/app/uploads
     depends_on:
       - postgres
 
@@ -48,6 +52,17 @@ services:
     env_file: .env
     restart: unless-stopped
 
+  objectstorage-worker:
+    build:
+      context: ../..
+      dockerfile: apps/objectstorage-worker/Dockerfile
+    env_file: .env
+    environment:
+      STORAGE_TEMP_DIR: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -66,3 +81,4 @@ volumes:
   pgdata:
   qdrantdata:
   web-dist:
+  uploads:
