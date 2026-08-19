@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     s3_key_id: str = ""
     s3_key_secret: str = ""
     s3_bucket_name: str = ""
-    s3_region: str = "us-east-1"
+    s3_region: str = ""
     s3_tenant_id: str = "default"
 
     @cached_property
@@ -43,11 +43,7 @@ class Settings(BaseSettings):
 
     @cached_property
     def routing_key_list(self) -> list[str]:
-        return [
-            key.strip()
-            for key in self.objectstorage_routing_keys.split(",")
-            if key.strip()
-        ]
+        return [key.strip() for key in self.objectstorage_routing_keys.split(",") if key.strip()]
 
 
 settings = Settings()
