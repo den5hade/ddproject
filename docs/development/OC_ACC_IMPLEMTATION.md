@@ -1,6 +1,7 @@
 # ACC_IMPLEMTATION.md — план реализации account-api: schemas, routes, services
 
-> Статус: план. Схема БД уже реализована (`../../migrations/alembic/versions/0002`, см. [DB_MODELS.md](../data/DB_MODELS.md)),
+> Статус: реализованы M1 (RBAC), M2 (Person/Patient/MR) и M3 (Documents+Storage+Jobs).
+> Схема БД уже реализована (`../../migrations/alembic/versions/0002`, см. [DB_MODELS.md](../data/DB_MODELS.md)),
 > auth-флоу работает. Этот документ — инструкция по слоям: домен → schema (Pydantic)
 > → repository → service → route → dependency, с порядком милестоунов и тестами.
 
@@ -15,6 +16,16 @@
   выдача ролей, `require_roles` / `require_permission` (403), admin-руты.
 - **M2 Person/Patient/MR** (§4): `POST /patients`, `GET|PATCH /patients/me`,
   `GET /patients/{id}` (владелец или активный access grant, иначе `404`).
+- **M3 Documents+Storage+Jobs** (§5): `POST /patients/{patient_id}/documents` (multipart),
+  `GET /documents/{id}`, `POST|GET /documents/{id}/versions`,
+  `GET /documents/{id}/extractions`, `GET /documents/{id}/jobs`,
+  `GET /documents/{id}/download`, `GET /jobs/{id}`; пайплайн
+  upload→S3→convert→analysis через события RabbitMQ (см. §5) и
+  фоновый consumer событий в `account-api`.
+- **objectstorage-worker**: новый сервис `apps/objectstorage-worker` — консумит
+  `document.upload.requested`, валидирует, считает sha256 и загружает файл в S3
+  под immutable-ключом (`packages/storage` → `CloudS3`, `build_key`),
+  публикует `document.stored` / `document.processing.failed`.
 - `Account`, `AccountIdentity`, `Role`, `Permission`, `AccountRole`, `RolePermission`,
   `Patient`, `Specialist`, `Specialty`, `SpecialistSpecialty`, `Organization`,
   `OrganizationMembership`, `MedicalRecord`, `Document`, `DocumentVersion`,
@@ -23,8 +34,7 @@
 - Конвенции: `Base` из `apps/account-api/app/core/database.py`; enums в `apps/account-api/app/domain/`; `utcnow()`
   из `apps/account-api/app/models/utils.py`; репозиторий = класс на `AsyncSession`; сервис = бизнес-логика.
 
-**Пустые заглушки (создать):** `apps/account-api/app/api/v1/documents.py`, `jobs.py`, `users.py`;
-`apps/account-api/app/services/documents.py`, `jobs.py`, `storage.py`.
+**Пустые заглушки (создать):** `apps/account-api/app/api/v1/users.py`.
 
 ---
 
@@ -142,49 +152,102 @@ dependencies (auth/ABAC/RBAC)             apps/account-api/app/dependencies/*
 
 # 5. Milestone M3 — Documents + Versions + Storage + Processing Jobs
 
+> **Статус: реализован.** `schemas/document.py`, `repositories/document.py`,
+> `services/documents.py`, `services/jobs.py`, `services/storage.py`,
+> `dependencies/documents.py`, `api/v1/documents.py`, `api/v1/jobs.py`,
+> `consumers/document_events.py` + тесты (`test_documents_api.py`,
+> `unit/test_document_events.py`).
+> Также созданы пакеты: `packages/storage` (`CloudS3`, `build_key`,
+> `original_filename_for`, `ALLOWED_MIME_TYPES`), события в `packages/contracts`
+> и новый сервис `apps/objectstorage-worker`.
+>
+> Отличия от плана: вместо presigned **upload**-URL загрузка идёт напрямую
+> multipart-файлом в `account-api` (стейджится в общий temp-каталог
+> `storage_temp_dir`), а в S3 его кладёт `objectstorage-worker` по событию
+> `document.upload.requested`. Presigned **download**-URL выдаётся отдельным
+> рутом. Инлайн-проверка гранта (owner или активный grant с
+> `can_view_documents`/`can_upload_documents`) — временная замена
+> `require_patient_access` из M5 (см. §7).
+
 Цель: пациент/врач загружают файл, создаётся `Document`, `DocumentVersion`,
-ставится `DocumentProcessingJob`, публикуется `document_uploaded` в шину.
+ставится `DocumentProcessingJob`, файл попадает в S3, публикуются события
+пайплайна.
+
+### Схема жизненного цикла документа
+`pending` (после загрузки) → `processing` (файл сохранён в S3) →
+`completed` (extraction успешна) / `failed` (ошибка пайплайна). Извлечения —
+`DocumentExtraction` со `status`, `confidence`, `data` (JSON).
 
 ### Schemas — `apps/account-api/app/schemas/document.py`
-`DocumentCreate` (medical_record_id, encounter_id?, document_type, title,
-original_filename, mime_type, size_bytes), `DocumentResponse`,
-`DocumentVersionResponse`, `UploadUrlResponse` (upload_url, storage_key),
-`DocumentExtractionResponse`, `JobResponse`.
+`DocumentCreateRequest` (multipart-поля: document_type, title, encounter_id?),
+`DocumentResponse`, `DocumentVersionResponse`, `DocumentExtractionResponse`,
+`JobResponse`, `DownloadUrlResponse` (download_url, expires_in=900).
 
 ### Repositories — `apps/account-api/app/repositories/document.py`
 `DocumentRepository`: `create(...)`, `get(id)`, `list_by_medical_record(mr_id)`,
 `list_by_encounter(enc_id)`, `count_owned(medical_record_id)` (для квоты).
 `DocumentVersionRepository`: `create(document_id, version, s3_key, ...)`,
 `list_by_document`, `latest(document_id)`.
-`ProcessingJobRepository`: `create(document_id, version_id, job_type)`, `get`, `update_status`.
-`ExtractionRepository`: `save(extraction)`, `list_by_document`.
+`ProcessingJobRepository`: `create(document_id, version_id, job_type)`, `get`,
+`get_by_version`, `list_by_document`.
+`ExtractionRepository`: `save(extraction)`, `get`, `list_by_document`.
 
-### Service — `apps/account-api/app/services/documents.py` (заполнить заглушку)
-`DocumentService` (замыкается на `pdf-storage` + `pdf-messaging` + `pdf-contracts`):
-- `create_upload(document, account)` — сохранить метаданные, сформировать
-  `storage_key` (`medical-records/<mr>/<doc>/v1.<ext>`), вернуть presigned upload URL.
-- `finalize_upload(document_id, account)` — создать `DocumentVersion` v1, статус
-  `uploaded`, создать `DocumentProcessingJob(PDF_CONVERSION)`, опубликовать
-  `DocumentUploaded` (контракт из `pdf-contracts`), установить `Document.status=processing`.
-- `add_version(document_id, account)` — новая версия + job.
-- `get_document(account, id)`, `list_documents(account, mr_id)` — с проверкой доступа.
-- Квота: `is_subscribed` — лимит 10 документов (как в README) для не-подписчиков.
+### Service — `apps/account-api/app/services/documents.py`
+`DocumentService` (замыкается на `packages/storage` + `packages/contracts` +
+`messaging`):
+- `create_document(account, patient_id, data, upload)` — проверка доступа
+  (owner/grant `can_upload_documents`), квота 10 документов для не-подписчиков
+  (`FREE_DOCUMENT_LIMIT`), валидация mime (`ALLOWED_MIME_TYPES`, иначе `415`) и
+  размера (`max_upload_bytes`, иначе `413`), стейджинг в `storage_temp_dir`,
+  создание `Document(pending)` + `DocumentVersion` v1 + `DocumentProcessingJob`,
+  публикация `document.upload.requested`.
+- `add_version(account, document_id, data, upload)` — новая версия
+  (v = latest+1) + job, статус документа снова `pending`.
+- `get_document(account, id)` — owner или grant `can_view_documents`, иначе `403`.
+- `get_versions`, `get_extractions`, `get_download_url(account, id, version_id?)`
+  — presigned GET (TTL 900 c), без `s3_key` → `404`.
+- Обработчики событий: `on_document_stored` (пишет `s3_key`/`checksum`,
+  статус → `processing`, публикует `document.uploaded`),
+  `on_document_converted` (job → succeeded),
+  `on_document_analysis_completed` (extraction + статус документа
+  → `completed`/`failed`), `on_document_processing_failed` (job + документ → failed).
+- Исключения: `DocumentNotFoundError`, `DocumentAccessDeniedError`,
+  `DocumentQuotaExceededError` (429), `FileTooLargeError` (413),
+  `UnsupportedFileTypeError` (415), `JobNotFoundError`.
 
-Врачи-специалисты после приёма: документ с `uploaded_by_account_id=специалист`,
-`encounter_id=<приём>` — права проверяются через access grant (`can_upload_documents`).
+### Service — `apps/account-api/app/services/jobs.py`
+`JobService`: `get_job(account, id)`, `list_jobs(account, document_id)` —
+проверка доступа делегирована `DocumentService.get_document`.
 
-### Routes — `apps/account-api/app/api/v1/documents.py` (заполнить заглушку)
-- `POST /patients/{patient_id}/documents` → `UploadUrlResponse`
-- `POST /documents/{id}/upload-confirm` → финализация (+ событие в шину)
+### Service — `apps/account-api/app/services/storage.py`
+`StorageService` — адаптер над `packages/storage`; без настроек S3 поднимает
+`StorageUnavailableError` (503 на руте download). `tenant_id()` из
+`settings.s3_tenant_id`.
+
+### Routes — `apps/account-api/app/api/v1/documents.py`
+- `POST /patients/{patient_id}/documents` (multipart) → `201 DocumentResponse`
 - `GET /documents/{id}` , `GET /documents/{id}/versions`
-- `POST /documents/{id}/versions`
+- `POST /documents/{id}/versions` (multipart) → `DocumentVersionResponse`
 - `GET /documents/{id}/extractions`
+- `GET /documents/{id}/jobs`
+- `GET /documents/{id}/download?version_id=` → `DownloadUrlResponse`
 
-### Jobs status — `apps/account-api/app/api/v1/jobs.py`, `apps/account-api/app/services/jobs.py`
+### Jobs — `apps/account-api/app/api/v1/jobs.py`
 - `GET /jobs/{id}` — статус обработки (`document_processing_jobs`).
-- `GET /documents/{id}/jobs` — список job'ов документа.
-(Ответы ai-worker/marker-worker приходят событиями `document_converted`,
-`document_analysis_requested` → обработчик обновляет `DocumentProcessingJob` / `DocumentExtraction`.)
+
+### Consumers — `apps/account-api/app/consumers/document_events.py`
+Фоновый consumer (стартует в `main.py` lifespan): подписка на
+`document.stored`, `document.converted`, `document.analysis.completed`,
+`document.processing.failed` (queue `document_events`, из
+`settings.document_events_routing_keys`).
+
+### Objectstorage-worker — `apps/objectstorage-worker`
+Новый сервис (Docker-сервис в `infrastructure/main-vps/docker-compose.yml`,
+общий temp volume): консумит `document.upload.requested`, проверяет mime/size,
+считает sha256, кладёт файл в S3 под immutable-ключом
+`tenants/<tenant>/patients/<patient>/documents/<doc>/versions/<version>/original.<ext>`
+(`packages/storage.build_key`), публикует `document.stored`, при ошибке —
+`document.processing.failed`. `CloudS3.ensure_bucket()` идемпотентно создаёт бакет.
 
 ---
 
@@ -291,8 +354,13 @@ M6 analytics (deferred)
 Зависимости:
 - M3 и M4 **не публиковать** без M5-dependency `require_patient_access`
   (иначе утечка данных). M5 можно реализовывать параллельно.
-- Storage/шина из пакетов: `pdf-storage` (presign), `pdf-messaging`, `pdf-contracts`
-  (события `document_uploaded`, `document_converted`, `document_analysis_requested`).
+  Сейчас в M3 проверка доступа инлайн в `DocumentService` (owner или активный grant) —
+  при M5 заменить на `require_patient_access` (§7).
+- Storage/шина из пакетов: `packages/storage` (`CloudS3`, presigned GET),
+  `messaging` (publisher/consumer), `packages/contracts` (события
+  `document.upload.requested`, `document.uploaded`, `document.stored`,
+  `document.converted`, `document.analysis.completed`,
+  `document.processing.failed`). Загрузку в S3 выполняет `objectstorage-worker`.
 
 ---
 
@@ -303,6 +371,12 @@ M6 analytics (deferred)
 - **API (fixture `app_client`)**: по образцу `tests/test_auth_flow.py` —
   регистрация пациента, загрузка документа, создание encounter, выдача/отзыв гранта,
   отказ по `403` у специалиста без гранта.
+- **Documents**: `tests/test_documents_api.py` (upload/read-back, версии, jobs,
+  quota `429`, `415` unsupported, `403` без гранта, download URL),
+  `tests/unit/test_document_events.py` (sinks `document.stored`/`converted`/
+  `analysis.completed`/`processing.failed`). objectstorage-worker:
+  `apps/objectstorage-worker/tests/test_processor.py`; storage: `packages/storage/tests/test_keys.py`;
+  contracts: `packages/contracts/tests/test_events.py`.
 - **RBAC**: seed идемпотентен; account без роли → `403` на admin.
 - **path**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps`.
 - Переключатель `ai_feature`/мессенджеры — мокать в тестах (как `RabbitNotificationGateway(None)`).
@@ -317,4 +391,5 @@ M6 analytics (deferred)
       при необходимости — отдельный `medical_data_admin` + audit.
 - [ ] Каждый доступ/отказ пишется в `audit_logs` (actor, patient, action, ip, user_agent).
 - [ ] Refresh-токены хранятся только как HMAC (`hash_refresh_token`), никогда в plain. (Уже так.)
-- [ ] Presigned upload без подтверждения `upload-confirm` не создаёт активный «просматриваемый» документ.
+- [ ] Загруженный (pending) документ не отдаётся на download, пока не сохранён
+      в S3 (`s3_key` заполняется только событием `document.stored`).
