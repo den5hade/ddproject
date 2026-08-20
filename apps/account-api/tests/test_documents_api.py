@@ -125,6 +125,21 @@ async def test_upload_unsupported_type(app_client, fake_redis):
     assert resp.status_code == 415
 
 
+async def test_upload_content_mismatch_rejected(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    patient_id = await _create_patient(app_client, token)
+
+    files = {"upload": ("scan.pdf", b"\x89PNG\r\n\x1a\nfake bytes", "application/pdf")}
+    data = {"title": "spoofed"}
+    resp = await app_client.post(
+        f"/api/v1/patients/{patient_id}/documents",
+        headers=_auth(token),
+        files=files,
+        data=data,
+    )
+    assert resp.status_code == 415
+
+
 async def test_upload_too_large(app_client, fake_redis, monkeypatch):
     from app.core.config import settings
 

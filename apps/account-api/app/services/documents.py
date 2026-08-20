@@ -58,6 +58,18 @@ _MIME_BY_EXT = {
 }
 
 
+def _detect_magic(header: bytes) -> str | None:
+    if header.startswith(b"%PDF-"):
+        return "application/pdf"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    return None
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -107,7 +119,7 @@ class DocumentService:
         if not filename:
             raise UnsupportedFileTypeError("missing original filename")
         mime = self._detect_mime(upload.content_type, filename)
-        temp_path, size = await self._stage_upload(upload)
+        temp_path, size = await self._stage_upload(upload, mime)
 
         try:
             document = await self._documents.create(
@@ -179,7 +191,7 @@ class DocumentService:
         if not filename:
             raise UnsupportedFileTypeError("missing original filename")
         mime = self._detect_mime(upload.content_type, filename)
-        temp_path, size = await self._stage_upload(upload)
+        temp_path, size = await self._stage_upload(upload, mime)
 
         try:
             latest = await self._versions.latest(document_id)
@@ -390,10 +402,17 @@ class DocumentService:
         await self._publisher.publish(routing_key, event)
         return True
 
-    async def _stage_upload(self, upload: UploadFile) -> tuple[str, int]:
+    async def _stage_upload(
+        self, upload: UploadFile, expected_mime: str
+    ) -> tuple[str, int]:
+        if upload.size is not None and upload.size > settings.max_upload_bytes:
+            raise FileTooLargeError(
+                f"file exceeds the maximum of {settings.max_upload_bytes} bytes"
+            )
         os.makedirs(settings.storage_temp_dir, exist_ok=True)
         temp_path = os.path.join(settings.storage_temp_dir, f"{uuid4().hex}.upload")
         size = 0
+        magic_seen: str | None = None
         try:
             with open(temp_path, "wb") as out:
                 while chunk := await upload.read(_CHUNK):
@@ -402,10 +421,20 @@ class DocumentService:
                         raise FileTooLargeError(
                             f"file exceeds the maximum of {settings.max_upload_bytes} bytes"
                         )
+                    if magic_seen is None:
+                        magic_seen = _detect_magic(chunk)
+                        if magic_seen != expected_mime:
+                            raise UnsupportedFileTypeError(
+                                f"file content does not match declared type: {expected_mime}"
+                            )
                     out.write(chunk)
         except Exception:
             _safe_remove(temp_path)
             raise
+        if magic_seen is None:
+            raise UnsupportedFileTypeError(
+                "file is empty or has no recognizable content signature"
+            )
         return temp_path, size
 
     @staticmethod

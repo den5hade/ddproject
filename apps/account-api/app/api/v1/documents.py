@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, Form, UploadFile, status
 from app.api.v1.http_errors import raise_for
 from app.dependencies.access import require_document_access, require_patient_access
 from app.dependencies.auth import CurrentAccount
-from app.dependencies.documents import DocumentServiceDep, JobServiceDep
+from app.dependencies.documents import (
+    DocumentServiceDep,
+    JobServiceDep,
+    reject_oversized_upload,
+)
 from app.domain.access import AuditAction
 from app.domain.medical import (
     DocumentNotFoundError,
@@ -37,7 +41,8 @@ router = APIRouter(tags=["documents"])
             require_patient_access(
                 can_upload_documents=True, action=AuditAction.UPLOAD_DOCUMENT
             )
-        )
+        ),
+        Depends(reject_oversized_upload),
     ],
 )
 async def create_document(
@@ -108,7 +113,8 @@ async def list_versions(
             require_document_access(
                 flag="can_upload_documents", action=AuditAction.UPLOAD_DOCUMENT
             )
-        )
+        ),
+        Depends(reject_oversized_upload),
     ],
 )
 async def create_version(
