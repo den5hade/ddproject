@@ -1,14 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
+from app.api.v1.http_errors import raise_for
 from app.dependencies.access import require_patient_access
 from app.dependencies.auth import CurrentAccount
 from app.dependencies.patient import PatientServiceDep
 from app.domain.access import AuditAction
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
 from app.schemas.patient import PatientCreateRequest, PatientResponse
-from app.schemas.profile import PersonUpdate
+from app.schemas.profile import PersonResponse, PersonUpdate
 from app.services.patient import PatientContext
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/patients", tags=["patients"])
 def _to_response(context: PatientContext) -> PatientResponse:
     return PatientResponse(
         id=context.patient.id,
-        person=context.person,
+        person=PersonResponse.model_validate(context.person),
         medical_record_id=context.medical_record.id,
         status=context.patient.status,
     )
@@ -32,9 +33,7 @@ async def create_patient(
     try:
         context = await service.create_patient(account, payload)
     except PatientAlreadyExistsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-        ) from exc
+        raise_for(exc)
     return _to_response(context)
 
 
@@ -55,9 +54,7 @@ async def update_my_person(
     try:
         context = await service.update_person(account, payload)
     except PersonNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise_for(exc)
     return _to_response(context)
 
 
@@ -80,7 +77,5 @@ async def get_patient(
     try:
         context = await service.get_context(patient_id)
     except PersonNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise_for(exc)
     return _to_response(context)

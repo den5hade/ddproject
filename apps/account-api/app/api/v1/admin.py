@@ -1,7 +1,8 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
+from app.api.v1.http_errors import raise_for
 from app.dependencies.rbac import RbacServiceDep, require_permission
 from app.domain.account import PermissionCode
 from app.schemas.rbac import (
@@ -38,7 +39,7 @@ async def assign_account_roles(
     try:
         roles = await service.assign_roles(account_id, payload.role_codes)
     except RoleNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise_for(exc)
     return AccountRolesResponse(
         account_id=account_id,
         roles=[RoleResponse.model_validate(role) for role in roles],

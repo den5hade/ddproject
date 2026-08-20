@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.domain.medical import (
     DocumentStatus,
@@ -21,6 +21,8 @@ class DocumentCreateRequest(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     medical_record_id: UUID
     encounter_id: UUID | None
@@ -37,6 +39,8 @@ class DocumentResponse(BaseModel):
 
 
 class DocumentVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     document_id: UUID
     version: int
@@ -49,6 +53,8 @@ class DocumentVersionResponse(BaseModel):
 
 
 class DocumentExtractionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     document_id: UUID
     document_version_id: UUID | None
@@ -62,6 +68,8 @@ class DocumentExtractionResponse(BaseModel):
 
 
 class JobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     document_id: UUID
     document_version_id: UUID | None

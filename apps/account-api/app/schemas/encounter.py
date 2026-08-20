@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.domain.medical import EncounterStatus, EncounterType
 
@@ -29,6 +29,8 @@ class EncounterUpdate(BaseModel):
 
 
 class EncounterResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     medical_record_id: UUID
     specialist_id: UUID | None

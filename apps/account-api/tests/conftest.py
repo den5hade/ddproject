@@ -7,6 +7,9 @@ os.environ.setdefault("AUTH_PIN_PEPPER", "test-pin-pepper")
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-key-0123456789abcdef")
 os.environ.setdefault("JWT_ACCESS_EXPIRE_MINUTES", "15")
 os.environ.setdefault("JWT_REFRESH_EXPIRE_DAYS", "30")
+os.environ.setdefault("S3_KEY_ID", "")
+os.environ.setdefault("S3_KEY_SECRET", "")
+os.environ.setdefault("S3_BUCKET_NAME", "")
 
 import fakeredis.aioredis
 import pytest

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, status
-from fastapi.responses import JSONResponse
 
+from app.api.v1.http_errors import raise_for
 from app.dependencies.auth import AuthServiceDep, CurrentAccount, client_info
 from app.models.account import Account
 from app.schemas.auth import (
@@ -23,14 +23,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def request_otp(
     payload: RequestOtpRequest,
     service: AuthServiceDep,
-) -> dict | JSONResponse:
+) -> dict:
     try:
         await service.request_otp(payload.identity)
     except RateLimitError as exc:
-        return JSONResponse(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"detail": str(exc)},
-        )
+        raise_for(exc)
     return {"detail": "OTP sent"}
 
 
@@ -39,7 +36,7 @@ async def verify_otp(
     payload: VerifyOtpRequest,
     request: Request,
     service: AuthServiceDep,
-) -> TokenResponse | JSONResponse:
+) -> TokenResponse | None:
     client = client_info(
         request,
         device_id=payload.device_id,
@@ -49,7 +46,7 @@ async def verify_otp(
     try:
         return await service.verify_otp(payload.identity, payload.code, client)
     except OtpVerificationError as exc:
-        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
+        raise_for(exc)
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -57,7 +54,7 @@ async def refresh(
     payload: RefreshRequest,
     request: Request,
     service: AuthServiceDep,
-) -> TokenResponse | JSONResponse:
+) -> TokenResponse | None:
     client = client_info(
         request,
         device_id=payload.device_id,
@@ -67,7 +64,7 @@ async def refresh(
     try:
         return await service.refresh(payload.refresh_token, client)
     except RefreshTokenError as exc:
-        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": str(exc)})
+        raise_for(exc)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
@@ -75,13 +72,12 @@ async def logout(
     payload: RefreshRequest,
     request: Request,
     service: AuthServiceDep,
-) -> None | JSONResponse:
+) -> None:
     client = client_info(request)
     try:
         await service.logout(payload.refresh_token, client)
     except RefreshTokenError as exc:
-        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": str(exc)})
-    return None
+        raise_for(exc)
 
 
 @router.get("/me", response_model=UserResponse)
