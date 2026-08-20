@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup lock lint test test-integration build-web dev-web compose-dev compose-down
+.PHONY: help setup lock lint test test-integration build-web dev-web compose-dev compose-down compose-logs
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -27,8 +27,11 @@ build-web: ## Build the React SPA
 dev-web: ## Run the Vite dev server (proxies /api to account-api:8000)
 	cd $(WEB_DIR) && npm run dev
 
-compose-dev: ## Start local dev infra: postgres, rabbitmq, minio, qdrant
-	docker compose -f infrastructure/development/docker-compose.yml up -d
+compose-dev: ## Build & start dev stack: postgres, rabbitmq, redis, account-api, workers
+	docker compose -f infrastructure/development/docker-compose.yml up -d --build
+
+compose-logs: ## Tail dev stack logs; SVC=<service> to filter one
+	docker compose -f infrastructure/development/docker-compose.yml logs -f $(SVC)
 
 compose-down: ## Stop local dev infra
 	docker compose -f infrastructure/development/docker-compose.yml down

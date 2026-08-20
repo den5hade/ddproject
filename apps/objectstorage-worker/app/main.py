@@ -25,6 +25,7 @@ def _cloud_s3() -> CloudS3:
             s3_key_secret=settings.s3_key_secret,
             s3_bucket_name=settings.s3_bucket_name,
             s3_region=settings.s3_region,
+            s3_tenant_id=settings.s3_tenant_id,
         )
     )
 

@@ -33,6 +33,7 @@ class StorageConfig(BaseSettings):
     s3_key_secret: str = ""
     s3_bucket_name: str = ""
     s3_region: str = ""
+    s3_tenant_id: str = ""
 
 
 class CloudS3:
@@ -49,8 +50,14 @@ class CloudS3:
     @property
     def client(self) -> Any:
         if self._client is None:
+            # Cloud.ru S3 expects the access key in "<tenant_id>:<key_id>" format.
+            access_key_id = self._config.s3_key_id
+            if self._config.s3_tenant_id and not access_key_id.startswith(
+                self._config.s3_tenant_id
+            ):
+                access_key_id = f"{self._config.s3_tenant_id}:{access_key_id}"
             session = boto3.Session(
-                aws_access_key_id=self._config.s3_key_id,
+                aws_access_key_id=access_key_id,
                 aws_secret_access_key=self._config.s3_key_secret,
                 region_name=self._config.s3_region,
             )

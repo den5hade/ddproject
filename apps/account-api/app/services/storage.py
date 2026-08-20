@@ -28,6 +28,7 @@ class StorageService:
             s3_key_secret=settings.s3_key_secret,
             s3_bucket_name=settings.s3_bucket_name,
             s3_region=settings.s3_region,
+            s3_tenant_id=settings.s3_tenant_id,
         )
         if not (config.s3_key_id and config.s3_bucket_name):
             logger.warning("s3_not_configured; download links will be unavailable")
