@@ -1,14 +1,21 @@
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.account import AccountStatus
+from app.domain.identity import Identity
+
+
+def _canonical_identity(value: str) -> str:
+    return Identity.parse(value).canonical
 
 
 class RequestOtpRequest(BaseModel):
     identity: str = Field(
         min_length=3, max_length=255, description="email address or phone number"
     )
+
+    _normalize_identity = field_validator("identity")(_canonical_identity)
 
 
 class VerifyOtpRequest(BaseModel):
@@ -17,6 +24,8 @@ class VerifyOtpRequest(BaseModel):
     device_id: str | None = None
     platform: str | None = None
     app_version: str | None = None
+
+    _normalize_identity = field_validator("identity")(_canonical_identity)
 
 
 class RefreshRequest(BaseModel):

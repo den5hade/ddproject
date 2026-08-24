@@ -236,6 +236,35 @@ async def test_phone_login_sets_phone_verified_at(app_client, fake_redis, db_fac
     assert account.last_login_at is not None
 
 
+@pytest.mark.parametrize("identity", ["not-an-email", "12345", "a@b"])
+async def test_invalid_identity_rejected_without_side_effects(
+    app_client, fake_redis, db_factory, identity
+):
+    response = await app_client.post("/api/v1/auth/request-otp", json={"identity": identity})
+    assert response.status_code == 422
+    assert await fake_redis.keys("otp:*") == []
+
+    async with db_factory() as session:
+        count = (
+            await session.execute(select(func.count()).select_from(Account))
+        ).scalar_one()
+    assert count == 0
+
+
+async def test_identity_canonicalized_across_requests(app_client, fake_redis):
+    first = await app_client.post(
+        "/api/v1/auth/request-otp", json={"identity": "User@Example.com"}
+    )
+    assert first.status_code == 202
+    assert await fake_redis.get("otp:code:user@example.com") is not None
+    assert await fake_redis.get("otp:code:User@Example.com") is None
+
+    second = await app_client.post(
+        "/api/v1/auth/request-otp", json={"identity": "user@example.com"}
+    )
+    assert second.status_code == 429
+
+
 class _ExplodingSessionRepo:
     async def save(self, auth_session):
         raise RuntimeError("db down")

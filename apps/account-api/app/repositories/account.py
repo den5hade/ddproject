@@ -1,16 +1,11 @@
-import re
 from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.account import IdentityKind
+from app.domain.identity import Identity
 from app.models.account import Account
-
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def normalize_email(value: str) -> str:
-    return value.strip().lower()
 
 
 class AccountRepository:
@@ -21,13 +16,17 @@ class AccountRepository:
         return await self._session.get(Account, account_id)
 
     async def get_by_identity(self, identity: str) -> Account | None:
-        if EMAIL_RE.match(identity):
+        parsed = Identity.parse(identity)
+        if parsed.kind.value == "email":
             where = or_(
-                Account.email == identity,
-                Account.email_normalized == normalize_email(identity),
+                Account.email == parsed.canonical,
+                Account.email_normalized == parsed.canonical,
             )
         else:
-            where = or_(Account.phone == identity, Account.phone_e164 == identity)
+            where = or_(
+                Account.phone == parsed.canonical,
+                Account.phone_e164 == parsed.canonical,
+            )
         result = await self._session.execute(select(Account).where(where))
         return result.scalar_one_or_none()
 
@@ -35,17 +34,18 @@ class AccountRepository:
         self, identity: str
     ) -> tuple[Account, bool]:
         """Return (account, created) looking up by email or phone."""
+        parsed = Identity.parse(identity)
         account = await self.get_by_identity(identity)
         if account is not None:
             return account, False
 
         account = Account()
-        if EMAIL_RE.match(identity):
-            account.email = identity
-            account.email_normalized = normalize_email(identity)
+        if parsed.kind is IdentityKind.EMAIL:
+            account.email = parsed.canonical
+            account.email_normalized = parsed.canonical
         else:
-            account.phone = identity
-            account.phone_e164 = identity
+            account.phone = parsed.canonical
+            account.phone_e164 = parsed.canonical
         self._session.add(account)
         await self._session.flush()
         return account, True

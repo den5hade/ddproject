@@ -1,5 +1,4 @@
 import logging
-import re
 from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
@@ -7,7 +6,7 @@ from uuid import uuid4
 from contracts.events import AuthOtpRequested
 from messaging import Publisher
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+from app.domain.identity import Identity
 
 OTP_ROUTING_KEY = "auth.otp.requested"
 
@@ -15,7 +14,7 @@ logger = logging.getLogger("account_api.notifications")
 
 
 def detect_channel(identity: str) -> str:
-    return "email" if EMAIL_RE.match(identity) else "phone"
+    return Identity.parse(identity).kind.value
 
 
 class NotificationGateway(Protocol):
