@@ -19,6 +19,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 
+class StubNotificationGateway:
+    async def send_otp(self, identity: str, channel: str, code, expires_at) -> None:
+        return None
+
+
 @pytest.fixture
 async def db_factory():
     from app.core.database import Base
@@ -53,7 +58,6 @@ async def app_client(db_factory, fake_redis):
     from app.main import app
     from app.services.auth import AuthService
     from app.services.documents import DocumentService
-    from app.services.notifications import RabbitNotificationGateway
     from app.services.otp import OtpService
 
     async def _override_get_db():
@@ -67,7 +71,7 @@ async def app_client(db_factory, fake_redis):
         return AuthService(
             session=session,
             otp_service=OtpService(fake_redis),
-            notifier=RabbitNotificationGateway(None),
+            notifier=StubNotificationGateway(),
         )
 
     async def _override_get_document_service(

@@ -58,6 +58,10 @@ class OtpService:
         await self._redis.delete(self._attempts_key(identity))
         return code
 
+    async def revoke(self, identity: str) -> None:
+        await self._redis.delete(self._code_key(identity))
+        await self._redis.delete(self._attempts_key(identity))
+
     async def verify(self, identity: str, code: str) -> bool:
         stored = await self._redis.get(self._code_key(identity))
         if stored is None:
@@ -72,6 +76,5 @@ class OtpService:
                 await self._redis.delete(self._code_key(identity))
             return False
 
-        await self._redis.delete(self._code_key(identity))
-        await self._redis.delete(self._attempts_key(identity))
+        await self.revoke(identity)
         return True

@@ -19,7 +19,11 @@ from app.repositories.account import AccountRepository
 from app.repositories.auth_sessions import AuthSessionRepository
 from app.schemas.auth import TokenResponse
 from app.services.audit import AuditService
-from app.services.notifications import NotificationGateway, detect_channel
+from app.services.notifications import (
+    NotificationGateway,
+    NotificationUnavailableError,
+    detect_channel,
+)
 from app.services.otp import OTP_TTL_SECONDS, OtpService
 
 logger = logging.getLogger("account_api.auth")
@@ -74,9 +78,13 @@ class AuthService:
         account, _created = await self._accounts.get_or_create_by_identity(identity)
         code = await self._otp_service.issue(identity)
         expires_at = datetime.now(UTC) + timedelta(seconds=OTP_TTL_SECONDS)
-        await self._notifier.send_otp(
-            identity, detect_channel(identity), code, expires_at
-        )
+        try:
+            await self._notifier.send_otp(
+                identity, detect_channel(identity), code, expires_at
+            )
+        except NotificationUnavailableError:
+            await self._otp_service.revoke(identity)
+            raise
         await self._session.commit()
         logger.info("otp_requested account_id=%s identity=%s", account.id, identity)
 

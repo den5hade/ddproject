@@ -16,6 +16,7 @@ from app.services.auth import (
     RateLimitError,
     RefreshTokenError,
 )
+from app.services.notifications import NotificationUnavailableError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,7 +28,7 @@ async def request_otp(
 ) -> dict:
     try:
         await service.request_otp(payload.identity)
-    except RateLimitError as exc:
+    except (RateLimitError, NotificationUnavailableError) as exc:
         raise_for(exc)
     return {"detail": "OTP sent"}
 

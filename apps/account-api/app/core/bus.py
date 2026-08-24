@@ -20,7 +20,7 @@ async def get_publisher() -> Publisher | None:
             connect_publisher(settings.rabbitmq_dsn), timeout=5.0
         )
     except Exception:
-        logger.warning("rabbitmq publisher unavailable; OTP delivery falls back to log")
+        logger.warning("rabbitmq publisher unavailable; OTP delivery will fail closed")
         _publisher = None
     return _publisher
 

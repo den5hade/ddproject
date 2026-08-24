@@ -18,6 +18,7 @@ from app.services.auth import (
     RateLimitError,
     RefreshTokenError,
 )
+from app.services.notifications import NotificationUnavailableError
 from app.services.storage import StorageUnavailableError
 
 _EXCEPTION_STATUS: dict[type[Exception], int] = {
@@ -26,6 +27,7 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     OtpVerificationError: status.HTTP_400_BAD_REQUEST,
     RefreshTokenError: status.HTTP_401_UNAUTHORIZED,
     AccountInactiveError: status.HTTP_403_FORBIDDEN,
+    NotificationUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # Patients
     PersonNotFoundError: status.HTTP_404_NOT_FOUND,
     PatientAlreadyExistsError: status.HTTP_409_CONFLICT,

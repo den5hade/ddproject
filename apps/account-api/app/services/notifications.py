@@ -17,6 +17,10 @@ def detect_channel(identity: str) -> str:
     return Identity.parse(identity).kind.value
 
 
+class NotificationUnavailableError(Exception):
+    """The OTP could not be handed to the delivery broker."""
+
+
 class NotificationGateway(Protocol):
     async def send_otp(
         self, identity: str, channel: str, code: str, expires_at: datetime
@@ -24,20 +28,14 @@ class NotificationGateway(Protocol):
 
 
 class RabbitNotificationGateway:
-    """Publishes OTP events to the events exchange; logs when the broker is down."""
+    """Publishes OTP events to the events exchange; fails closed."""
 
     def __init__(self, publisher: Publisher | None) -> None:
         self._publisher = publisher
 
     async def send_otp(self, identity: str, channel: str, code: str, expires_at: datetime) -> None:
         if self._publisher is None:
-            logger.info(
-                "otp_delivered_via_log identity=%s channel=%s code=%s",
-                identity,
-                channel,
-                code,
-            )
-            return
+            raise NotificationUnavailableError("notification delivery is unavailable")
         event = AuthOtpRequested(
             request_id=uuid4(),
             identity=identity,
@@ -45,4 +43,9 @@ class RabbitNotificationGateway:
             code=code,
             expires_at=expires_at,
         )
-        await self._publisher.publish(OTP_ROUTING_KEY, event)
+        try:
+            await self._publisher.publish(OTP_ROUTING_KEY, event)
+        except Exception as exc:
+            raise NotificationUnavailableError(
+                "notification delivery failed"
+            ) from exc
