@@ -30,7 +30,7 @@ Status legend: `[ ]` pending · `[x]` done.
 | F3 | High | Document can be attached to another patient's encounter | `app/services/documents.py:125-127` | fixed (`5d4e935`) |
 | F4 | High | OTP codes logged in plaintext when publisher unavailable | `app/services/notifications.py:34-41` | fixed (`64ee3af`) |
 | F5 | Medium | Logout does not invalidate issued access tokens; refresh rotation is racy | `app/services/auth.py:89-106`, `app/dependencies/auth.py` | fixed (`76290cf`) |
-| F6 | Medium | Document-event consumer dies silently on broker or handler failure | `app/consumers/document_events.py:58-77` | confirmed — planned |
+| F6 | Medium | Document-event consumer dies silently on broker or handler failure | `app/consumers/document_events.py:58-77` | fixed (`ac25958`) |
 | F7 | Medium | OTP identity not validated/canonicalized; arbitrary strings become accounts and Redis keys | `app/schemas/auth.py:8-15`, `app/repositories/account.py:43-48`, `app/services/otp.py:36-46` | fixed (`c7771a6`) |
 | F8 | High | `verify_otp` auto-reactivates BLOCKED/DELETED accounts on login | `app/services/auth.py:85-86` | fixed (`3062f02`) |
 | F9 | High | `verify_otp` never sets `email_verified_at` / `phone_verified_at` despite proving identity ownership | `app/services/auth.py:79-87` | fixed (`3062f02`) |
@@ -455,11 +455,14 @@ and one 401 (integration test with two parallel tasks); revoked/unknown `sid`
 
 ### F6 — Resilient document-event consumer (Medium)
 
-**Status:** pending. Locked decision (revision 3): full DLQ — declare a
-dead-letter exchange + `<queue>_dlq` in the shared `messaging.Consumer` and
-route handler failures there. Deploy note: adding `x-dead-letter-exchange`
-args to an existing durable queue raises `PRECONDITION_FAILED`, so queues
-must be recreated once at deploy time.
+**Status:** done (`ac25958`). Full DLQ: the shared `messaging.Consumer`
+declares a FANOUT `<queue>_dlx` + durable `<queue>_dlq` and passes
+`x-dead-letter-exchange` on the main queue, so aio_pika's reject-without-
+requeue lands failed messages in the DLQ; `run_consumer` reconnects with a
+fresh `Consumer` per attempt (1s→30s backoff with jitter, reset after
+sustained success), logs handler failures structurally and keeps consuming;
+`main.py` awaits the cancelled consumer task. Deploy note: queues must be
+recreated once at rollout (`PRECONDITION_FAILED` otherwise).
 
 **Problem (corrected analysis).** Two distinct failure modes in
 `app/consumers/document_events.py` + `packages/messaging/messaging/consumer.py`:
@@ -568,10 +571,12 @@ Location conventions: API tests in `apps/account-api/tests/`, unit tests in
       without secrets / with placeholders / with short secrets → startup error
       naming setting; development → warning only; `DEBUG=true` does not bypass
       production checks (F10).
-- [ ] **consumer** (`tests/unit/test_document_events.py`): broker-start
-      failure → retries with fresh `Consumer`, recovers when broker returns;
-      handler exception → message dead-lettered/logged, loop survives;
-      malformed event dropped with warning (F6).
+- [x] **consumer** (`apps/account-api/tests/unit/test_document_events.py`):
+      broker-start failure → retries with fresh `Consumer`, recovers when
+      broker returns; disconnect → backoff doubling + reset-after-success;
+      handler exception → message rejected to DLQ, loop survives;
+      malformed event dropped with warning; cancellation closes cleanly
+      (F6).
 - [x] **dependencies** (`test_auth_flow.py` + new
       `apps/account-api/tests/unit/test_auth_sessions_repository.py`):
       revoked/unknown/expired `sid` → 401; conditional-rotation guard
@@ -604,13 +609,13 @@ lint/typecheck clean.
    → done, `76290cf`.
 7. **Resilient consumer** — F6 reconnect loop, in-loop error policy, DLQ,
    awaited shutdown.
-   → pending — next phase.
+   → done, `ac25958`.
 8. **Wrap-up** — docs updates (§3), credential rotation checklist execution
    (F1 ops), full regression run.
    → pending.
 
 Each phase is independently shippable; run lint/typecheck/tests after each.
-Executed order so far: 4 → 1 → 3 → 2 → 5 → 6 (footer constraints honored:
+Executed order so far: 4 → 1 → 3 → 2 → 5 → 6 → 7 (footer constraints honored:
 F10 before everything; F5 after F2).
 
 ## 6. Out of scope
