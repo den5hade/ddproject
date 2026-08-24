@@ -28,14 +28,14 @@ Status legend: `[ ]` pending · `[x]` done.
 | F1 | Critical | Live credentials in plaintext `.env`; weak shared dev secrets | `.env`, `infrastructure/development/.env` | confirmed · ops rotation pending |
 | F2 | High | Disabled accounts keep using valid access tokens | `app/dependencies/auth.py:20-46` | fixed (`3062f02`) |
 | F3 | High | Document can be attached to another patient's encounter | `app/services/documents.py:125-127` | fixed (`5d4e935`) |
-| F4 | High | OTP codes logged in plaintext when publisher unavailable | `app/services/notifications.py:34-41` | fixed (commit pending) |
-| F5 | Medium | Logout does not invalidate issued access tokens; refresh rotation is racy | `app/services/auth.py:89-106`, `app/dependencies/auth.py` | confirmed — next phase |
+| F4 | High | OTP codes logged in plaintext when publisher unavailable | `app/services/notifications.py:34-41` | fixed (`64ee3af`) |
+| F5 | Medium | Logout does not invalidate issued access tokens; refresh rotation is racy | `app/services/auth.py:89-106`, `app/dependencies/auth.py` | fixed (`76290cf`) |
 | F6 | Medium | Document-event consumer dies silently on broker or handler failure | `app/consumers/document_events.py:58-77` | confirmed — planned |
 | F7 | Medium | OTP identity not validated/canonicalized; arbitrary strings become accounts and Redis keys | `app/schemas/auth.py:8-15`, `app/repositories/account.py:43-48`, `app/services/otp.py:36-46` | fixed (`c7771a6`) |
 | F8 | High | `verify_otp` auto-reactivates BLOCKED/DELETED accounts on login | `app/services/auth.py:85-86` | fixed (`3062f02`) |
 | F9 | High | `verify_otp` never sets `email_verified_at` / `phone_verified_at` despite proving identity ownership | `app/services/auth.py:79-87` | fixed (`3062f02`) |
 | F10 | High | No startup validation of security-critical settings; empty defaults silently issue tokens that break after config change | `app/core/config.py:42-48` | fixed (`1dc60e1`) |
-| F11 | Minor | `AuthSession.touch()` dead code; `last_used_at` semantics unclear | `app/domain/auth_session.py:78-80` | confirmed — lands with F5 |
+| F11 | Minor | `AuthSession.touch()` dead code; `last_used_at` semantics unclear | `app/domain/auth_session.py:78-80` | fixed (`76290cf`) · doc note pending |
 
 Positive observations (no action needed): JWT algorithm allowlist, refresh
 tokens stored only as HMACs, refresh-token rotation exists, constant-time OTP
@@ -306,7 +306,7 @@ encounter's; version upload no longer accepts `encounter_id`.
 
 ### F4 — Never log OTP codes; clean up state on delivery failure (High)
 
-**Status:** done (commit pending). Dev convenience path (item 4) not
+**Status:** done (`64ee3af`). Dev convenience path (item 4) not
 implemented — default absent per plan. Test conftest now uses a
 `StubNotificationGateway`; `RabbitNotificationGateway(None)` semantically
 means "broker down".
@@ -388,10 +388,12 @@ unchanged.
 
 ### F5 — Atomic refresh rotation + access-token session validation (Medium)
 
-**Status:** pending — next phase. Locked decision: Plan B is a direct DB
-lookup of the session by `sid` per protected request (same cost class as the
-existing account fetch); no Redis cache, so revocation takes effect
-immediately. Plan A remains required regardless.
+**Status:** done (`76290cf`). Plan A: `AuthSessionRepository.revoke_if_valid`
+— one conditional `UPDATE..RETURNING`, event parity via
+`AuthSession.record_revocation_event()`. Plan B (locked decision):
+`get_current_account` loads the session by `sid` PK per request — no cache,
+revocation effective immediately; missing/garbled/unknown/revoked/expired
+`sid` → 401.
 
 **Problem A — racy rotation.** `AuthService.refresh`
 (`app/services/auth.py:89-106`) does get → revoke → save as separate steps.
@@ -508,7 +510,9 @@ cleanly without "Task was destroyed" warnings.
 
 ### F11 — Session metadata cleanup (Minor)
 
-**Status:** pending — lands together with F5 Plan A.
+**Status:** code done (`76290cf`) — `touch()` deleted;
+`last_used_at` == revocation time for rotated sessions. The DB_MODELS.md
+documentation note lands in the Phase 8 wrap-up.
 
 **Problem.** `AuthSession.touch()` (`app/domain/auth_session.py:78-80`) is
 never called; `last_used_at` equals `created_at` forever.
@@ -550,8 +554,8 @@ Location conventions: API tests in `apps/account-api/tests/`, unit tests in
     unset (F9);
   - invalid identities → 422, no account row, no Redis key (F7);
   - `User@Example.com` vs `user@example.com` share one rate-limit key (F7);
-  - concurrent double-refresh → one 200, one 401 (F5-A) — *pending F5*;
-  - logout/refresh invalidate prior access token (F5-B) — *pending F5*.
+  - concurrent double-refresh → one 200, one 401 (F5-A);
+  - logout/refresh invalidate prior access token (F5-B).
 - [x] **documents** (`test_documents_api.py`): upload with foreign
       `encounter_id` → 404, nothing persisted; encounter listing isolation;
       version upload rejects/ignores `encounter_id` per schema change (F3).
@@ -568,8 +572,11 @@ Location conventions: API tests in `apps/account-api/tests/`, unit tests in
       failure → retries with fresh `Consumer`, recovers when broker returns;
       handler exception → message dead-lettered/logged, loop survives;
       malformed event dropped with warning (F6).
-- [ ] **dependencies** (extend auth tests): revoked/unknown/expired `sid` →
-      401 (F5-B).
+- [x] **dependencies** (`test_auth_flow.py` + new
+      `apps/account-api/tests/unit/test_auth_sessions_repository.py`):
+      revoked/unknown/expired `sid` → 401; conditional-rotation guard
+      semantics (winner-once, expired ignored, `last_used_at == revoked_at`)
+      (F5).
 
 Regression gate: `make test` (or `uv run pytest apps/account-api/tests`) green;
 lint/typecheck clean.
@@ -590,21 +597,21 @@ lint/typecheck clean.
    → done first (`1dc60e1`), per the footer constraint.
 5. **OTP delivery hardening** — F4 fail-closed gateway, publish-failure
    handling, Redis cleanup.
-   → implemented, commit pending.
+   → done, `64ee3af`.
 6. **Atomic rotation + session-valid access tokens** — F5 conditional-update
    repository method, then sid check (direct DB lookup), post-revocation
    tests; includes F11 cleanup.
-   → pending — next phase.
+   → done, `76290cf`.
 7. **Resilient consumer** — F6 reconnect loop, in-loop error policy, DLQ,
    awaited shutdown.
-   → pending.
+   → pending — next phase.
 8. **Wrap-up** — docs updates (§3), credential rotation checklist execution
    (F1 ops), full regression run.
    → pending.
 
 Each phase is independently shippable; run lint/typecheck/tests after each.
-Executed order so far: 4 → 1 → 3 → 2 → 5 (footer constraints honored:
-F10 before everything; F5 will follow F2).
+Executed order so far: 4 → 1 → 3 → 2 → 5 → 6 (footer constraints honored:
+F10 before everything; F5 after F2).
 
 ## 6. Out of scope
 
