@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
         logger.warning("rbac_seed_failed at startup", exc_info=True)
     yield
     consumer_task.cancel()
+    await asyncio.gather(consumer_task, return_exceptions=True)
     await close_redis()
     await close_publisher()
 

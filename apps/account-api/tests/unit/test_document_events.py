@@ -1,5 +1,10 @@
+import asyncio
+import logging
 from uuid import uuid4
 
+import pytest
+from app.consumers import document_events
+from app.consumers.document_events import run_consumer
 from app.domain.medical import (
     DocumentStatus,
     ExtractionStatus,
@@ -248,3 +253,177 @@ async def test_event_for_unknown_version_is_ignored(db_session):
     )
 
     assert await db_session.get(Document, document_id) is None
+
+
+# --------------------------------------------------------------- F6 consumer
+
+
+class _ProcessCM:
+    def __init__(self, msg):
+        self._msg = msg
+
+    async def __aenter__(self):
+        return self._msg
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            self._msg.rejected = True
+            return False
+        self._msg.acked = True
+        return True
+
+
+class FakeMessage:
+    def __init__(self, type_="UnknownEvent", body=b""):
+        self.type = type_
+        self.body = body
+        self.message_id = str(uuid4())
+        self.delivery_tag = 1
+        self.acked = False
+        self.rejected = False
+
+    def process(self):
+        return _ProcessCM(self)
+
+
+class FakeConsumer:
+    def __init__(self, start_error=None, iterator_error=None, messages=()):
+        self.start_error = start_error
+        self.iterator_error = iterator_error
+        self.messages_list = list(messages)
+        self.started = 0
+        self.closed = 0
+
+    async def start(self):
+        self.started += 1
+        if self.start_error is not None:
+            raise self.start_error
+
+    async def messages(self):
+        for message in self.messages_list:
+            yield message
+        if self.iterator_error is not None:
+            raise self.iterator_error
+
+    async def close(self):
+        self.closed += 1
+
+
+class StopTest(Exception):
+    pass
+
+
+def _scripted_factory(consumers):
+    queue = list(consumers)
+    made = []
+
+    def factory():
+        if not queue:
+            raise StopTest()
+        consumer = queue.pop(0)
+        made.append(consumer)
+        return consumer
+
+    return factory, made
+
+
+async def test_start_failure_retries_with_fresh_consumer():
+    failing = FakeConsumer(start_error=ConnectionError("broker down"))
+    healthy = FakeConsumer()
+    factory, made = _scripted_factory([failing, healthy])
+    recorded = []
+
+    async def record_sleep(delay):
+        recorded.append(delay)
+
+    with pytest.raises(StopTest):
+        await run_consumer(factory, record_sleep)
+
+    assert len(made) == 2
+    assert made[0].started == 1
+    assert healthy.started == 1
+    assert recorded == [document_events._BACKOFF_INITIAL_SECONDS]
+
+
+async def test_disconnect_recovers_and_resets_backoff():
+    handled_message = FakeMessage("UnknownEvent")
+    flaky_after_success = FakeConsumer(
+        messages=[handled_message],
+        iterator_error=RuntimeError("connection lost"),
+    )
+    flaky_immediately = FakeConsumer(iterator_error=RuntimeError("still down"))
+    healthy = FakeConsumer()
+    factory, made = _scripted_factory([flaky_after_success, flaky_immediately, healthy])
+    recorded = []
+
+    async def record_sleep(delay):
+        recorded.append(delay)
+
+    with pytest.raises(StopTest):
+        await run_consumer(factory, record_sleep)
+
+    assert handled_message.acked is True
+    assert flaky_after_success.closed == 1
+    assert len(made) == 3
+    assert recorded[0] == document_events._BACKOFF_INITIAL_SECONDS
+    assert document_events._BACKOFF_INITIAL_SECONDS * 2 <= recorded[1] < (
+        document_events._BACKOFF_MAX_SECONDS
+    )
+
+
+async def test_handler_failure_does_not_kill_loop(monkeypatch, caplog):
+    bad = FakeMessage("DocumentStored", body=b"{}")
+    good = FakeMessage("UnknownEvent")
+    consumer = FakeConsumer(messages=[bad, good])
+    factory, made = _scripted_factory([consumer])
+    handled = []
+
+    async def fake_handle(message):
+        handled.append(message)
+        async with message.process():
+            if message is bad:
+                raise ValueError("boom")
+
+    monkeypatch.setattr(document_events, "_handle", fake_handle)
+
+    with caplog.at_level(logging.ERROR, logger="account_api.consumer"), pytest.raises(StopTest):
+        await run_consumer(factory, None)
+
+    assert handled == [bad, good]
+    assert bad.rejected is True
+    assert good.acked is True
+    assert made[0].closed == 1
+    assert any("document_event_handler_failed" in r.getMessage() for r in caplog.records)
+
+
+async def test_malformed_events_dropped_cleanly(caplog):
+    junk_type = FakeMessage("NoSuchEvent")
+    junk_body = FakeMessage("DocumentStored", body=b"{not json")
+    consumer = FakeConsumer(messages=[junk_type, junk_body])
+    factory, _made = _scripted_factory([consumer])
+
+    with caplog.at_level(logging.WARNING, logger="account_api.consumer"), pytest.raises(StopTest):
+        await run_consumer(factory, None)
+
+    assert junk_type.acked and junk_body.acked
+    warnings_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "event_unsupported" in warnings_text or "event_invalid" in warnings_text
+
+
+async def test_cancellation_propagates_and_closes_consumer():
+    consumer = FakeConsumer()
+
+    async def endless_messages():
+        yield FakeMessage("UnknownEvent")
+        await asyncio.Event().wait()
+
+    consumer.messages = endless_messages
+    factory, _made = _scripted_factory([consumer])
+
+    task = asyncio.create_task(run_consumer(factory, None))
+    for _ in range(10):
+        await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert consumer.closed >= 1

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 
 from aio_pika.abc import AbstractIncomingMessage
 from contracts.events import (
@@ -25,6 +26,9 @@ _EVENT_MODELS = {
     "DocumentAnalysisCompleted": DocumentAnalysisCompleted,
     "DocumentProcessingFailed": DocumentProcessingFailed,
 }
+
+_BACKOFF_INITIAL_SECONDS = 1.0
+_BACKOFF_MAX_SECONDS = 30.0
 
 
 async def _handle(message: AbstractIncomingMessage) -> None:
@@ -55,26 +59,73 @@ async def _handle(message: AbstractIncomingMessage) -> None:
                 await service.on_document_processing_failed(event)
 
 
-async def run_consumer() -> None:
-    """Blocking consumer loop; exits quietly when the broker is unreachable."""
-    consumer = Consumer(
+def _default_consumer() -> Consumer:
+    return Consumer(
         dsn=settings.rabbitmq_dsn,
         queue_name=settings.document_events_queue,
         routing_keys=settings.document_events_routing_key_list,
     )
-    try:
-        await consumer.start()
-    except Exception:
-        logger.warning("document_consumer_start_failed", exc_info=True)
-        return
-    logger.info("document_consumer_started queue=%s", settings.document_events_queue)
-    try:
-        async for message in consumer.messages():
-            await _handle(message)
-    except asyncio.CancelledError:
-        raise
-    finally:
-        await consumer.close()
+
+
+async def run_consumer(
+    consumer_factory=None,
+    sleep=None,
+) -> None:
+    """Reconnecting consumer loop.
+
+    Survives broker outages (fresh ``Consumer`` per attempt, exponential
+    backoff with jitter) and handler failures (the message was rejected
+    without requeue by ``message.process()``, so the broker dead-letters it;
+    the loop logs and keeps consuming). ``CancelledError`` always propagates.
+    """
+    factory = consumer_factory or _default_consumer
+    do_sleep = sleep or asyncio.sleep
+    delay = _BACKOFF_INITIAL_SECONDS
+    while True:
+        consumer = factory()
+        try:
+            await consumer.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "document_consumer_start_failed retry_in=%.1fs", delay, exc_info=True
+            )
+            await do_sleep(delay)
+            delay = min(delay * 2 + random.uniform(0, 0.5), _BACKOFF_MAX_SECONDS)
+            continue
+
+        logger.info("document_consumer_started queue=%s", settings.document_events_queue)
+        try:
+            handled_any = False
+            async for message in consumer.messages():
+                handled_any = True
+                try:
+                    await _handle(message)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.error(
+                        "document_event_handler_failed type=%s message_id=%s "
+                        "delivery_tag=%s (rejected to %s)",
+                        message.type,
+                        message.message_id,
+                        message.delivery_tag,
+                        f"{settings.document_events_queue}_dlq",
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if handled_any:
+                delay = _BACKOFF_INITIAL_SECONDS
+            logger.warning(
+                "document_consumer_disconnected retry_in=%.1fs", delay, exc_info=True
+            )
+            await do_sleep(delay)
+            delay = min(delay * 2 + random.uniform(0, 0.5), _BACKOFF_MAX_SECONDS)
+        finally:
+            await consumer.close()
 
 
 __all__ = ["run_consumer"]
