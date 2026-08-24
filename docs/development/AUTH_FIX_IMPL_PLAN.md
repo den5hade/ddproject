@@ -10,6 +10,13 @@ check, consumer recreation per attempt, corrected poison-message analysis,
 OTP state cleanup on delivery failure, identity canonicalization,
 `APP_ENV`-based secret validation, version-upload `encounter_id` decision.
 
+**Revision 3** — progress tracking + locked decisions: F5-B implemented as a
+direct DB session lookup per request (no Redis cache); F6 ships a full DLQ via
+a dead-letter exchange in the shared `messaging.Consumer`; F10 scoped to the
+account-api `Settings`. Unit tests live in
+`apps/account-api/tests/unit/` (not root `tests/unit/`). Execution order
+followed the footer constraints (F10 early, F5 after F2).
+
 Status legend: `[ ]` pending · `[x]` done.
 
 ---
@@ -18,17 +25,17 @@ Status legend: `[ ]` pending · `[x]` done.
 
 | # | Severity | Finding | Primary location | Status |
 |---|----------|---------|------------------|--------|
-| F1 | Critical | Live credentials in plaintext `.env`; weak shared dev secrets | `.env`, `infrastructure/development/.env` | confirmed (git history clean) |
-| F2 | High | Disabled accounts keep using valid access tokens | `app/dependencies/auth.py:20-46` | confirmed |
-| F3 | High | Document can be attached to another patient's encounter | `app/services/documents.py:125-127` | confirmed |
-| F4 | High | OTP codes logged in plaintext when publisher unavailable | `app/services/notifications.py:34-41` | confirmed |
-| F5 | Medium | Logout does not invalidate issued access tokens; refresh rotation is racy | `app/services/auth.py:89-106`, `app/dependencies/auth.py` | confirmed |
-| F6 | Medium | Document-event consumer dies silently on broker or handler failure | `app/consumers/document_events.py:58-77` | confirmed |
-| F7 | Medium | OTP identity not validated/canonicalized; arbitrary strings become accounts and Redis keys | `app/schemas/auth.py:8-15`, `app/repositories/account.py:43-48`, `app/services/otp.py:36-46` | confirmed |
-| F8 | High | `verify_otp` auto-reactivates BLOCKED/DELETED accounts on login | `app/services/auth.py:85-86` | confirmed (found during verification) |
-| F9 | High | `verify_otp` never sets `email_verified_at` / `phone_verified_at` despite proving identity ownership | `app/services/auth.py:79-87` | confirmed (found during verification) |
-| F10 | High | No startup validation of security-critical settings; empty defaults silently issue tokens that break after config change | `app/core/config.py:42-48` | confirmed (root cause of 2026-08-21 refresh incident) |
-| F11 | Minor | `AuthSession.touch()` dead code; `last_used_at` semantics unclear | `app/domain/auth_session.py:78-80` | confirmed |
+| F1 | Critical | Live credentials in plaintext `.env`; weak shared dev secrets | `.env`, `infrastructure/development/.env` | confirmed · ops rotation pending |
+| F2 | High | Disabled accounts keep using valid access tokens | `app/dependencies/auth.py:20-46` | fixed (`3062f02`) |
+| F3 | High | Document can be attached to another patient's encounter | `app/services/documents.py:125-127` | fixed (`5d4e935`) |
+| F4 | High | OTP codes logged in plaintext when publisher unavailable | `app/services/notifications.py:34-41` | fixed (commit pending) |
+| F5 | Medium | Logout does not invalidate issued access tokens; refresh rotation is racy | `app/services/auth.py:89-106`, `app/dependencies/auth.py` | confirmed — next phase |
+| F6 | Medium | Document-event consumer dies silently on broker or handler failure | `app/consumers/document_events.py:58-77` | confirmed — planned |
+| F7 | Medium | OTP identity not validated/canonicalized; arbitrary strings become accounts and Redis keys | `app/schemas/auth.py:8-15`, `app/repositories/account.py:43-48`, `app/services/otp.py:36-46` | fixed (`c7771a6`) |
+| F8 | High | `verify_otp` auto-reactivates BLOCKED/DELETED accounts on login | `app/services/auth.py:85-86` | fixed (`3062f02`) |
+| F9 | High | `verify_otp` never sets `email_verified_at` / `phone_verified_at` despite proving identity ownership | `app/services/auth.py:79-87` | fixed (`3062f02`) |
+| F10 | High | No startup validation of security-critical settings; empty defaults silently issue tokens that break after config change | `app/core/config.py:42-48` | fixed (`1dc60e1`) |
+| F11 | Minor | `AuthSession.touch()` dead code; `last_used_at` semantics unclear | `app/domain/auth_session.py:78-80` | confirmed — lands with F5 |
 
 Positive observations (no action needed): JWT algorithm allowlist, refresh
 tokens stored only as HMACs, refresh-token rotation exists, constant-time OTP
@@ -39,6 +46,9 @@ comparison, basename-normalized upload paths in the storage worker.
 ## 2. Detailed fixes
 
 ### F1 — Credential hygiene (Critical, ops + config)
+
+**Status:** repository-level guardrails already in place (`.gitignore`,
+`.env.example` placeholders only); operations checklist below remains open.
 
 **Problem.** Real-looking S3/SMTP credentials and DB/RabbitMQ passwords sit in
 plaintext `.env` files. The same weak secrets (`super-secret-*`, `pdf123`) are
@@ -54,7 +64,7 @@ safe — rotation is still required.
 
 *Repository-level:*
 
-- [ ] Ensure no real credentials are ever committed (already satisfied by
+- [x] Ensure no real credentials are ever committed (already satisfied by
       `.gitignore`; keep `.env.example` placeholders only).
 
 *Operations checklist (cannot be proven by code/tests — track separately):*
@@ -76,6 +86,11 @@ each env file has unique secrets; no secrets in git or chat artifacts.
 ---
 
 ### F2 + F8 — Account status enforcement, including at refresh time (High)
+
+**Status:** done (`3062f02`). Implementation notes: `refresh` commits the
+pending revocation before raising on inactive accounts (otherwise the
+request-scoped rollback would resurrect the session); PENDING→ACTIVE is the
+only promotion path; `/auth/verify` catches `AccountInactiveError`.
 
 **Problem.**
 
@@ -139,6 +154,9 @@ each env file has unique secrets; no secrets in git or chat artifacts.
 
 ### F9 — Mark identity verified on successful OTP (High)
 
+**Status:** done (`3062f02`), including the forced-failure rollback test
+(`test_verify_failure_rolls_back_verification`).
+
 **Problem.** A successful email/phone OTP proves ownership of that identity,
 but `verify_otp` never writes `email_verified_at` / `phone_verified_at`
 (`app/models/account.py:30-39`). Accounts stay permanently "unverified"
@@ -185,6 +203,12 @@ Notes:
 
 ### F10 — Fail fast on insecure configuration (High)
 
+**Status:** done (`1dc60e1`). Scope decision (revision 3): account-api
+`Settings` only (auth/JWT/HMAC secrets live here); worker `Settings` classes
+can adopt the same pattern in a follow-up. Conditional checks: S3 creds when
+`s3_endpoint_url` set, `ai_api_key` when `ai_feature=true`;
+`rabbitmq_password` skipped when a full `RABBITMQ_URL` is provided.
+
 **Problem.** `Settings` defaults `auth_hmac_key=""`,
 `jwt_secret_key="change-me-in-production"` (`app/core/config.py:42-48`). An
 instance started without proper env silently issues tokens under an empty/weak
@@ -222,6 +246,10 @@ checks.
 ---
 
 ### F3 — Encounter/document cross-patient isolation (High)
+
+**Status:** done (`5d4e935`), including the dedicated
+`DocumentVersionCreateRequest` (preferred option) and the defense-in-depth
+isolation join in `list_by_encounter`.
 
 **Problem.** `DocumentService.create_document`
 (`app/services/documents.py:103-136`) persists `data.encounter_id` without
@@ -278,6 +306,11 @@ encounter's; version upload no longer accepts `encounter_id`.
 
 ### F4 — Never log OTP codes; clean up state on delivery failure (High)
 
+**Status:** done (commit pending). Dev convenience path (item 4) not
+implemented — default absent per plan. Test conftest now uses a
+`StubNotificationGateway`; `RabbitNotificationGateway(None)` semantically
+means "broker down".
+
 **Problem.** `RabbitNotificationGateway.send_otp`
 (`app/services/notifications.py:33-41`) logs the raw code at INFO level when
 the publisher is `None`. Additionally, only the `publisher is None` case is
@@ -310,6 +343,12 @@ after the failed request. Grep of logs for `\bcode=\d{6}\b` finds nothing.
 ---
 
 ### F7 — Strict identity validation and canonicalization (Medium)
+
+**Status:** done (`c7771a6`). Single source of truth:
+`app/domain/identity.py` (`Identity.parse`, reuses `IdentityKind`);
+`detect_channel` and `AccountRepository` delegate to it; schema validators
+canonicalize before any DB/Redis access. Known consequence: accounts created
+with non-E.164 phones can no longer log in (data cleanup out of scope).
 
 **Problem.** `RequestOtpRequest.identity` / `VerifyOtpRequest.identity`
 (`app/schemas/auth.py:8-15`) validate length only.
@@ -348,6 +387,11 @@ unchanged.
 ---
 
 ### F5 — Atomic refresh rotation + access-token session validation (Medium)
+
+**Status:** pending — next phase. Locked decision: Plan B is a direct DB
+lookup of the session by `sid` per protected request (same cost class as the
+existing account fetch); no Redis cache, so revocation takes effect
+immediately. Plan A remains required regardless.
 
 **Problem A — racy rotation.** `AuthService.refresh`
 (`app/services/auth.py:89-106`) does get → revoke → save as separate steps.
@@ -389,12 +433,10 @@ to a live session:
 - Load session by PK (`AuthSessionRepository.get_by_id` already exists,
   `app/repositories/auth_sessions.py:81-83`); require not revoked and not
   expired; return `401` otherwise.
-- Mitigate per-request cost with a short-TTL Redis cache
-  (`session:<sid>` → valid flag, TTL ≈ 60s, invalidated on revoke). Worst-case
-  post-revocation exposure drops from ≤15 min to ≤60s.
-- If Option B cost is deemed unacceptable short-term, document the accepted
-  ≤15-min window explicitly in `docs/security/AUTHENTICATION.md` — but Plan A
-  is required regardless.
+- **Decision (revision 3):** no Redis cache — the per-request session lookup
+  is the same cost class as the existing account fetch, and revocation takes
+  effect immediately (no stale window, no invalidation logic). A short-TTL
+  cache can be added later only if profiling demands it.
 
 **Post-revocation behavior (review addition — document and test).** With
 Plan B active, refreshing rotates the session, so the access token issued
@@ -405,11 +447,17 @@ before refresh becomes invalid immediately. Both transitions need tests:
 
 **Acceptance criteria.** Concurrent double-refresh yields exactly one success
 and one 401 (integration test with two parallel tasks); revoked/unknown `sid`
-→ 401; logout/refresh invalidate prior access tokens within cache TTL.
+→ 401; logout/refresh invalidate prior access tokens immediately (no cache).
 
 ---
 
 ### F6 — Resilient document-event consumer (Medium)
+
+**Status:** pending. Locked decision (revision 3): full DLQ — declare a
+dead-letter exchange + `<queue>_dlq` in the shared `messaging.Consumer` and
+route handler failures there. Deploy note: adding `x-dead-letter-exchange`
+args to an existing durable queue raises `PRECONDITION_FAILED`, so queues
+must be recreated once at deploy time.
 
 **Problem (corrected analysis).** Two distinct failure modes in
 `app/consumers/document_events.py` + `packages/messaging/messaging/consumer.py`:
@@ -460,6 +508,8 @@ cleanly without "Task was destroyed" warnings.
 
 ### F11 — Session metadata cleanup (Minor)
 
+**Status:** pending — lands together with F5 Plan A.
+
 **Problem.** `AuthSession.touch()` (`app/domain/auth_session.py:78-80`) is
 never called; `last_used_at` equals `created_at` forever.
 
@@ -488,9 +538,9 @@ never called; `last_used_at` equals `created_at` forever.
 ## 4. Tests
 
 Location conventions: API tests in `apps/account-api/tests/`, unit tests in
-`tests/unit/` (pytest, sqlite per conftest).
+`apps/account-api/tests/unit/` (pytest, sqlite per conftest).
 
-- [ ] **auth flow** (`test_auth_flow.py`):
+- [x] **auth flow** (`test_auth_flow.py`):
   - BLOCKED account → protected endpoint 401; OTP login 403; refresh 401
     (F2/F8);
   - PENDING account → login ok, becomes ACTIVE exactly once (F2);
@@ -500,12 +550,13 @@ Location conventions: API tests in `apps/account-api/tests/`, unit tests in
     unset (F9);
   - invalid identities → 422, no account row, no Redis key (F7);
   - `User@Example.com` vs `user@example.com` share one rate-limit key (F7);
-  - concurrent double-refresh → one 200, one 401 (F5-A);
-  - logout/refresh invalidate prior access token within cache TTL (F5-B).
-- [ ] **documents** (`test_documents_api.py`): upload with foreign
+  - concurrent double-refresh → one 200, one 401 (F5-A) — *pending F5*;
+  - logout/refresh invalidate prior access token (F5-B) — *pending F5*.
+- [x] **documents** (`test_documents_api.py`): upload with foreign
       `encounter_id` → 404, nothing persisted; encounter listing isolation;
       version upload rejects/ignores `encounter_id` per schema change (F3).
-- [ ] **notifications** (new `tests/unit/test_notifications.py`): publisher
+- [x] **notifications**
+      (`apps/account-api/tests/unit/test_notifications.py`): publisher
       `None` → raises `NotificationUnavailableError`; `publish()` raising →
       same error; no code in caplog; Redis code deleted after failed request
       (F4).
@@ -527,22 +578,33 @@ lint/typecheck clean.
 
 1. **Account status enforcement end-to-end** — F2+F8 incl. refresh-time
    status check, `AccountInactiveError`, route + http_errors wiring.
+   → done, `3062f02` (F9 included).
 2. **Cross-patient isolation** — F3 encounter validation, route exception
    mapping, remove `encounter_id` from version uploads.
+   → done, `5d4e935`.
 3. **Identity validation & canonicalization** — F7 shared value object,
    schema validators, canonical Redis keys.
+   → done, `c7771a6`.
 4. **Secret startup validation** — F10 `APP_ENV`-gated, all infra
    placeholders.
+   → done first (`1dc60e1`), per the footer constraint.
 5. **OTP delivery hardening** — F4 fail-closed gateway, publish-failure
    handling, Redis cleanup.
+   → implemented, commit pending.
 6. **Atomic rotation + session-valid access tokens** — F5 conditional-update
-   repository method, then sid check (+cache), post-revocation tests.
+   repository method, then sid check (direct DB lookup), post-revocation
+   tests; includes F11 cleanup.
+   → pending — next phase.
 7. **Resilient consumer** — F6 reconnect loop, in-loop error policy, DLQ,
    awaited shutdown.
-8. **Wrap-up** — F11 cleanup, docs updates, credential rotation checklist
-   execution, full regression run.
+   → pending.
+8. **Wrap-up** — docs updates (§3), credential rotation checklist execution
+   (F1 ops), full regression run.
+   → pending.
 
 Each phase is independently shippable; run lint/typecheck/tests after each.
+Executed order so far: 4 → 1 → 3 → 2 → 5 (footer constraints honored:
+F10 before everything; F5 will follow F2).
 
 ## 6. Out of scope
 
