@@ -1,10 +1,21 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from app.domain.access import GrantStatus
 from app.domain.account import RoleCode
+from app.domain.medical import (
+    DocumentStatus,
+    EncounterStatus,
+    EncounterType,
+)
 from app.models.access_grant import PatientAccessGrant
+from app.models.document import Document
+from app.models.encounter import Encounter
+from app.models.medical_record import MedicalRecord
+from app.models.patient import Patient
+from app.models.person import Person
 from app.repositories.rbac import RbacRepository
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 def _identity() -> str:
@@ -65,15 +76,36 @@ async def _upload(
     mime: str = "application/pdf",
     title: str = "Blood test",
     doc_type: str = "other",
+    encounter_id: UUID | None = None,
 ):
     files = {"upload": (filename, b"%PDF-1.4 test", mime)}
     data = {"title": title, "document_type": doc_type}
+    if encounter_id is not None:
+        data["encounter_id"] = str(encounter_id)
     return await client.post(
         f"/api/v1/patients/{patient_id}/documents",
         headers=_auth(token),
         files=files,
         data=data,
     )
+
+
+async def _create_encounter(client, token: str, patient_id: str) -> UUID:
+    resp = await client.post(
+        f"/api/v1/patients/{patient_id}/encounters",
+        headers=_auth(token),
+        json={"type": "consultation", "started_at": "2026-01-01T09:00:00Z"},
+    )
+    assert resp.status_code == 201
+    return UUID(resp.json()["id"])
+
+
+async def _count_documents(db_factory) -> int:
+    async with db_factory() as session:
+        total = (
+            await session.execute(select(func.count()).select_from(Document))
+        ).scalar_one()
+    return total
 
 
 async def test_upload_requires_auth(app_client, fake_redis):
@@ -270,3 +302,109 @@ async def test_download_returns_presigned_url(app_client, fake_redis, db_factory
     assert resp.status_code == 200
     assert resp.json()["download_url"].startswith("https://presigned.example/")
     assert resp.json()["expires_in"] == 900
+
+
+async def test_upload_with_foreign_encounter_rejected(
+    app_client, fake_redis, db_factory
+):
+    token = await _register(app_client, fake_redis, _identity())
+    patient_id = await _create_patient(app_client, token)
+
+    other = await _register(app_client, fake_redis, _identity())
+    other_patient = await _create_patient(app_client, other)
+    foreign_encounter = await _create_encounter(app_client, other, str(other_patient))
+
+    resp = await _upload(
+        app_client, token, str(patient_id), encounter_id=foreign_encounter
+    )
+    assert resp.status_code == 404
+    assert "encounter" in resp.json()["detail"]
+    assert await _count_documents(db_factory) == 0
+
+
+async def test_upload_with_own_encounter_links_it(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    patient_id = await _create_patient(app_client, token)
+    encounter_id = await _create_encounter(app_client, token, str(patient_id))
+
+    created = await _upload(
+        app_client, token, str(patient_id), encounter_id=encounter_id
+    )
+    assert created.status_code == 201
+    assert UUID(created.json()["encounter_id"]) == encounter_id
+
+
+async def test_encounter_listing_isolation(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    patient_a = await _create_patient(app_client, token)
+
+    async with db_factory() as session:
+        person = Person()
+        session.add(person)
+        await session.flush()
+        patient_b = Patient(person_id=person.id)
+        session.add(patient_b)
+        await session.flush()
+        record_b = MedicalRecord(patient_id=patient_b.id)
+        session.add(record_b)
+        await session.flush()
+        encounter_b = Encounter(
+            medical_record_id=record_b.id,
+            type=EncounterType.CONSULTATION,
+            status=EncounterStatus.SCHEDULED,
+            started_at=datetime.now(UTC),
+        )
+        session.add(encounter_b)
+        await session.flush()
+
+        record_a = await session.scalar(
+            select(MedicalRecord).where(MedicalRecord.patient_id == patient_a)
+        )
+        session.add(
+            Document(
+                medical_record_id=record_a.id,
+                encounter_id=encounter_b.id,
+                original_filename="evil.pdf",
+                mime_type="application/pdf",
+                size_bytes=10,
+                storage_key="",
+                status=DocumentStatus.PENDING,
+            )
+        )
+        await session.commit()
+        foreign_patient_id, foreign_encounter_id = patient_b.id, encounter_b.id
+
+    await _grant(db_factory, foreign_patient_id, account_id, view=True)
+
+    resp = await app_client.get(
+        f"/api/v1/encounters/{foreign_encounter_id}/documents", headers=_auth(token)
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_version_upload_no_longer_routes_by_encounter(
+    app_client, fake_redis
+):
+    token = await _register(app_client, fake_redis, _identity())
+    patient_id = await _create_patient(app_client, token)
+    encounter_id = await _create_encounter(app_client, token, str(patient_id))
+    created = await _upload(
+        app_client, token, str(patient_id), encounter_id=encounter_id
+    )
+    document_id = created.json()["id"]
+
+    versioned = await app_client.post(
+        f"/api/v1/documents/{document_id}/versions",
+        headers=_auth(token),
+        files={"upload": ("v2.pdf", b"%PDF-1.4 v2", "application/pdf")},
+        data={"title": "v2", "document_type": "other", "encounter_id": str(uuid4())},
+    )
+    assert versioned.status_code in (200, 201)
+
+    fetched = await app_client.get(
+        f"/api/v1/documents/{document_id}", headers=_auth(token)
+    )
+    assert fetched.status_code == 200
+    assert UUID(fetched.json()["encounter_id"]) == encounter_id

@@ -21,6 +21,7 @@ from app.domain.medical import (
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentStatus,
+    EncounterNotFoundError,
     ExtractionStatus,
     FileTooLargeError,
     ProcessingJobStatus,
@@ -39,8 +40,9 @@ from app.repositories.document import (
     ExtractionRepository,
     ProcessingJobRepository,
 )
+from app.repositories.encounter import EncounterRepository
 from app.repositories.patient import PatientRepository
-from app.schemas.document import DocumentCreateRequest
+from app.schemas.document import DocumentCreateRequest, DocumentVersionCreateRequest
 from app.services.storage import StorageService
 
 logger = logging.getLogger("account_api.documents")
@@ -98,6 +100,7 @@ class DocumentService:
         self._jobs = ProcessingJobRepository(session)
         self._extractions = ExtractionRepository(session)
         self._patients = PatientRepository(session)
+        self._encounters = EncounterRepository(session)
 
     # ------------------------------------------------------------------ upload
     async def create_document(
@@ -108,6 +111,10 @@ class DocumentService:
         upload: UploadFile,
     ) -> Document:
         patient, medical_record = await self._patient_and_record(patient_id)
+        if data.encounter_id is not None:
+            encounter = await self._encounters.get(data.encounter_id)
+            if encounter is None or encounter.medical_record_id != medical_record.id:
+                raise EncounterNotFoundError("encounter does not belong to patient")
         if (
             not account.is_subscribed
             and await self._documents.count_owned(medical_record.id) >= FREE_DOCUMENT_LIMIT
@@ -180,7 +187,7 @@ class DocumentService:
         self,
         account: Account,
         document_id: UUID,
-        data: DocumentCreateRequest,
+        data: DocumentVersionCreateRequest,
         upload: UploadFile,
     ) -> DocumentVersion:
         document = await self.get_document(document_id)

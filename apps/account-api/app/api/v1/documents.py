@@ -16,6 +16,7 @@ from app.domain.medical import (
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentType,
+    EncounterNotFoundError,
     FileTooLargeError,
     UnsupportedFileTypeError,
 )
@@ -23,6 +24,7 @@ from app.schemas.document import (
     DocumentCreateRequest,
     DocumentExtractionResponse,
     DocumentResponse,
+    DocumentVersionCreateRequest,
     DocumentVersionResponse,
     DownloadUrlResponse,
     JobResponse,
@@ -62,6 +64,7 @@ async def create_document(
     except (
         DocumentNotFoundError,
         DocumentQuotaExceededError,
+        EncounterNotFoundError,
         FileTooLargeError,
         UnsupportedFileTypeError,
     ) as exc:
@@ -124,11 +127,8 @@ async def create_version(
     service: DocumentServiceDep,
     document_type: Annotated[DocumentType, Form()] = DocumentType.OTHER,
     title: Annotated[str, Form()] = "",
-    encounter_id: Annotated[UUID | None, Form()] = None,
 ) -> DocumentVersionResponse:
-    payload = DocumentCreateRequest(
-        document_type=document_type, title=title, encounter_id=encounter_id
-    )
+    payload = DocumentVersionCreateRequest(document_type=document_type, title=title)
     try:
         version = await service.add_version(account, document_id, payload, upload)
     except (

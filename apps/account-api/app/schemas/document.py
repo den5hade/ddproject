@@ -20,6 +20,13 @@ class DocumentCreateRequest(BaseModel):
     encounter_id: UUID | None = None
 
 
+class DocumentVersionCreateRequest(BaseModel):
+    """Multipart form fields for adding a version; versions never re-route."""
+
+    document_type: DocumentType = DocumentType.OTHER
+    title: str = ""
+
+
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.medical import DocumentStatus, DocumentType, ProcessingJobType
 from app.models.document import Document, DocumentVersion
+from app.models.encounter import Encounter
 from app.models.extraction import DocumentExtraction
 from app.models.processing_job import DocumentProcessingJob
 
@@ -59,7 +60,11 @@ class DocumentRepository:
     async def list_by_encounter(self, encounter_id: UUID) -> list[Document]:
         result = await self._session.execute(
             select(Document)
-            .where(Document.encounter_id == encounter_id)
+            .join(Encounter, Encounter.id == Document.encounter_id)
+            .where(
+                Document.encounter_id == encounter_id,
+                Document.medical_record_id == Encounter.medical_record_id,
+            )
             .order_by(Document.created_at.desc())
         )
         return list(result.scalars().all())
