@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.bus import get_publisher
 from app.core.database import get_db
 from app.core.security import ExpiredTokenError, InvalidTokenError, decode_access_token
+from app.domain.account import AccountStatus
 from app.models.account import Account
 from app.repositories.account import AccountRepository
 from app.services.auth import AuthService, ClientInfo
@@ -42,6 +43,12 @@ async def get_current_account(
     if account is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="account not found"
+        )
+    if account.status != AccountStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="account is disabled",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     return account
 

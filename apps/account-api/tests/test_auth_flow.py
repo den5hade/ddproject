@@ -1,8 +1,16 @@
+import pytest
 from app.core.security import decode_access_token, hash_refresh_token
+from app.domain.account import AccountStatus
+from app.models.account import Account
 from app.models.auth_session import AuthSessionRow
-from sqlalchemy import func, select
+from app.repositories.account import AccountRepository
+from app.repositories.auth_sessions import AuthSessionRepository
+from app.services.auth import AuthService, ClientInfo
+from app.services.otp import OtpService
+from sqlalchemy import func, or_, select
 
 IDENTITY = "user@example.com"
+PHONE_IDENTITY = "+15551234567"
 
 
 async def _request_otp(client) -> None:
@@ -10,10 +18,46 @@ async def _request_otp(client) -> None:
     assert response.status_code == 202
 
 
-async def _stored_code(fake_redis) -> str:
-    code = await fake_redis.get(f"otp:code:{IDENTITY}")
+async def _stored_code(fake_redis, identity: str = IDENTITY) -> str:
+    code = await fake_redis.get(f"otp:code:{identity}")
     assert code is not None
     return code
+
+
+async def _read_account(db_factory, identity: str) -> Account:
+    async with db_factory() as session:
+        result = await session.execute(
+            select(Account).where(
+                or_(
+                    Account.email == identity,
+                    Account.email_normalized == identity,
+                    Account.phone == identity,
+                    Account.phone_e164 == identity,
+                )
+            )
+        )
+        return result.scalar_one()
+
+
+async def _set_status(db_factory, identity: str, new_status: AccountStatus) -> None:
+    async with db_factory() as session:
+        account = await _read_account_in(session, identity)
+        account.status = new_status
+        await session.commit()
+
+
+async def _read_account_in(session, identity: str) -> Account:
+    result = await session.execute(
+        select(Account).where(
+            or_(
+                Account.email == identity,
+                Account.email_normalized == identity,
+                Account.phone == identity,
+                Account.phone_e164 == identity,
+            )
+        )
+    )
+    return result.scalar_one()
 
 
 async def _count_sessions(db_factory) -> int:
@@ -98,3 +142,132 @@ async def test_wrong_otp_rejected(app_client, fake_redis):
 async def test_me_requires_token(app_client):
     response = await app_client.get("/api/v1/auth/me")
     assert response.status_code == 401
+
+
+async def test_blocked_account_login_forbidden(app_client, fake_redis, db_factory):
+    await _request_otp(app_client)
+    code = await _stored_code(fake_redis)
+    await _set_status(db_factory, IDENTITY, AccountStatus.BLOCKED)
+    response = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": IDENTITY, "code": code}
+    )
+    assert response.status_code == 403
+
+
+async def test_deleted_account_login_forbidden(app_client, fake_redis, db_factory):
+    await _request_otp(app_client)
+    code = await _stored_code(fake_redis)
+    await _set_status(db_factory, IDENTITY, AccountStatus.DELETED)
+    response = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": IDENTITY, "code": code}
+    )
+    assert response.status_code == 403
+
+
+async def test_blocked_account_tokens_and_refresh_rejected(
+    app_client, fake_redis, db_factory
+):
+    await _request_otp(app_client)
+    code = await _stored_code(fake_redis)
+    verify = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": IDENTITY, "code": code}
+    )
+    assert verify.status_code == 200
+    tokens = verify.json()
+
+    await _set_status(db_factory, IDENTITY, AccountStatus.BLOCKED)
+
+    me = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+    )
+    assert me.status_code == 401
+
+    refreshed = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert refreshed.status_code == 401
+
+
+async def test_pending_account_promoted_on_first_login(app_client, fake_redis, db_factory):
+    await _request_otp(app_client)
+    account = await _read_account(db_factory, IDENTITY)
+    assert account.status == AccountStatus.PENDING
+
+    code = await _stored_code(fake_redis)
+    verify = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": IDENTITY, "code": code}
+    )
+    assert verify.status_code == 200
+
+    account = await _read_account(db_factory, IDENTITY)
+    assert account.status == AccountStatus.ACTIVE
+
+
+async def test_email_login_sets_email_verified_at_and_last_login(
+    app_client, fake_redis, db_factory
+):
+    await _request_otp(app_client)
+    code = await _stored_code(fake_redis)
+    verify = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": IDENTITY, "code": code}
+    )
+    assert verify.status_code == 200
+
+    account = await _read_account(db_factory, IDENTITY)
+    assert account.email_verified_at is not None
+    assert account.phone_verified_at is None
+    assert account.last_login_at is not None
+
+
+async def test_phone_login_sets_phone_verified_at(app_client, fake_redis, db_factory):
+    response = await app_client.post(
+        "/api/v1/auth/request-otp", json={"identity": PHONE_IDENTITY}
+    )
+    assert response.status_code == 202
+    code = await _stored_code(fake_redis, PHONE_IDENTITY)
+    verify = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": PHONE_IDENTITY, "code": code}
+    )
+    assert verify.status_code == 200
+
+    account = await _read_account(db_factory, PHONE_IDENTITY)
+    assert account.phone_verified_at is not None
+    assert account.email_verified_at is None
+    assert account.last_login_at is not None
+
+
+class _ExplodingSessionRepo:
+    async def save(self, auth_session):
+        raise RuntimeError("db down")
+
+
+class _StubNotifier:
+    async def send_otp(self, identity, channel, code, expires_at) -> None:
+        return None
+
+
+async def test_verify_failure_rolls_back_verification(
+    db_session, fake_redis, monkeypatch
+):
+    identity = "rollback@example.com"
+    otp_service = OtpService(fake_redis)
+    accounts = AccountRepository(db_session)
+    await accounts.get_or_create_by_identity(identity)
+    await db_session.commit()
+    code = await otp_service.issue(identity)
+
+    monkeypatch.setattr(AuthSessionRepository, "save", _ExplodingSessionRepo.save)
+    service = AuthService(
+        db_session,
+        otp_service=otp_service,
+        notifier=_StubNotifier(),
+    )
+    client_info = ClientInfo(user_agent="test", ip_address="127.0.0.1")
+    with pytest.raises(RuntimeError):
+        await service.verify_otp(identity, code, client_info)
+
+    await db_session.rollback()
+    account = await accounts.get_by_identity(identity)
+    assert account.email_verified_at is None
+    assert account.phone_verified_at is None
+    assert account.last_login_at is None

@@ -12,7 +12,12 @@ from app.domain.medical import (
     PersonNotFoundError,
     UnsupportedFileTypeError,
 )
-from app.services.auth import OtpVerificationError, RateLimitError, RefreshTokenError
+from app.services.auth import (
+    AccountInactiveError,
+    OtpVerificationError,
+    RateLimitError,
+    RefreshTokenError,
+)
 from app.services.storage import StorageUnavailableError
 
 _EXCEPTION_STATUS: dict[type[Exception], int] = {
@@ -20,6 +25,7 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     RateLimitError: status.HTTP_429_TOO_MANY_REQUESTS,
     OtpVerificationError: status.HTTP_400_BAD_REQUEST,
     RefreshTokenError: status.HTTP_401_UNAUTHORIZED,
+    AccountInactiveError: status.HTTP_403_FORBIDDEN,
     # Patients
     PersonNotFoundError: status.HTTP_404_NOT_FOUND,
     PatientAlreadyExistsError: status.HTTP_409_CONFLICT,

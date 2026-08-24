@@ -41,6 +41,10 @@ class RefreshTokenError(AuthError):
     """The refresh token is unknown, expired, or revoked."""
 
 
+class AccountInactiveError(AuthError):
+    """The account is BLOCKED or DELETED and cannot authenticate."""
+
+
 @dataclass
 class ClientInfo:
     user_agent: str
@@ -82,8 +86,17 @@ class AuthService:
         account = await self._accounts.get_by_identity(identity)
         if account is None:
             raise OtpVerificationError("no account for identity")
-        if account.status != AccountStatus.ACTIVE:
+        if account.status == AccountStatus.PENDING:
             account.status = AccountStatus.ACTIVE
+        elif account.status != AccountStatus.ACTIVE:
+            raise AccountInactiveError("account is blocked or deleted")
+        now = datetime.now(UTC)
+        if detect_channel(identity) == "email":
+            if account.email_verified_at is None:
+                account.email_verified_at = now
+        elif account.phone_verified_at is None:
+            account.phone_verified_at = now
+        account.last_login_at = now
         return await self._establish_session(account, client)
 
     async def refresh(self, refresh_token: str, client: ClientInfo) -> TokenResponse:
@@ -99,6 +112,9 @@ class AuthService:
         account = await self._accounts.get_by_id(current.account_id)
         if account is None:
             raise RefreshTokenError("session account no longer exists")
+        if account.status != AccountStatus.ACTIVE:
+            await self._session.commit()
+            raise RefreshTokenError("session account is disabled")
         return await self._establish_session(
             account,
             client,

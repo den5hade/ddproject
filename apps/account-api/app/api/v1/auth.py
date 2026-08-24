@@ -11,6 +11,7 @@ from app.schemas.auth import (
     VerifyOtpRequest,
 )
 from app.services.auth import (
+    AccountInactiveError,
     OtpVerificationError,
     RateLimitError,
     RefreshTokenError,
@@ -45,7 +46,7 @@ async def verify_otp(
     )
     try:
         return await service.verify_otp(payload.identity, payload.code, client)
-    except OtpVerificationError as exc:
+    except (OtpVerificationError, AccountInactiveError) as exc:
         raise_for(exc)
 
 
