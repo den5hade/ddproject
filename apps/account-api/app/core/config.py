@@ -1,6 +1,22 @@
+import logging
 from functools import cached_property
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+ENVIRONMENTS = ("development", "production")
+MIN_SECRET_LENGTH = 32
+
+_KEY_SETTINGS = (
+    "jwt_secret_key",
+    "auth_hmac_key",
+    "auth_otp_pepper",
+    "auth_pin_pepper",
+)
+_EXACT_PLACEHOLDERS = frozenset({"pdf123", "minioadmin", "change-me-in-production"})
+_PLACEHOLDER_PREFIXES = ("change-me", "super-secret-")
 
 
 class Settings(BaseSettings):
@@ -9,10 +25,15 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "ddproject"
     debug: bool = False
+    environment: str = Field(
+        default="development",
+        validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"),
+    )
     api_prefix: str = "/api/v1"
 
     # ------------------------------------------------------------------
@@ -132,6 +153,67 @@ class Settings(BaseSettings):
     @cached_property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.web_origins.split(",") if origin.strip()]
+
+    def model_post_init(self, context: object) -> None:
+        env = self.environment.strip().lower()
+        if env not in ENVIRONMENTS:
+            raise ValueError(
+                f"unsupported environment '{self.environment}': "
+                "expected 'development' or 'production'"
+            )
+        issues = self._security_issues()
+        if not issues:
+            return
+        if env == "production":
+            raise RuntimeError(
+                f"refusing to start with insecure settings (APP_ENV={env}): "
+                + "; ".join(issues)
+            )
+        logger.warning("insecure settings detected: %s", "; ".join(issues))
+
+    def _security_issue(self, name: str, value: str, *, min_length: int = 0) -> list[str]:
+        stripped = value.strip()
+        if not stripped:
+            return [f"{name} is empty"]
+        lowered = stripped.lower()
+        if lowered in _EXACT_PLACEHOLDERS or lowered.startswith(_PLACEHOLDER_PREFIXES):
+            return [f"{name} matches a known insecure placeholder"]
+        if min_length and len(stripped) < min_length:
+            return [f"{name} is shorter than {min_length} characters"]
+        return []
+
+    def _security_issues(self) -> list[str]:
+        issues: list[str] = []
+        values: dict[str, str] = {}
+        for name in _KEY_SETTINGS:
+            value = str(getattr(self, name))
+            values[name] = value
+            issues += self._security_issue(name, value, min_length=MIN_SECRET_LENGTH)
+
+        for name in ("postgres_password", "s3_key_secret"):
+            value = str(getattr(self, name))
+            values[name] = value
+            issues += self._security_issue(name, value)
+        if not self.rabbitmq_url:
+            values["rabbitmq_password"] = self.rabbitmq_password
+            issues += self._security_issue("rabbitmq_password", self.rabbitmq_password)
+
+        if self.s3_endpoint_url:
+            for name in ("s3_key_id", "s3_bucket_name"):
+                issues += self._security_issue(name, str(getattr(self, name)))
+        if self.ai_feature:
+            issues += self._security_issue("ai_api_key", self.ai_api_key)
+
+        seen: dict[str, str] = {}
+        for name, value in values.items():
+            stripped = value.strip()
+            if not stripped:
+                continue
+            if stripped in seen:
+                issues.append(f"{name} must differ from {seen[stripped]}")
+            else:
+                seen[stripped] = name
+        return issues
 
 
 settings = Settings()
