@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.auth_session import AuthSession
@@ -80,4 +80,24 @@ class AuthSessionRepository:
 
     async def get_by_id(self, session_id: UUID) -> AuthSession | None:
         row = await self._session.get(AuthSessionRow, session_id)
+        return self.from_row(row) if row is not None else None
+
+    async def revoke_if_valid(self, refresh_token_hmac: str) -> AuthSession | None:
+        """Atomically revoke a live session; return None if unknown/expired/revoked.
+
+        A single conditional UPDATE..RETURNING: under concurrent rotation
+        exactly one caller gets the row, every other caller gets None.
+        """
+        now = datetime.now(UTC)
+        stmt = (
+            update(AuthSessionRow)
+            .where(
+                AuthSessionRow.refresh_token_hmac == refresh_token_hmac,
+                AuthSessionRow.revoked_at.is_(None),
+                AuthSessionRow.expires_at > now,
+            )
+            .values(revoked_at=now, last_used_at=now)
+            .returning(AuthSessionRow)
+        )
+        row = (await self._session.execute(stmt)).scalar_one_or_none()
         return self.from_row(row) if row is not None else None

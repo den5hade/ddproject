@@ -1,6 +1,12 @@
+import asyncio
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 import pytest
-from app.core.security import decode_access_token, hash_refresh_token
+from app.core.security import create_access_token, decode_access_token, hash_refresh_token
 from app.domain.account import AccountStatus
+from app.domain.auth_session import AuthSession
+from app.domain.user_type import UserType
 from app.models.account import Account
 from app.models.auth_session import AuthSessionRow
 from app.repositories.account import AccountRepository
@@ -300,3 +306,98 @@ async def test_verify_failure_rolls_back_verification(
     assert account.email_verified_at is None
     assert account.phone_verified_at is None
     assert account.last_login_at is None
+
+
+async def _login(app_client, fake_redis, identity: str = IDENTITY) -> dict:
+    response = await app_client.post(
+        "/api/v1/auth/request-otp", json={"identity": identity}
+    )
+    assert response.status_code == 202
+    code = await _stored_code(fake_redis, identity)
+    verify = await app_client.post(
+        "/api/v1/auth/verify", json={"identity": identity, "code": code}
+    )
+    assert verify.status_code == 200
+    return verify.json()
+
+
+async def test_concurrent_double_refresh_single_winner(app_client, fake_redis):
+    tokens = await _login(app_client, fake_redis)
+
+    results = await asyncio.gather(
+        app_client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}),
+        app_client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}),
+    )
+    statuses = sorted(result.status_code for result in results)
+    assert statuses == [200, 401]
+
+
+async def test_refresh_invalidates_previous_access_token(app_client, fake_redis):
+    tokens = await _login(app_client, fake_redis)
+    old_access = tokens["access_token"]
+
+    refreshed = await app_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert refreshed.status_code == 200
+    new_access = refreshed.json()["access_token"]
+
+    old_me = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {old_access}"}
+    )
+    assert old_me.status_code == 401
+
+    new_me = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {new_access}"}
+    )
+    assert new_me.status_code == 200
+
+
+async def test_logout_invalidates_current_access_token(app_client, fake_redis):
+    tokens = await _login(app_client, fake_redis)
+
+    logout = await app_client.post(
+        "/api/v1/auth/logout", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert logout.status_code == 204
+
+    me = await app_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+    )
+    assert me.status_code == 401
+
+
+async def test_unknown_sid_rejected(app_client, fake_redis, db_factory):
+    await _login(app_client, fake_redis)
+    account = await _read_account(db_factory, IDENTITY)
+
+    forged = create_access_token(account.id, UserType.USER, uuid4())
+    me = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {forged}"}
+    )
+    assert me.status_code == 401
+
+
+async def test_expired_session_sid_rejected(app_client, fake_redis, db_factory):
+    await _login(app_client, fake_redis)
+    account = await _read_account(db_factory, IDENTITY)
+
+    async with db_factory() as session:
+        expired = AuthSession.create(
+            account_id=account.id,
+            user_type=UserType.USER,
+            refresh_token_hmac="e" * 64,
+            user_agent="pytest",
+            ip_address="127.0.0.1",
+            expires_at=datetime.now(UTC) - timedelta(seconds=5),
+        )
+        await AuthSessionRepository(session).save(expired)
+        await session.commit()
+        expired_sid = expired.id
+
+    stale = create_access_token(account.id, UserType.USER, expired_sid)
+    me = await app_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {stale}"}
+    )
+    assert me.status_code == 401

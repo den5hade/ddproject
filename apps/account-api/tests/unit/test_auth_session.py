@@ -43,8 +43,10 @@ def test_expired_session_is_invalid():
     assert not session.is_valid()
 
 
-def test_touch_updates_last_used_at():
+def test_record_revocation_event_appends_event():
     session = _session()
-    original = session.last_used_at
-    session.touch()
-    assert session.last_used_at >= original
+    session.record_revocation_event()
+    events = session.pop_events()
+    assert len(events) == 1
+    assert isinstance(events[0], SessionRevokedEvent)
+    assert events[0].session_id == session.id

@@ -109,12 +109,10 @@ class AuthService:
 
     async def refresh(self, refresh_token: str, client: ClientInfo) -> TokenResponse:
         hmac = hash_refresh_token(refresh_token)
-        current = await self._sessions.get_by_refresh_hmac(hmac)
-        if current is None or not current.is_valid():
+        current = await self._sessions.revoke_if_valid(hmac)
+        if current is None:
             raise RefreshTokenError("refresh token is unknown, expired, or revoked")
-
-        current.revoke()
-        await self._sessions.save(current)
+        current.record_revocation_event()
         self._dispatch_events(current)
 
         account = await self._accounts.get_by_id(current.account_id)

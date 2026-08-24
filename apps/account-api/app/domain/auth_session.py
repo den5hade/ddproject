@@ -75,9 +75,15 @@ class AuthSession:
             )
         )
 
-    def touch(self) -> None:
-        """Обновить время последнего использования сессии."""
-        self.last_used_at = _utcnow()
+    def record_revocation_event(self) -> None:
+        """Emit the revocation event when revocation was persisted externally."""
+        self._domain_events.append(
+            SessionRevokedEvent(
+                entity_id=self.account_id,
+                user_type=str(self.user_type.value),
+                session_id=self.id,
+            )
+        )
 
     def is_valid(self) -> bool:
         """Проверить, что сессия не истекла и не отозвана."""

@@ -11,6 +11,7 @@ from app.core.security import ExpiredTokenError, InvalidTokenError, decode_acces
 from app.domain.account import AccountStatus
 from app.models.account import Account
 from app.repositories.account import AccountRepository
+from app.repositories.auth_sessions import AuthSessionRepository
 from app.services.auth import AuthService, ClientInfo
 from app.services.notifications import RabbitNotificationGateway
 from app.services.otp import OtpService
@@ -38,6 +39,22 @@ async def get_current_account(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
         ) from exc
+
+    try:
+        sid = UUID(claims.get("sid", ""))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid session claim",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    auth_session = await AuthSessionRepository(session).get_by_id(sid)
+    if auth_session is None or not auth_session.is_valid():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="session is no longer active",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     account = await AccountRepository(session).get_by_id(UUID(claims["sub"]))
     if account is None:
