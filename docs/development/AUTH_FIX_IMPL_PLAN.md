@@ -513,16 +513,14 @@ cleanly without "Task was destroyed" warnings.
 
 ### F11 — Session metadata cleanup (Minor)
 
-**Status:** code done (`76290cf`) — `touch()` deleted;
-`last_used_at` == revocation time for rotated sessions. The DB_MODELS.md
-documentation note lands in the Phase 8 wrap-up.
+**Status:** done — code (`76290cf`), docs (`DB_MODELS.md`, this phase).
 
 **Problem.** `AuthSession.touch()` (`app/domain/auth_session.py:78-80`) is
 never called; `last_used_at` equals `created_at` forever.
 
 **Plan.**
 
-- [ ] F5 Plan A already updates `last_used_at` atomically during rotation.
+- [x] F5 Plan A already updates `last_used_at` atomically during rotation.
       After that lands, delete `touch()` as dead code and document in
       `docs/data/DB_MODELS.md`: for rotated sessions `last_used_at` ==
       revocation time; for login-created sessions it equals creation.
@@ -533,14 +531,17 @@ never called; `last_used_at` equals `created_at` forever.
 
 ## 3. Documentation updates
 
-- [ ] `docs/security/AUTHENTICATION.md`: secret rotation invalidates all
+- [x] `docs/security/AUTHENTICATION.md`: secret rotation invalidates all
       sessions; status-enforcement matrix (§F2/F8); sid-check behavior and
-      post-revocation token lifetime (F5).
-- [ ] `docs/data/DB_MODELS.md`: `email_verified_at` / `phone_verified_at` /
+      post-revocation token lifetime (F5); fail-closed OTP delivery (F4);
+      identity canonicalization (F7); `APP_ENV` production checklist (F10).
+- [x] `docs/data/DB_MODELS.md`: `email_verified_at` / `phone_verified_at` /
       `last_login_at` semantics (set on OTP login, F9); `last_used_at`
       semantics (F11).
-- [ ] `docs/development/EXCEPTION_HANDLING.md`: register new exceptions
+- [x] `docs/development/EXCEPTION_HANDLING.md`: register new exceptions
       (`AccountInactiveError`, `NotificationUnavailableError`) in examples.
+- [x] `docs/development/TESTING.md` + `docs/development/CONTRIBUTING.md`:
+      gateway-mocking guidance updated for the fail-closed OTP gateway.
 
 ## 4. Tests
 
@@ -612,7 +613,7 @@ lint/typecheck clean.
    → done, `ac25958`.
 8. **Wrap-up** — docs updates (§3), credential rotation checklist execution
    (F1 ops), full regression run.
-   → pending.
+   → docs done (this change); F1 ops rotation remains an operational task.
 
 Each phase is independently shippable; run lint/typecheck/tests after each.
 Executed order so far: 4 → 1 → 3 → 2 → 5 → 6 → 7 (footer constraints honored:

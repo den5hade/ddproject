@@ -41,6 +41,9 @@ uvx ruff check apps packages tests
 ## Mocking
 
 - Feature switches (`ai_feature`) and messaging/notification gateways are
-  mocked (e.g. `RabbitNotificationGateway(None)`).
+  mocked. Since the OTP gateway is fail-closed (F4), `RabbitNotificationGateway(None)`
+  means "broker down" → raises `NotificationUnavailableError`; tests that need
+  OTP delivery to succeed use a no-op stub (`StubNotificationGateway` in the
+  shared conftest) — codes are read straight from Redis, never from logs.
 - External services (S3, RabbitMQ, Redis) are stubbed in unit/API tests;
   real ones are exercised via `make compose-dev` / integration tests.

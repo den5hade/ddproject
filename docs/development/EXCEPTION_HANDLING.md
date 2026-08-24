@@ -64,6 +64,8 @@ async def get_document(document_id: UUID, service: DocumentServiceDep):
 | `RateLimitError` | 429 |
 | `OtpVerificationError` | 400 |
 | `RefreshTokenError` | 401 |
+| `AccountInactiveError` | 403 |
+| `NotificationUnavailableError` | 503 |
 | `PersonNotFoundError` | 404 |
 | `PatientAlreadyExistsError` | 409 |
 | `DocumentNotFoundError` | 404 |
@@ -76,6 +78,33 @@ async def get_document(document_id: UUID, service: DocumentServiceDep):
 | `PatientAccessGrantNotFoundError` | 404 |
 | `RoleNotFoundError` | 404 |
 | *(any unregistered)* | 400 (fallback) |
+
+Auth-flavour examples — a route catching several domain errors at once:
+
+```python
+from app.api.v1.http_errors import raise_for
+from app.services.auth import AccountInactiveError, OtpVerificationError
+
+@router.post("/auth/verify", response_model=TokenResponse)
+async def verify_otp(payload: VerifyOtpRequest, request: Request, service: AuthServiceDep):
+    ...
+    try:
+        return await service.verify_otp(payload.identity, payload.code, client)
+    except (OtpVerificationError, AccountInactiveError) as exc:
+        raise_for(exc)   # 400 / 403 respectively
+```
+
+```python
+from app.services.notifications import NotificationUnavailableError
+
+@router.post("/auth/request-otp", ...)
+async def request_otp(payload: RequestOtpRequest, service: AuthServiceDep):
+    try:
+        await service.request_otp(payload.identity)
+    except (RateLimitError, NotificationUnavailableError) as exc:
+        raise_for(exc)   # 429 / 503 respectively
+    return {"detail": "OTP sent"}
+```
 
 ## Why `HTTPException` over `JSONResponse`
 

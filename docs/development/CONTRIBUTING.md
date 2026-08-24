@@ -51,7 +51,9 @@ uv run --project apps/account-api pytest apps/account-api
 ```
 
 Mocks: feature switches (`ai_feature`) and messaging gateways are mocked in
-tests (as `RabbitNotificationGateway(None)`).
+tests. The OTP gateway is fail-closed: `RabbitNotificationGateway(None)` means
+"broker down"; tests needing successful delivery use the conftest's
+`StubNotificationGateway` and read codes from Redis.
 
 ## Docs
 

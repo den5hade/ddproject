@@ -34,15 +34,20 @@
 
 | Method | Path | Auth | Purpose | Success | Errors |
 | --- | --- | --- | --- | --- | --- |
-| `POST` | `/api/v1/auth/request-otp` | none | Request a one-time code | `202` `{"detail":"OTP sent"}` | `429` rate limit |
-| `POST` | `/api/v1/auth/verify` | none | Swap OTP for tokens | `200` `TokenResponse` | `400` wrong/expired code |
-| `POST` | `/api/v1/auth/refresh` | none | Rotate refresh token | `200` `TokenResponse` | `401` unknown/expired/revoked |
+| `POST` | `/api/v1/auth/request-otp` | none | Request a one-time code | `202` `{"detail":"OTP sent"}` | `422` invalid identity · `429` rate limit · `503` broker unavailable |
+| `POST` | `/api/v1/auth/verify` | none | Swap OTP for tokens | `200` `TokenResponse` | `422` invalid identity · `400` wrong/expired code · `403` blocked/deleted account |
+| `POST` | `/api/v1/auth/refresh` | none | Rotate refresh token | `200` `TokenResponse` | `401` unknown/expired/revoked/disabled-account session |
 | `POST` | `/api/v1/auth/logout` | none | Revoke current session | `204` | `401` unknown token |
-| `GET` | `/api/v1/auth/me` | Bearer | Current user profile | `200` `UserResponse` | `401` missing/invalid token |
+| `GET` | `/api/v1/auth/me` | Bearer | Current user profile | `200` `UserResponse` | `401` missing/invalid token, dead `sid`, disabled account |
 
-One-time codes are identity-based: `identity` is either a valid **email** or a
-**phone number**. The channel is detected from the value
-(`detect_channel` in `../../apps/account-api/app/services/notifications.py`).
+One-time codes are identity-based: `identity` must be a valid **email** or an
+**E.164 phone number** (`^\+[1-9]\d{7,14}$`). Requests are canonicalized by
+`Identity.parse` (`../../apps/account-api/app/domain/identity.py`) inside the
+Pydantic schemas — emails are lowercased/stripped so `User@Example.com` and
+`user@example.com` share one account, one Redis key set and one rate-limit
+bucket; anything else is rejected with `422` before any DB/Redis access.
+Channel detection (`detect_channel`) uses the same parser as its single
+source of truth.
 
 ## 1. Request OTP (`request_otp`)
 
@@ -59,9 +64,12 @@ One-time codes are identity-based: `identity` is either a valid **email** or a
    `expires_at`) to the RabbitMQ topic exchange **`pdf.events`** with routing
    key **`auth.otp.requested`**. The `notification-worker` consumes that event
    and delivers the code (email via SMTP, or logs it with the `console`
-   provider). If the broker is unreachable the gateway falls back to logging
-   the code (dev convenience only).
-5. Everything commits in one database transaction.
+   provider). The gateway **fails closed**: if the broker is unreachable or
+   the publish fails, it raises `NotificationUnavailableError` → HTTP `503`,
+   nothing OTP-related is ever logged, and `AuthService.request_otp()` deletes
+   the pending code/attempts keys so no valid code lingers for an identity
+   whose owner never received it.
+5. Everything commits in one database transaction (skipped on delivery failure).
 
 ### Redis key inventory
 
@@ -81,8 +89,16 @@ One-time codes are identity-based: `identity` is either a valid **email** or a
   is required);
 - matches are one-time use — the code key is deleted immediately on success.
 
-On success `AuthService.verify_otp()` establishes a session (see below) and
-returns:
+On success `AuthService.verify_otp()`:
+
+- promotes the account **only** from `PENDING` → `ACTIVE`; `BLOCKED`/`DELETED`
+  accounts raise `AccountInactiveError` → HTTP `403` (no code path ever
+  reactivates them);
+- stamps identity ownership — first successful email login sets
+  `accounts.email_verified_at`, phone login sets `phone_verified_at`
+  (first-write-wins) and updates `last_login_at` — in the same transaction as
+  session creation, so a failed session write rolls the timestamps back too;
+- establishes a session (see below) and returns:
 
 ```json
 {
@@ -142,17 +158,30 @@ A session is **valid** only while `revoked_at IS NULL AND expires_at > now`.
 
 `POST /auth/refresh`:
 
-1. HMAC hash the presented refresh token and look up its session.
-2. Session must exist and be valid; otherwise `401`.
-3. **Revoke the current session** (`revoke()`, emits `SessionRevokedEvent`).
+1. HMAC hash the presented refresh token.
+2. **Atomically** revoke its live session via
+   `AuthSessionRepository.revoke_if_valid()` — a single conditional
+   `UPDATE … SET revoked_at = now(), last_used_at = now() WHERE … AND revoked_at IS NULL AND expires_at > now() RETURNING *`.
+   Under concurrent refreshes exactly one caller gets the row back; every
+   loser gets `None` → `401` (reuse detection is race-free at the statement
+   level).
+3. Load the account: missing → `401`; status ≠ `ACTIVE` (blocked/deleted) →
+   the pending revocation is committed and `401` is returned, so disabled
+   accounts cannot keep rotating forever.
 4. Create a **new session** for the same user, carrying over `device_id` /
    `platform` / `app_version`.
 5. Return a fresh `access_token` + new `refresh_token`.
 
-This is rotation: the old refresh token is useless after the response. Because
-the HMAC lookup happens against the *old* token, a rotated token that is
-reused hits a **revoked** (or missing) session → `401`, which also gives you a
-reuse-detection primitive (a stolen token played twice is flagged).
+This is rotation: the old refresh token is useless after the response.
+
+### Account status enforcement (normative)
+
+| Status | OTP login | Existing access token | Refresh |
+|--------------|-----------|-----------------------|---------|
+| `PENDING` | allowed; promoted to `ACTIVE` on first successful login | n/a (no tokens yet) | n/a |
+| `ACTIVE` | allowed | allowed | allowed |
+| `BLOCKED` | rejected `403` | rejected `401` | rejected `401` |
+| `DELETED` | rejected `403` | rejected `401` | rejected `401` |
 
 ### Logout
 
@@ -172,21 +201,48 @@ future step). OTP delivery itself already goes through RabbitMQ.
 1. `HTTPBearer` extracts the token — missing → `401`.
 2. `decode_access_token` validates signature, expiry and `type=access` →
    failures → `401` with `WWW-Authenticate: Bearer`.
-3. `AccountRepository.get_by_id(claims["sub"])` loads the account → missing → `401`.
+3. **Session (`sid`) check** — the session UUID from the claims is loaded by
+   primary key; it must exist, be unrevoked and unexpired. Unknown/garbled/
+   revoked/expired `sid` → `401` ("session is no longer active"). This is a
+   direct DB lookup per request (same cost class as the account fetch); there
+   is deliberately no cache, so revocation takes effect immediately.
+4. `AccountRepository.get_by_id(claims["sub"])` loads the account → missing → `401`;
+   status ≠ `ACTIVE` → `401` ("account is disabled").
+
+**Consequence for clients:** logout and refresh invalidate the *previous*
+access token immediately — not at its 15-minute expiry. After a refresh,
+only the newly issued access token works.
 
 ## Error model
 
 | Condition | HTTP | Detail |
 | --- | --- | --- |
+| Malformed identity (not email / not E.164) | `422` | Pydantic validation error |
 | OTP requested too often | `429` | `too many OTP requests, retry later` |
+| OTP delivery unavailable (broker down) | `503` | `notification delivery is unavailable` |
 | Missing/invalid/expired code | `400` | `invalid or expired OTP code` |
-| Unknown/expired/revoked refresh token | `401` | `refresh token is unknown, expired, or revoked` |
+| Login on BLOCKED/DELETED account | `403` | `account is blocked or deleted` |
+| Unknown/expired/revoked refresh token, or disabled-account session | `401` | `refresh token is unknown, expired, or revoked` / `session account is disabled` |
 | Missing/invalid/expired access token | `401` | `missing bearer token` / `invalid access token` / `access token expired` |
+| Dead session behind a valid access token | `401` | `session is no longer active` |
+| Valid access token of a non-ACTIVE account | `401` | `account is disabled` |
 
 ## Production checklist
 
+The app boots with an explicit `APP_ENV` (`development` | `production`, env
+vars `APP_ENV`/`ENVIRONMENT`). With `APP_ENV=production`,
+`Settings.model_post_init` (in
+`../../apps/account-api/app/core/config.py`) **refuses to start** when any of
+`JWT_SECRET_KEY`, `AUTH_HMAC_KEY`, `AUTH_OTP_PEPPER`, `AUTH_PIN_PEPPER`,
+`POSTGRES_PASSWORD`, `RABBITMQ_PASSWORD`, `S3_KEY_SECRET` is empty, shorter
+than 32 characters, a known placeholder (`change-me*`, `super-secret-*`,
+`pdf123`, `minioadmin`), or duplicated across settings; S3/AI credentials are
+validated only when the corresponding feature is enabled. Development boot
+warns only. `DEBUG=true` never bypasses production checks.
+
 Required environment (see `.env.example`; none of these live in code):
 
+- `APP_ENV=production`.
 - `JWT_SECRET_KEY` — **must be random & rotated from the dev default**
   (`change-me-in-production`).
 - `AUTH_HMAC_KEY` — **required for refresh-token hashing**; empty default is
@@ -195,13 +251,20 @@ Required environment (see `.env.example`; none of these live in code):
 - `REDIS_URL` — OTP storage (`redis://localhost:6379/0` default).
 - `JWT_ACCESS_EXPIRE_MINUTES`, `JWT_REFRESH_EXPIRE_DAYS` — token lifetimes.
 
+**Rotating `JWT_SECRET_KEY` or `AUTH_HMAC_KEY` invalidates every access token
+and refresh session instantly — all users must re-login.**
+
 ## Notes & trade-offs
 
 - **No passwords** — OTP replaces them; security rests on the delivery channel
   + 6-digit entropy + 5-attempt burn + 60 s request throttle.
 - **Refresh tokens are HMAC-only in the DB** — the plain value exists only on
   the client and is never recoverable from storage.
-- **Rotation by design** — each refresh kills the previous token, bounding the
-  exposed window for a stolen token.
+- **Rotation by design, atomically** — each refresh kills the previous session
+  in one conditional statement, bounding the exposed window for a stolen
+  token; reuse played twice hits a revoked session → `401`.
+- **Access tokens are sid-bound** — every protected request re-checks the
+  session row, so logout/blocking/rotation cut off live access tokens
+  immediately instead of at JWT expiry.
 - `AuthSession` `expires_at` uses UTC; SQLite (dev/tests) returns naive
   datetimes which are normalized to UTC in `AuthSessionRepository.from_row`.

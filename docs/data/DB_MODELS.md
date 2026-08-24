@@ -77,20 +77,28 @@ observations   diagnoses   medications   patient_consents
 | id                | UUID                | PK, `uuid4()`                                |
 | email             | VARCHAR(255) NULL   | исходное значение                           |
 | email_normalized  | VARCHAR(255) NULL   | **UNIQUE** (`uq_accounts_email_normalized`)  |
-| email_verified_at | TIMESTAMPTZ NULL    |                                              |
+| email_verified_at | TIMESTAMPTZ NULL    | ставится при первом успешном email-OTP входе (first-write-wins) |
 | phone             | VARCHAR(32) NULL    | исходное значение                           |
 | phone_e164        | VARCHAR(32) NULL    | **UNIQUE** (`uq_accounts_phone_e164`)        |
-| phone_verified_at | TIMESTAMPTZ NULL    |                                              |
+| phone_verified_at | TIMESTAMPTZ NULL    | ставится при первом успешном phone-OTP входе (first-write-wins) |
 | status            | VARCHAR(32)         | `pending / active / blocked / deleted`, default `pending` |
 | person_id         | UUID NULL           | **UNIQUE**, FK → `persons.id` ON DELETE SET NULL |
 | is_subscribed     | BOOLEAN             | default `false` (сохранено из старой схемы, квота загрузок) |
-| last_login_at     | TIMESTAMPTZ NULL    |                                              |
+| last_login_at     | TIMESTAMPTZ NULL    | обновляется при каждом успешном OTP входе    |
 | created_at / updated_at | TIMESTAMPTZ  |                                              |
 
 Примечания:
 - `email_normalized` = `lower(btrim(email))`, `phone_e164` = телефон в E.164.
 - `.user_type` удалён из `0001` — роли переехали в `account_roles`.
+- Верификационные метки и `last_login_at` пишутся в той же транзакции, что и
+  создание сессии: если создание сессии падает — метки откатываются вместе с ней.
+- Статус: логин разрешён только для `pending` (промоутится в `active` ровно
+  один раз при первом входе) и `active`; `blocked`/`deleted` получают 403 на
+  вход и 401 на refresh/API, обратная реактивация кодом не предусмотрена.
 - `auth_sessions.user_id` переименован в `account_id` (FK → `accounts.id`).
+- `auth_sessions.last_used_at`: для ротированных сессий == момент отзыва
+  (ставится атомарно условным UPDATE при `/auth/refresh`); для сессий,
+  созданных логином, == момент создания.
 
 ## account_identities — нормализованная идентичность ✅
 
