@@ -1,0 +1,54 @@
+/*
+ * Design tokens — source of truth (OAI_STYLE_GUIDE.md §55).
+ * Mapped into Tailwind v4 via @theme. Components must reference
+ * these tokens only — never hardcode raw values.
+ */
+
+@theme {
+  /* Surfaces */
+  --color-background: #f8f9f7;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f3f0;
+
+  /* Primary accent */
+  --color-primary: #557a72;
+  --color-primary-dark: #3f625b;
+  --color-primary-soft: #e8f0ee;
+
+  /* Ink / text (no pure black) */
+  --color-ink: #202522;
+  --color-ink-secondary: #626b65;
+  --color-ink-muted: #8a928c;
+  --color-ink-disabled: #b5bbb7;
+
+  /* Borders */
+  --color-border: #e2e6e2;
+  --color-border-strong: #d1d7d2;
+  --color-border-input: #d9deda;
+
+  /* Semantic */
+  --color-success: #4f7a63;
+  --color-success-bg: #eaf2ec;
+  --color-warning: #9a7842;
+  --color-warning-bg: #f7f1e5;
+  --color-danger: #9a5a56;
+  --color-danger-bg: #f7eaea;
+  --color-info: #58718a;
+  --color-info-bg: #eaf0f4;
+
+  /* Typography (SG §9–11): Inter, weights 400/500/600 only */
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Radius scale (SG §14) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+
+  /* Single floating shadow for modal/popover/sheet only (SG §15) */
+  --shadow-floating: 0 8px 30px rgba(32, 37, 34, 0.12);
+
+  /* Motion (SG §44–47): 150–200ms ease-out; drawer/modal 200–250ms */
+  --ease-out-soft: cubic-bezier(0, 0, 0.2, 1);
+}
