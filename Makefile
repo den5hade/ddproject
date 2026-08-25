@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup lock lint test test-integration build-web dev-web compose-dev compose-down compose-logs
+.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-integration generate-api-types build-web dev-web compose-dev compose-down compose-logs
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -9,14 +9,29 @@ help: ## Show available targets
 setup: ## Install all workspace members into one venv
 	uv sync --all-packages
 
+setup-web: ## Install frontend dependencies (apps/web)
+	cd $(WEB_DIR) && npm install
+
 lock: ## Regenerate the root uv.lock
 	uv lock
 
 lint: ## Ruff across the whole monorepo
 	uvx ruff check apps packages tests
 
+lint-web: ## ESLint for apps/web
+	cd $(WEB_DIR) && npm run lint
+
+format-web: ## Prettier for apps/web
+	cd $(WEB_DIR) && npm run format
+
 test: ## Run pytest for every Python app
 	uv run --all-packages pytest apps tests
+
+test-web: ## Run vitest for apps/web
+	cd $(WEB_DIR) && npm test
+
+generate-api-types: ## Regenerate TS API types from live OpenAPI (needs backend on :8000)
+	cd $(WEB_DIR) && npm run generate:api
 
 test-integration: ## Integration tests against local dev infra (docker compose)
 	uv run --all-packages pytest tests/integration -m integration
