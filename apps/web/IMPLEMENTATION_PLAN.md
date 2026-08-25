@@ -190,8 +190,8 @@ Banned in UI: "AI", "AI Insights", "Smart Analytics" → use "Извлечённ
 /logout → POST /auth/logout {refresh_token} → wipe → /login
 ```
 
-- [ ] Single-flight refresh: first 401 triggers `POST /auth/refresh`; concurrent requests await same promise; original request replayed once
-- [ ] Refresh failure (400/401) → wipe storage → hard redirect `/login`
+- [x] Single-flight refresh: first 401 triggers `POST /auth/refresh`; concurrent requests await same promise; original request replayed once
+- [x] Refresh failure (400/401) → wipe storage → hard redirect `/login`
 - [ ] Optional proactive refresh at JWT `exp − 60s`
 - [ ] Route guards: `(public)` redirects to `/` if session valid; `app/*` requires valid session else `/login`
 - [ ] Resend-OTP cooldown: 60s countdown (matches backend rate limit), disable button, show remaining seconds
@@ -305,12 +305,12 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M1 — API layer
 | Task | Done | Status |
 |---|---|---|
-| lib/api/client.ts: base client, auth header injection, credentials mode | ☐ | Planned |
-| Session module: memory access token, localStorage refresh, single-flight refresh, logout wipe | ☐ | Planned |
-| ApiError class + status mapping matrix | ☐ | Planned |
-| features/auth/api.ts + patients/documents api modules (typed via generated schema) | ☐ | Planned |
-| query keys factory | ☐ | Planned |
-| Unit tests: session refresh logic, ApiError parsing | ☐ | Planned |
+| lib/api/client.ts: base client, auth header injection, credentials mode | ☑ | Done |
+| Session module: memory access token, localStorage refresh, single-flight refresh, logout wipe | ☑ | Done |
+| ApiError class + status mapping matrix | ☑ | Done |
+| features/auth/api.ts + patients/documents api modules (typed via generated schema) | ☑ | Done |
+| query keys factory | ☑ | Done |
+| Unit tests: session refresh logic, ApiError parsing | ☑ | Done |
 
 ### M2 — Authentication screens
 | Task | Done | Status |
@@ -366,7 +366,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 | Milestone | Est | Status | Completed on |
 |---|---|---|---|
 | M0 Bootstrap | 0.5d | **Done** | 2026-08-25 |
-| M1 API layer | 1d | Planned | — |
+| M1 API layer | 1d | **Done** | 2026-08-25 |
 | M2 Auth screens | 1–2d | Planned | — |
 | M3 Shell + Dashboard | 1d | Planned | — |
 | M4 Documents core | 2–3d | Planned | — |
