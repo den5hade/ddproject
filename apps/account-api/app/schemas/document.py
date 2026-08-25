@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
+from app.core.timezone import to_api_tz
 from app.domain.medical import (
     DocumentStatus,
     DocumentType,
@@ -44,6 +45,10 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("created_at", "updated_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
+
 
 class DocumentVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -57,6 +62,10 @@ class DocumentVersionResponse(BaseModel):
     checksum: str | None
     created_by_account_id: UUID | None
     created_at: datetime
+
+    @field_serializer("created_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
 
 
 class DocumentExtractionResponse(BaseModel):
@@ -72,6 +81,10 @@ class DocumentExtractionResponse(BaseModel):
     data: dict | None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
 
 
 class JobResponse(BaseModel):
@@ -89,6 +102,10 @@ class JobResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("created_at", "updated_at", "started_at", "finished_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
 
 
 class DownloadUrlResponse(BaseModel):

@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+from app.core.timezone import to_api_tz
 from app.domain.access import AuditAction
 
 
@@ -19,3 +20,7 @@ class AuditLogResponse(BaseModel):
     user_agent: str
     metadata_: dict | None = Field(default=None, alias="metadata")
     created_at: datetime
+
+    @field_serializer("created_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)

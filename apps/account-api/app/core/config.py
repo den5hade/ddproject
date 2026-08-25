@@ -35,6 +35,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"),
     )
     api_prefix: str = "/api/v1"
+    api_timezone: str = "Europe/Moscow"
 
     # ------------------------------------------------------------------
     # Logging

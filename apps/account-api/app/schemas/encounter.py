@@ -1,8 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_serializer, model_validator
 
+from app.core.timezone import to_api_tz
 from app.domain.medical import EncounterStatus, EncounterType
 
 
@@ -43,3 +44,7 @@ class EncounterResponse(BaseModel):
     summary: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("started_at", "ended_at", "created_at", "updated_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
