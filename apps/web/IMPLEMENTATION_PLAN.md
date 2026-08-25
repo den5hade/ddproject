@@ -192,9 +192,9 @@ Banned in UI: "AI", "AI Insights", "Smart Analytics" → use "Извлечённ
 
 - [x] Single-flight refresh: first 401 triggers `POST /auth/refresh`; concurrent requests await same promise; original request replayed once
 - [x] Refresh failure (400/401) → wipe storage → hard redirect `/login`
-- [ ] Optional proactive refresh at JWT `exp − 60s`
-- [ ] Route guards: `(public)` redirects to `/` if session valid; `app/*` requires valid session else `/login`
-- [ ] Resend-OTP cooldown: 60s countdown (matches backend rate limit), disable button, show remaining seconds
+- [ ] Optional proactive refresh at JWT `exp − 60s` (deferred — silent refresh on first call covers reload case)
+- [x] Route guards: `(public)` redirects to `/` if session valid; `app/*` requires valid session else `/login`
+- [x] Resend-OTP cooldown: 60s countdown (matches backend rate limit), disable button, show remaining seconds
 
 ### 5.2 Upload state machine (`uploadMachine.ts` — pure reducer)
 
@@ -240,14 +240,14 @@ Invalidation rules:
 Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard nav ✓, all four states ✓, ru strings module ✓.
 
 ### 6.1 Login `/login`
-- [ ] Smart identity field (accepts email or phone, zod validation) [SG §25–26 forms: no giant card]
-- [ ] Submit → request OTP → navigate verify; 422/429 handling
-- [ ] Calm privacy line: «Ваши документы приватны» [SG §50]
+- [x] Smart identity field (accepts email or phone, zod validation) [SG §25–26 forms: no giant card]
+- [x] Submit → request OTP → navigate verify; 422/429 handling
+- [x] Calm privacy line: «Ваши документы приватны» [SG §50]
 
 ### 6.2 Verify `/login/verify`
-- [ ] 6-cell OTP input: auto-advance, backspace, paste-full-code support
-- [ ] Resend with 60s cooldown; change-identity link back
-- [ ] On success: store tokens → bootstrap me/patient → `/dashboard`
+- [x] 6-cell OTP input: auto-advance, backspace, paste-full-code support
+- [x] Resend with 60s cooldown; change-identity link back
+- [x] On success: store tokens → bootstrap me/patient → `/dashboard`
 
 ### 6.3 AppShell (guarded layout)
 - [ ] Mobile: bottom navigation, max 4 items — Главная · Карта · Документы · Профиль [SG §27]
@@ -315,10 +315,14 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M2 — Authentication screens
 | Task | Done | Status |
 |---|---|---|
-| LoginPage + IdentityForm (zod, ru errors) | ☐ | Planned |
-| VerifyPage + OtpInput (advance/paste/cooldown) | ☐ | Planned |
-| Guards (public/authenticated), bootstrap loading gate | ☐ | Planned |
-| Component tests: IdentityForm validation, OtpInput behavior | ☐ | Planned |
+| LoginPage + IdentityForm (zod, ru errors) | ☑ | Done |
+| VerifyPage + OtpInput (advance/paste/cooldown) | ☑ | Done |
+| Guards (public/authenticated), bootstrap loading gate | ☑ | Done |
+| Component tests: IdentityForm validation, OtpInput behavior | ☑ | Done |
+
+> Note (M2): React 18 requires `forwardRef` on UI primitives — plain function
+> components silently drop the ref that RHF's `register()` passes, which broke
+> validation with a misleading Zod "expected string, received undefined".
 
 ### M3 — Shell + Dashboard
 | Task | Done | Status |
@@ -367,7 +371,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 |---|---|---|---|
 | M0 Bootstrap | 0.5d | **Done** | 2026-08-25 |
 | M1 API layer | 1d | **Done** | 2026-08-25 |
-| M2 Auth screens | 1–2d | Planned | — |
+| M2 Auth screens | 1–2d | **Done** | 2026-08-25 |
 | M3 Shell + Dashboard | 1d | Planned | — |
 | M4 Documents core | 2–3d | Planned | — |
 | M5 Document detail | 1–2d | Planned | — |

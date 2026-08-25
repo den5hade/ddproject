@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type * as React from "react";
+import { forwardRef, type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 /*
@@ -28,20 +28,16 @@ const buttonVariants = cva(
   },
 );
 
-function Button({
-  className,
-  variant,
-  size,
-  ...props
-}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants>) {
+export const Button = forwardRef<
+  HTMLButtonElement,
+  ComponentProps<"button"> & VariantProps<typeof buttonVariants>
+>(function Button({ className, variant, size, ...props }, ref) {
   return (
     <button
+      ref={ref}
       data-slot="button"
       className={cn(buttonVariants({ variant, size }), className)}
       {...props}
     />
   );
-}
-
-/* eslint-disable-next-line react-refresh/only-export-components -- variants export is part of the shadcn component API */
-export { Button, buttonVariants };
+});
