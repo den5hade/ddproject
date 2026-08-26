@@ -1,23 +1,24 @@
 import { useMemo, useState } from "react";
-import { FileText, FolderOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { Uploader } from "@/features/documents/components/Uploader";
-import { DocumentCard } from "@/features/documents/components/DocumentCard";
+import {
+  DocumentList,
+} from "@/features/documents/components/DocumentList";
 import {
   filterDocuments,
-  groupDocumentsByMonth,
   type DocumentFilter,
 } from "@/features/documents/grouping";
 import { useMyPatientDocuments } from "@/features/documents/hooks";
 import { useMyPatient } from "@/features/auth/hooks";
 import { strings } from "@/lib/i18n/strings";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 
 /*
  * Documents page (plan §6.5).
- * Header + «Добавить» (SG §42) · month groups (SG §56) ·
+ * Header + «Добавить» (SG §42) · month-grouped DocumentList (SG §56) ·
  * client-side type chips · four UI states.
+ * The single <Uploader> instance owns the mobile sheet, desktop
+ * dropzone, and the upload progress/error row.
  */
 
 const FILTERS: Array<{ key: DocumentFilter; label: string }> = [
@@ -36,7 +37,6 @@ export function DocumentsPage() {
     () => filterDocuments(documents.data ?? [], filter),
     [documents.data, filter],
   );
-  const groups = useMemo(() => groupDocumentsByMonth(visible), [visible]);
   const isEmpty =
     !documents.isPending && !documents.isError && documents.data?.length === 0;
 
@@ -76,49 +76,13 @@ export function DocumentsPage() {
         </div>
       )}
 
-      <section aria-label={strings.documents.title} className="flex flex-col gap-8">
-        {documents.isPending ? (
-          <div className="space-y-6" aria-hidden="true">
-            <Skeleton className="h-5 w-36" />
-            <div className="space-y-3">
-              <Skeleton className="h-[72px] w-full rounded-xl" />
-              <Skeleton className="h-[72px] w-full rounded-xl" />
-            </div>
-          </div>
-        ) : documents.isError ? (
-          <ErrorPanel onRetry={() => void documents.refetch()} />
-        ) : isEmpty ? (
-          <EmptyDocuments />
-        ) : (
-          groups.map((group) => (
-            <div key={group.key} className="flex flex-col gap-3">
-              <h2 className="text-sm font-semibold text-ink-secondary">
-                {group.label}
-              </h2>
-              <div className="flex flex-col gap-3">
-                {group.documents.map((document) => (
-                  <DocumentCard key={document.id} document={document} />
-                ))}
-              </div>
-            </div>
-          ))
-        )}
-      </section>
-    </div>
-  );
-}
-
-/**
- * The single <Uploader> instance in the header owns the mobile sheet,
- * desktop dropzone, and the upload progress/error row.
- */
-function ErrorPanel({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="flex flex-col items-start gap-3 rounded-xl border border-border bg-surface px-5 py-4">
-      <p className="text-[15px] text-ink-secondary">{strings.common.errorTitle}</p>
-      <Button variant="secondary" size="sm" onClick={onRetry}>
-        {strings.common.retry}
-      </Button>
+      <DocumentList
+        documents={visible}
+        isPending={documents.isPending}
+        isError={documents.isError}
+        onRetry={() => void documents.refetch()}
+        emptyState={<EmptyDocuments />}
+      />
     </div>
   );
 }
@@ -132,7 +96,6 @@ function EmptyDocuments() {
         {strings.documents.emptyText}
       </p>
       <p className="mt-1 flex items-center gap-1.5 text-xs text-ink-muted">
-        <FileText size={14} strokeWidth={2} aria-hidden="true" />
         PDF, JPEG, PNG, TIFF ≤ 50 МБ
       </p>
     </div>
