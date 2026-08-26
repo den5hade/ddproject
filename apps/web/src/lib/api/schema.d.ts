@@ -253,7 +253,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Patient Documents */
+        get: operations["list_patient_documents_api_v1_patients__patient_id__documents_get"];
         put?: never;
         /** Create Document */
         post: operations["create_document_api_v1_patients__patient_id__documents_post"];
@@ -1595,6 +1596,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PatientResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_patient_documents_api_v1_patients__patient_id__documents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                patient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentResponse"][];
                 };
             };
             /** @description Validation Error */

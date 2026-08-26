@@ -34,6 +34,28 @@ from app.services.storage import StorageUnavailableError
 router = APIRouter(tags=["documents"])
 
 
+@router.get(
+    "/patients/{patient_id}/documents",
+    response_model=list[DocumentResponse],
+    dependencies=[
+        Depends(
+            require_patient_access(
+                can_view_documents=True, action=AuditAction.VIEW_DOCUMENT
+            )
+        )
+    ],
+)
+async def list_patient_documents(
+    patient_id: UUID,
+    service: DocumentServiceDep,
+) -> list[DocumentResponse]:
+    try:
+        documents = await service.list_documents(patient_id)
+    except DocumentNotFoundError as exc:
+        raise_for(exc)
+    return [DocumentResponse.model_validate(d) for d in documents]
+
+
 @router.post(
     "/patients/{patient_id}/documents",
     response_model=DocumentResponse,
