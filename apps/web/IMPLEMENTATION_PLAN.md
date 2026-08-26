@@ -35,7 +35,7 @@ Actual backend surface (verified against `apps/account-api`, base `/api/v1`):
 | `/auth/logout` | POST `{refresh_token}` | 204 |
 | `/auth/me` | GET | Bearer; `{id,email,phone,status,is_subscribed}` — **no roles field** (ticket BK-1) |
 | `/patients/me` | GET/PATCH | Auto-creates patient profile on first GET |
-| `/patients/{pid}/documents` | POST multipart | Fields: `upload`, `document_type`, `title`, `encounter_id?`; limits: pdf/jpeg/png/tiff, ≤50MB, quota 10 (free) → map 413/415/429 |
+| `/patients/{pid}/documents` | **GET list** · POST multipart | GET returns newest-first `DocumentResponse[]` (added in BK-7, commit f840ff2). POST fields: `upload`, `document_type`, `title`, `encounter_id?`; limits: pdf/jpeg/png/tiff, ≤50MB, quota 10 (free) → map 413/415/429 |
 | `/documents/{id}` | GET | `status`: pending → processing → completed/failed (workers currently stubs → may stay `processing`) |
 | `/documents/{id}/versions` | GET | Version list |
 | `/documents/{id}/extractions` | GET | Extracted data (empty until AI worker exists) |
@@ -154,13 +154,13 @@ All values below become CSS custom properties in `styles/tokens.css` and are map
 
 ### 4.2 shadcn primitives to install/configure
 
-- [ ] button (primary 44px/48px mobile, h-11; secondary bordered; tertiary text-button; destructive lives inside menu + confirm dialog, never red primary — SG §21–24)
-- [ ] input / label / textarea / select / radio-group / checkbox (height 44–48, focus ring subtle)
-- [ ] card (border-separated, no shadow — SG §15/§17)
-- [ ] badge (status chips; icon/text always paired with color — SG §6)
-- [ ] skeleton (content loading; spinners only inline micro-actions — SG §48)
-- [ ] tabs / dialog / drawer(bottom sheet) / dropdown-menu / alert / progress / avatar / separator
-- [ ] toaster (sonner; sparse usage — SG §49)
+- [x] button (primary 44px/48px mobile, h-11; secondary bordered; tertiary text-button; destructive lives inside menu + confirm dialog, never red primary — SG §21–24)
+- [x] input / label *(textarea / select / radio-group / checkbox — added when screens need them)*
+- [x] card (border-separated, no shadow — SG §15/§17)
+- [x] badge (status chips; icon/text always paired with color — SG §6)
+- [x] skeleton (content loading; spinners only inline micro-actions — SG §48)
+- [ ] tabs / drawer(bottom sheet) / dropdown-menu / progress *(M5–M6)* · alert / avatar / separator*(separator done)*
+- [x] toaster (sonner; sparse usage — SG §49)
 
 ### 4.3 Terminology (locked, SG §51–53)
 
@@ -207,7 +207,7 @@ IDLE → VALIDATING → UPLOADING → QUEUED → POLLING → COMPLETED
 
 - [ ] Client-side validation (UX only): mime ∈ {application/pdf, image/jpeg, image/png, image/tiff}; size ≤ 50 MB; friendly ru error messages
 - [ ] Transport: XHR `POST /patients/{pid}/documents` multipart — `upload.onprogress` %, `xhr.abort()` cancel
-- [ ] Polling: TanStack Query `refetchInterval: 4000` on `["document", id]` while `status ∈ {pending, processing}`; stops automatically on terminal status
+- [x] Polling: TanStack Query `refetchInterval: 4000` on `["document", id]` while `status ∈ {pending, processing}`; stops automatically on terminal status *(implemented in M3 — `useDocumentWithPolling`)*
 - [ ] After QUEUED success: invalidate `["documents", pid]` + toast «Документ загружен»
 - [ ] Map backend errors: 413 «Файл слишком большой», 415 «Неподдерживаемый тип файла», 429 «Достигнут лимит документов» (free tier = 10)
 - [ ] Honest processing state: if stuck in Обрабатывается > N min, show calm hint text (workers are stubs today — BK-6)
@@ -229,10 +229,10 @@ Invalidation rules:
 
 ### 5.4 Error handling (`lib/api/errors.ts`)
 
-- [ ] `ApiError {status, detail, fields?}` parsed from FastAPI `{detail}` shape (incl. 422 `loc` mapping to form fields)
-- [ ] Global behavior matrix: 401→silent refresh→retry→login; 403→inline "Нет доступа"; 404→not-found page state; 422→field errors; 429→cooldown message; 500/503→screen error + «Попробовать снова»
-- [ ] Every data screen implements all four states: loading skeleton / empty / error+retry / content (plan §43)
-- [ ] Empty state example (documents): «В вашей карте пока нет документов. Загрузите первый документ…» + [Загрузить документ] — small line icon only (SG §30)
+- [x] `ApiError {status, detail, fields?}` parsed from FastAPI `{detail}` shape (incl. 422 `loc` mapping to form fields) *(M1, unit-tested)*
+- [x] Global behavior matrix implemented in `errors.ts` defaults + client retry; per-screen application ongoing (403 inline / 404 page states land with M5–M6 screens)
+- [x] Every data screen implements all four states: loading skeleton / empty / error+retry / content (plan §43) — dashboard done; carried per-screen for the rest
+- [x] Empty state (documents): «Пока нет документов. Загрузите первый медицинский документ…» + CTA — small line icon only (SG §30)
 
 ---
 
@@ -378,8 +378,8 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 |---|---|---|---|
 | M0 Bootstrap | 0.5d | **Done** | 2026-08-25 |
 | M1 API layer | 1d | **Done** | 2026-08-25 |
-| M2 Auth screens | 1–2d | **Done** | 2026-08-25 |
-| M3 Shell + Dashboard | 1d | **Done** | 2026-08-25 |
+| M2 Auth screens | 1–2d | **Done** | 2026-08-26 |
+| M3 Shell + Dashboard | 1d | **Done** | 2026-08-26 |
 | M4 Documents core | 2–3d | Planned | — |
 | M5 Document detail | 1–2d | Planned | — |
 | M6 Record + Profile | 1–2d | Planned | — |
