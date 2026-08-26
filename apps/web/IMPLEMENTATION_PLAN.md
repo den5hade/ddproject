@@ -225,7 +225,7 @@ keys.extractions(id)             // ["document", id, "extractions"]
 
 Invalidation rules:
 - [x] Upload confirm → invalidate `documents(pid)` *(M4, useUploader)*
-- [ ] Profile PATCH → invalidate `patientMe()`
+- [x] Profile PATCH → invalidate `patientMe()` *(M6, useUpdateMyPerson)*
 
 ### 5.4 Error handling (`lib/api/errors.ts`)
 
@@ -281,14 +281,14 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 - [x] Honest processing hint while status is Обрабатывается (BK-6)
 
 ### 6.7 Medical record `/medical-record`
-- [ ] Tabs: Обзор | Документы (reuse DocumentList filtered)
-- [ ] Overview: person data read-only (name, DOB, sex) + privacy line; «Изменить в профиле» link
-- [ ] Read-only for MVP
+- [x] Tabs: Обзор | Документы (reuse DocumentList filtered)
+- [x] Overview: person data read-only (name, DOB, sex) + privacy line; «Изменить в профиле» link
+- [x] Read-only for MVP
 
 ### 6.8 Profile `/profile`
-- [ ] RHF+zod form: имя, фамилия, отчество, дата рождения, пол → PATCH `/patients/me` → invalidate → toast «Изменения сохранены» [SG §49]
-- [ ] Account block: email/phone (read-only), subscription status
-- [ ] Logout button (tertiary placement, confirm not required)
+- [x] RHF+zod form: имя, фамилия, отчество, дата рождения, пол → PATCH `/patients/me` → invalidate → toast «Изменения сохранены» [SG §49]
+- [x] Account block: email/phone (read-only), subscription status
+- [x] Logout button (tertiary placement, confirm not required)
 
 ---
 
@@ -370,9 +370,14 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M6 — Record + Profile
 | Task | Done | Status |
 |---|---|---|
-| MedicalRecordPage tabs (Overview read-only + Documents reuse) | ☐ | Planned |
-| ProfilePage form → PATCH → invalidation → toast | ☐ | Planned |
-| LogoutButton + session cleanup E2E-ready | ☐ | Planned |
+| MedicalRecordPage tabs (Overview read-only + Documents reuse) | ☑ | Done |
+| ProfilePage form → PATCH → invalidation → toast | ☑ | Done |
+| LogoutButton + session cleanup E2E-ready | ☑ | Done |
+
+> Notes (M6): profile form omits empty fields from the PATCH payload so
+> saves never clear existing data; future-DOB rejected client-side,
+> mirroring backend 422 (live-smoked). DocumentList extracted as a shared
+> presentational component used by both /documents and /medical-record.
 
 ### M7 — Hardening & E2E
 | Task | Done | Status |
@@ -393,7 +398,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 | M3 Shell + Dashboard | 1d | **Done** | 2026-08-26 |
 | M4 Documents core | 2–3d | **Done** | 2026-08-26 |
 | M5 Document detail | 1–2d | **Done** | 2026-08-26 |
-| M6 Record + Profile | 1–2d | Planned | — |
+| M6 Record + Profile | 1–2d | **Done** | 2026-08-26 |
 | M7 Hardening + E2E | 1–2d | Planned | — |
 | **Total** | **~8–12d** | | |
 
