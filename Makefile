@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-down compose-logs migrate
+.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,12 @@ dev-web: ## Run the Vite dev server (proxies /api to account-api:8000)
 
 compose-dev: ## Build & start dev stack: postgres, rabbitmq, redis, account-api, workers
 	docker compose -f infrastructure/development/docker-compose.yml up -d --build
+
+compose-start: ## Start dev stack from existing images (no build)
+	docker compose -f infrastructure/development/docker-compose.yml up -d
+
+compose-stop: ## Stop dev stack, keeping containers (restart with compose-start)
+	docker compose -f infrastructure/development/docker-compose.yml stop
 
 compose-logs: ## Tail dev stack logs; SVC=<service> to filter one
 	docker compose -f infrastructure/development/docker-compose.yml logs -f $(SVC)
