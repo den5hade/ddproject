@@ -50,6 +50,7 @@ Datetime responses are converted to **Europe/Moscow (+03:00)** server-side — d
 - [ ] **BK-4** `DELETE /documents/{id}`
 - [ ] **BK-5** Post-MVP security: HttpOnly cookie session option
 - [ ] **BK-6** marker-worker / ai-worker stubs — documents stuck in `processing`; UI must show honest "Обработка" state indefinitely
+- [x] **BK-7** ~~Document listing endpoint~~ → **resolved**: `GET /patients/{pid}/documents` added (commit f840ff2)
 
 ---
 
@@ -250,16 +251,16 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 - [x] On success: store tokens → bootstrap me/patient → `/dashboard`
 
 ### 6.3 AppShell (guarded layout)
-- [ ] Mobile: bottom navigation, max 4 items — Главная · Карта · Документы · Профиль [SG §27]
-- [ ] Desktop ≥lg: quiet left sidebar, active item = soft bg `#E8F0EE` + dark green text [SG §28–29]
-- [ ] Content centered, generous whitespace, page width cap ~720px for reading screens [SG §58]
+- [x] Mobile: bottom navigation, max 4 items — Главная · Карта · Документы · Профиль [SG §27]
+- [x] Desktop ≥lg: quiet left sidebar, active item = soft bg `#E8F0EE` + dark green text [SG §28–29]
+- [x] Content centered, generous whitespace, page width cap ~720px for reading screens [SG §58]
 
 ### 6.4 Dashboard `/`
-- [ ] Greeting by time of day + first_name (fallback neutral)
-- [ ] Medical record summary card → link to карта [SG §2: record > metrics]
-- [ ] Recent documents (last 5, DocumentCard reuse)
-- [ ] Primary CTA «Загрузить документ» → opens Uploader
-- [ ] NO metric tiles / counters row [SG §2 anti-pattern]
+- [x] Greeting by time of day + first_name (fallback neutral)
+- [x] Medical record summary card → link to карта [SG §2: record > metrics]
+- [x] Recent documents (last 5, DocumentCard reuse)
+- [x] Primary CTA «Загрузить документ» → navigates /documents until M4 wires Uploader
+- [x] NO metric tiles / counters row [SG §2 anti-pattern]
 
 ### 6.5 Documents `/documents`
 - [ ] Header + «+ Добавить» [SG §42]
@@ -327,9 +328,15 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M3 — Shell + Dashboard
 | Task | Done | Status |
 |---|---|---|
-| AppShell: bottom nav (mobile) + sidebar (desktop), active states per SG §28–29 | ☐ | Planned |
-| Dashboard: greeting, record card, recent docs, quick upload CTA | ☐ | Planned |
-| Skeletons for all dashboard queries | ☐ | Planned |
+| AppShell: bottom nav (mobile) + sidebar (desktop), active states per SG §28–29 | ☑ | Done |
+| Dashboard: greeting, record card, recent docs, quick upload CTA | ☑ | Done |
+| Skeletons for all dashboard queries | ☑ | Done |
+| *(unplanned)* BK-7 backend: `GET /patients/{pid}/documents` + types regen | ☑ | Done |
+| *(pulled forward from M4)* DocumentCard + ProcessingStatus components | ☑ | Done |
+
+> Note (M3): dashboard "Recent documents" required a document listing endpoint
+> that did not exist — resolved by wiring the already-present
+> `DocumentService.list_documents()` to an HTTP route (BK-7).
 
 ### M4 — Documents core (vertical slice heart)
 | Task | Done | Status |
@@ -372,7 +379,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 | M0 Bootstrap | 0.5d | **Done** | 2026-08-25 |
 | M1 API layer | 1d | **Done** | 2026-08-25 |
 | M2 Auth screens | 1–2d | **Done** | 2026-08-25 |
-| M3 Shell + Dashboard | 1d | Planned | — |
+| M3 Shell + Dashboard | 1d | **Done** | 2026-08-25 |
 | M4 Documents core | 2–3d | Planned | — |
 | M5 Document detail | 1–2d | Planned | — |
 | M6 Record + Profile | 1–2d | Planned | — |

@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
  * SG §21–24: primary h-11 (48px mobile via min-h), secondary bordered,
  * tertiary text-button. Destructive never rendered as red primary.
  */
-const buttonVariants = cva(
+// eslint-disable-next-line react-refresh/only-export-components -- variants export is part of the shadcn component API
+export const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg font-medium transition-colors duration-150 ease-out disabled:pointer-events-none disabled:text-ink-disabled select-none",
   {
     variants: {

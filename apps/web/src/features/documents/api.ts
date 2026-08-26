@@ -19,6 +19,15 @@ export function isProcessing(status: DocumentStatus): boolean {
   return NON_TERMINAL_STATUSES.has(status);
 }
 
+/** GET /patients/{patient_id}/documents — newest-first listing. */
+export function listPatientDocuments(patientId: string) {
+  return authed(() =>
+    api.GET("/api/v1/patients/{patient_id}/documents", {
+      params: { path: { patient_id: patientId } },
+    }),
+  );
+}
+
 /** GET /documents/{id} */
 export function getDocument(documentId: string) {
   return authed(() =>

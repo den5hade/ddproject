@@ -47,6 +47,16 @@ export const strings = {
     greetingMorning: "Доброе утро",
     greetingAfternoon: "Добрый день",
     greetingEvening: "Добрый вечер",
+    greetingFallback: "Здравствуйте",
+    recordCardTitle: "Медицинская карта",
+    recordCardSubtitle: "Ваши документы и результаты",
+    recordCardCta: "Открыть карту",
+    recentTitle: "Последние документы",
+    uploadCta: "Загрузить документ",
+    emptyDocumentsTitle: "Пока нет документов",
+    emptyDocumentsText:
+      "Загрузите первый медицинский документ, чтобы начать вести личную историю здоровья.",
+    openAll: "Все документы",
   },
 } as const;
 
