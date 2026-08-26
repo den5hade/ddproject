@@ -205,12 +205,12 @@ IDLE → VALIDATING → UPLOADING → QUEUED → POLLING → COMPLETED
                        ERROR ⇄ RETRY(↺ UPLOADING)   CANCELLED
 ```
 
-- [ ] Client-side validation (UX only): mime ∈ {application/pdf, image/jpeg, image/png, image/tiff}; size ≤ 50 MB; friendly ru error messages
-- [ ] Transport: XHR `POST /patients/{pid}/documents` multipart — `upload.onprogress` %, `xhr.abort()` cancel
+- [x] Client-side validation (UX only): mime ∈ {application/pdf, image/jpeg, image/png, image/tiff}; size ≤ 50 MB; friendly ru error messages
+- [x] Transport: XHR `POST /patients/{pid}/documents` multipart — `upload.onprogress` %, `xhr.abort()` cancel (+ single silent refresh/replay on 401)
 - [x] Polling: TanStack Query `refetchInterval: 4000` on `["document", id]` while `status ∈ {pending, processing}`; stops automatically on terminal status *(implemented in M3 — `useDocumentWithPolling`)*
-- [ ] After QUEUED success: invalidate `["documents", pid]` + toast «Документ загружен»
-- [ ] Map backend errors: 413 «Файл слишком большой», 415 «Неподдерживаемый тип файла», 429 «Достигнут лимит документов» (free tier = 10)
-- [ ] Honest processing state: if stuck in Обрабатывается > N min, show calm hint text (workers are stubs today — BK-6)
+- [x] After QUEUED success: invalidate `["documents", pid]` + toast «Документ загружен»
+- [x] Map backend errors: 413 «Файл слишком большой», 415 «Неподдерживаемый тип файла», 429 «Достигнут лимит документов» (free tier = 10) — client-side messages + server `ApiError` passthrough
+- [ ] Honest processing state: stuck-in-processing calm hint *(moved to M5 — belongs on the document detail screen)*
 
 ### 5.3 Query keys (`lib/query/keys.ts`)
 
@@ -224,7 +224,7 @@ keys.extractions(id)             // ["document", id, "extractions"]
 ```
 
 Invalidation rules:
-- [ ] Upload confirm → invalidate `documents(pid)`
+- [x] Upload confirm → invalidate `documents(pid)` *(M4, useUploader)*
 - [ ] Profile PATCH → invalidate `patientMe()`
 
 ### 5.4 Error handling (`lib/api/errors.ts`)
@@ -263,12 +263,13 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 - [x] NO metric tiles / counters row [SG §2 anti-pattern]
 
 ### 6.5 Documents `/documents`
-- [ ] Header + «+ Добавить» [SG §42]
-- [ ] Mobile: Add → bottom sheet [Сделать фото] [Выбрать файл] [Отмена]; desktop: button + drag&drop dropzone [SG §42–43]
-- [ ] List grouped by month («Август 2026») [SG §56]; DocumentCard: type tag (PDF/Image), title, date ru-format, status chip + chevron [SG §17–18]
-- [ ] Type filter chips: Все · Лаборатория · Приёмы · Другое (client-side for MVP)
-- [ ] Skeleton cards while loading; empty state per SG §30
-- [ ] Card click → `/documents/:id`
+- [x] Header + «+ Добавить» [SG §42]
+- [x] Mobile: Add → bottom sheet [Сделать фото] [Выбрать файл] [Отмена]; desktop: button + drag&drop dropzone [SG §42–43]
+- [x] List grouped by month («Август 2026») [SG §56]; DocumentCard: type tag (PDF/Image), title, date ru-format, status chip + chevron [SG §17–18]
+- [x] Type filter chips: Все · Лаборатория · Приёмы · Другое (client-side for MVP)
+- [x] Skeleton cards while loading; empty state per SG §30
+- [x] Card click → `/documents/:id`
+- [x] Upload progress row with % and cancel; inline error row with retry
 
 ### 6.6 Document detail `/documents/:id`
 - [ ] Header: type tag, title, date; overflow ••• menu (Download; Delete disabled until BK-4)
@@ -341,11 +342,14 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M4 — Documents core (vertical slice heart)
 | Task | Done | Status |
 |---|---|---|
-| uploadMachine reducer + unit tests (all transitions incl. abort/retry) | ☐ | Planned |
-| Uploader: mobile action-sheet + desktop dropzone, progress bar, cancel | ☐ | Planned |
-| DocumentsPage: month-grouped list, filter chips, empty/error states | ☐ | Planned |
-| DocumentCard + ProcessingStatus chip component | ☐ | Planned |
-| Upload error mapping (413/415/429) to ru messages | ☐ | Planned |
+| uploadMachine reducer + unit tests (all transitions incl. abort/retry) | ☑ | Done |
+| Uploader: mobile action-sheet + desktop dropzone, progress bar, cancel | ☑ | Done |
+| DocumentsPage: month-grouped list, filter chips, empty/error states | ☑ | Done |
+| DocumentCard + ProcessingStatus chip component *(done in M3, pulled forward)* | ☑ | Done |
+| Upload error mapping (413/415/429) to ru messages | ☑ | Done |
+
+> Note (M4): "stuck in processing" hint moved to M5 — it belongs on the
+> document detail screen, not the list row.
 
 ### M5 — Document detail
 | Task | Done | Status |
@@ -380,7 +384,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 | M1 API layer | 1d | **Done** | 2026-08-25 |
 | M2 Auth screens | 1–2d | **Done** | 2026-08-26 |
 | M3 Shell + Dashboard | 1d | **Done** | 2026-08-26 |
-| M4 Documents core | 2–3d | Planned | — |
+| M4 Documents core | 2–3d | **Done** | 2026-08-26 |
 | M5 Document detail | 1–2d | Planned | — |
 | M6 Record + Profile | 1–2d | Planned | — |
 | M7 Hardening + E2E | 1–2d | Planned | — |
