@@ -11,4 +11,6 @@ export const keys = {
     ["document", documentId, "versions"] as const,
   extractions: (documentId: string) =>
     ["document", documentId, "extractions"] as const,
+  downloadUrl: (documentId: string) =>
+    ["document", documentId, "download-url"] as const,
 };

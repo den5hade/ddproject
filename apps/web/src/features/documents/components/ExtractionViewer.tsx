@@ -1,0 +1,85 @@
+import { useExtractions } from "../hooks";
+import { parseExtractionData, type Observation } from "../extraction";
+import { Skeleton } from "@/components/ui/skeleton";
+import { strings } from "@/lib/i18n/strings";
+
+/*
+ * Extracted information viewer (SG §35–38): value cards with
+ * name / value+unit / reference range. Wording is strictly
+ * descriptive — no interpretation (SG §36–37). No "AI" wording
+ * anywhere (SG §33, §52).
+ */
+
+export function ExtractionViewer({ documentId }: { documentId: string }) {
+  const extractions = useExtractions(documentId);
+
+  if (extractions.isPending) {
+    return (
+      <div className="space-y-3" aria-hidden="true">
+        <Skeleton className="h-[84px] w-full rounded-xl" />
+        <Skeleton className="h-[84px] w-full rounded-xl" />
+      </div>
+    );
+  }
+
+  if (extractions.isError) {
+    return (
+      <div className="rounded-xl border border-border bg-surface px-5 py-4">
+        <p className="text-[15px] text-ink-secondary">
+          {strings.common.errorTitle}
+        </p>
+      </div>
+    );
+  }
+
+  // Latest extraction wins; workers append one per analysis
+  const all = extractions.data ?? [];
+  const latest = all.length > 0 ? all[all.length - 1] : undefined;
+  const observations: Observation[] | null =
+    latest === undefined ? null : parseExtractionData(latest.data);
+
+  if (!latest || latest.data === null || observations === null) {
+    return (
+      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border-strong bg-surface px-6 py-10 text-center">
+        {/* SG §33: «Извлечённая информация», no AI branding */}
+        <p className="text-[15px] font-medium text-ink">
+          {strings.detail.extractionEmptyTitle}
+        </p>
+        <p className="max-w-[380px] text-sm leading-relaxed text-ink-secondary">
+          {strings.detail.extractionEmptyText}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3" role="list" aria-label={strings.detail.tabExtraction}>
+      {observations.map((observation, index) => (
+        <ObservationCard key={`${observation.name}-${index}`} observation={observation} />
+      ))}
+    </div>
+  );
+}
+
+function ObservationCard({ observation }: { observation: Observation }) {
+  return (
+    <div role="listitem" className="rounded-xl border border-border bg-surface px-5 py-4">
+      <p className="text-[15px] font-medium text-ink">{observation.name}</p>
+
+      {/* Value + unit on one calm line */}
+      <p className="mt-1 text-lg text-ink-secondary">
+        {observation.value}
+        {observation.unit && (
+          <span className="ml-1.5 text-sm">{observation.unit}</span>
+        )}
+      </p>
+
+      {/* SG §35: reference or explicit unavailability; SG §36: neutral wording */}
+      {observation.reference ? (
+        <p className="mt-2 text-sm text-ink-muted">
+          Референсный диапазон: {observation.reference}
+        </p>
+      ) : null}
+    </div>
+  );
+}

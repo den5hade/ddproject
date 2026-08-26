@@ -56,3 +56,12 @@ export function greetingForHour(hour: number): "morning" | "afternoon" | "evenin
   if (hour < 18) return "afternoon";
   return "evening";
 }
+
+/** «589 Б» · «172,3 КБ» · «1,2 МБ» */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(kb)} КБ`;
+  const mb = kb / 1024;
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(mb)} МБ`;
+}

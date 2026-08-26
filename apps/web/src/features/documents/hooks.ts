@@ -24,6 +24,33 @@ export function useMyPatientDocuments(patientId: string | undefined) {
   });
 }
 
+export function useVersions(documentId: string | undefined) {
+  return useQuery({
+    queryKey: keys.versions(documentId ?? "_"),
+    queryFn: () => api.getVersions(documentId!),
+    enabled: documentId !== undefined,
+  });
+}
+
+export function useExtractions(documentId: string | undefined) {
+  return useQuery({
+    queryKey: keys.extractions(documentId ?? "_"),
+    queryFn: () => api.getExtractions(documentId!),
+    enabled: documentId !== undefined,
+  });
+}
+
+/** Presigned URL is short-lived (900s) — never stale-cache it long. */
+export function useDownloadUrl(documentId: string | undefined) {
+  return useQuery({
+    queryKey: keys.downloadUrl(documentId ?? "_"),
+    queryFn: () => api.getDownloadUrl(documentId!),
+    enabled: documentId !== undefined,
+    staleTime: 5 * 60_000,
+    gcTime: 6 * 60_000,
+  });
+}
+
 /**
  * Polls a single document while it is still moving (plan §5.2, D6).
  * refetchInterval returns false → polling stops automatically on

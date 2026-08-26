@@ -66,6 +66,22 @@ export const strings = {
     filtersVisits: "Приёмы",
     filtersOther: "Другое",
   },
+  detail: {
+    back: "Назад к документам",
+    download: "Скачать",
+    delete: "Удалить",
+    deleteSoon: "Появится позже",
+    tabOriginal: "Оригинал",
+    tabExtraction: "Извлечённая информация",
+    openDocument: "Открыть документ",
+    processingHint:
+      "Обработка может занять время. Документ обновится автоматически, когда будет готов.",
+    extractionEmptyTitle: "Информация ещё извлекается",
+    extractionEmptyText:
+      "Когда обработка завершится, здесь появятся показатели из документа — значения, единицы и референсные диапазоны.",
+    notFoundTitle: "Документ не найден",
+    noAccessTitle: "Нет доступа к этому документу",
+  },
   dashboard: {
     greetingMorning: "Доброе утро",
     greetingAfternoon: "Добрый день",
