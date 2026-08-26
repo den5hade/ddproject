@@ -15,10 +15,13 @@
   --color-primary-dark: #3f625b;
   --color-primary-soft: #e8f0ee;
 
-  /* Ink / text (no pure black) */
+  /* Ink / text (no pure black).
+     Note: ink-muted is #6b746c — SG §5's #8A928C (and even a midpoint)
+     fails WCAG AA 4.5:1 on Background for body-size text; SG §37
+     accessibility takes precedence. Disabled keeps #B5BBB7 (non-text). */
   --color-ink: #202522;
   --color-ink-secondary: #626b65;
-  --color-ink-muted: #8a928c;
+  --color-ink-muted: #6b746c;
   --color-ink-disabled: #b5bbb7;
 
   /* Borders */

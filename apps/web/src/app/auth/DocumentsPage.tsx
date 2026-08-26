@@ -42,8 +42,8 @@ export function DocumentsPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex items-start justify-between gap-4">
-        <div>
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
           <h1 className="text-[28px] font-semibold leading-tight text-ink lg:text-[30px]">
             {strings.documents.title}
           </h1>
@@ -64,7 +64,7 @@ export function DocumentsPage() {
               aria-pressed={filter === key}
               onClick={() => setFilter(key)}
               className={cn(
-                "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors duration-150 ease-out",
+                "h-10 rounded-full border px-4 text-sm font-medium transition-colors duration-150 ease-out",
                 filter === key
                   ? "border-transparent bg-primary-soft text-primary-dark"
                   : "border-border bg-surface text-ink-secondary hover:bg-surface-muted hover:text-ink",

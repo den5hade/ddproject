@@ -1,4 +1,4 @@
-import { api, unwrap } from "@/lib/api/client";
+import { api, authed, unwrap } from "@/lib/api/client";
 import type { components } from "@/lib/api/schema";
 
 export type TokenResponse = components["schemas"]["TokenResponse"];
@@ -23,5 +23,8 @@ export async function logout(refreshToken: string): Promise<void> {
 
 /** GET /auth/me */
 export function getMe() {
-  return unwrap<UserResponse>(api.GET("/api/v1/auth/me"));
+  // authed(): on cold reload the access token lives only in memory —
+  // the first call goes out unauthenticated (401) and MUST trigger the
+  // silent refresh + replay like every other protected endpoint.
+  return authed(() => api.GET("/api/v1/auth/me"));
 }

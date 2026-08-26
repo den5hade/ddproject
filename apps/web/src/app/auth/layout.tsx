@@ -120,7 +120,7 @@ export function AuthLayout() {
         <div className="mb-10 px-3 text-lg">
           <Brand />
         </div>
-        <nav aria-label="Основная навигация" className="flex flex-col gap-1">
+        <nav aria-label="Разделы" className="flex flex-col gap-1">
           <NavLinks layout="sidebar" />
         </nav>
       </aside>
