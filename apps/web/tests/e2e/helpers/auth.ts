@@ -8,7 +8,8 @@ import { execSync } from "node:child_process";
  */
 
 const API = "http://localhost:8000";
-const REDIS_CONTAINER = "development-redis-1";
+/** CI uses the service-container id; local dev uses the compose name. */
+const REDIS_CONTAINER = process.env.REDIS_CONTAINER ?? "development-redis-1";
 
 export function uniqueIdentity(): string {
   return `e2e-${Date.now()}-${Math.floor(Math.random() * 10_000)}@example.com`;

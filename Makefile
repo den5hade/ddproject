@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-integration generate-api-types build-web dev-web compose-dev compose-down compose-logs
+.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-down compose-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,12 @@ test: ## Run pytest for every Python app
 
 test-web: ## Run vitest for apps/web
 	cd $(WEB_DIR) && npm test
+
+test-e2e: ## Playwright E2E against the running dev stack (compose-dev + backend on :8000)
+	cd $(WEB_DIR) && npx playwright install chromium && npx playwright test
+
+migrate: ## Apply DB migrations (local dev)
+	uv run --all-packages alembic -c alembic.ini upgrade head
 
 generate-api-types: ## Regenerate TS API types from live OpenAPI (needs backend on :8000)
 	cd $(WEB_DIR) && npm run generate:api
