@@ -159,7 +159,7 @@ All values below become CSS custom properties in `styles/tokens.css` and are map
 - [x] card (border-separated, no shadow — SG §15/§17)
 - [x] badge (status chips; icon/text always paired with color — SG §6)
 - [x] skeleton (content loading; spinners only inline micro-actions — SG §48)
-- [ ] tabs / drawer(bottom sheet) / dropdown-menu / progress *(M5–M6)* · alert / avatar / separator*(separator done)*
+- [x] tabs / drawer(bottom sheet) / dropdown-menu / progress *(tabs + menu done in M5 as minimal WAI-ARIA primitives; bottom sheet hand-rolled in M4; progress bar inline M4; alert/avatar unused so far)* · separator*(done)*
 - [x] toaster (sonner; sparse usage — SG §49)
 
 ### 4.3 Terminology (locked, SG §51–53)
@@ -210,7 +210,7 @@ IDLE → VALIDATING → UPLOADING → QUEUED → POLLING → COMPLETED
 - [x] Polling: TanStack Query `refetchInterval: 4000` on `["document", id]` while `status ∈ {pending, processing}`; stops automatically on terminal status *(implemented in M3 — `useDocumentWithPolling`)*
 - [x] After QUEUED success: invalidate `["documents", pid]` + toast «Документ загружен»
 - [x] Map backend errors: 413 «Файл слишком большой», 415 «Неподдерживаемый тип файла», 429 «Достигнут лимит документов» (free tier = 10) — client-side messages + server `ApiError` passthrough
-- [ ] Honest processing state: stuck-in-processing calm hint *(moved to M5 — belongs on the document detail screen)*
+- [x] Honest processing state: stuck-in-processing calm hint *(done in M5 — shown under the stepper on the detail screen)*
 
 ### 5.3 Query keys (`lib/query/keys.ts`)
 
@@ -272,12 +272,13 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 - [x] Upload progress row with % and cancel; inline error row with retry
 
 ### 6.6 Document detail `/documents/:id`
-- [ ] Header: type tag, title, date; overflow ••• menu (Download; Delete disabled until BK-4)
-- [ ] Processing stepper: Загружен → Обрабатывается (slow dots animation, SG §32) → Готов | Требует внимания [SG §31]; polling per 5.2
-- [ ] Tabs: Оригинал | Извлечённая информация
-  - [ ] Оригинал: lazy `<object>` PDF / `<img>` for images [D9]; «Открыть документ» fallback on mobile [SG §40]
-  - [ ] Извлечённая информация: value cards — name / value+unit / Reference range or «Референсный диапазон недоступен» [SG §35]; within/above/below provided range wording only [SG §36]; mobile stacked cards, desktop optional table [SG §38]; empty state «Информация ещё извлекается»
-- [ ] Download action: `GET /download` → open `download_url` new tab
+- [x] Header: type tag, title, date; overflow ••• menu (Download; Delete disabled until BK-4)
+- [x] Processing stepper: Загружен → Обрабатывается (slow dots animation, SG §32) → Готов | Требует внимания [SG §31]; polling per 5.2
+- [x] Tabs: Оригинал | Извлечённая информация
+  - [x] Оригинал: lazy `<object>` PDF / `<img>` for images [D9]; «Открыть документ» fallback on mobile [SG §40]
+  - [x] Извлечённая информация: value cards — name / value+unit / Reference range or «Референсный диапазон недоступен» [SG §35]; within/above/below provided range wording only [SG §36]; mobile stacked cards, desktop optional table [SG §38]; empty state «Информация ещё извлекается»
+- [x] Download action: `GET /download` → open `download_url` new tab
+- [x] Honest processing hint while status is Обрабатывается (BK-6)
 
 ### 6.7 Medical record `/medical-record`
 - [ ] Tabs: Обзор | Документы (reuse DocumentList filtered)
@@ -354,11 +355,17 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 ### M5 — Document detail
 | Task | Done | Status |
 |---|---|---|
-| Detail header + ••• menu + download flow | ☐ | Planned |
-| Processing stepper + polling hook | ☐ | Planned |
-| OriginalViewer lazy `<object>`/img + mobile fallback | ☐ | Planned |
-| ExtractionViewer (value cards, reference handling, empty state) | ☐ | Planned |
-| Component tests: ProcessingStatus rendering per status | ☐ | Planned |
+| Detail header + ••• menu + download flow | ☑ | Done |
+| Processing stepper + polling hook *(hook was M3)* | ☑ | Done |
+| OriginalViewer lazy `<object>`/img + mobile fallback | ☑ | Done |
+| ExtractionViewer (value cards, reference handling, empty state) | ☑ | Done |
+| Component tests: ProcessingStatus per status *(done in M3)* + Stepper + extraction normalizer | ☑ | Done |
+
+> Notes (M5): extraction data shape from the AI worker is unknown (stubs), so
+> `parseExtractionData()` tolerantly handles list/wrapped/keyed/flat shapes and
+> returns null → honest empty state. Presigned download URLs are cached with a
+> short TTL (5 min of their 15-min lifetime). Tabs/OverflowMenu are minimal
+> WAI-ARIA primitives (`components/ui/{tabs,menu}.tsx`), radix swap later if needed.
 
 ### M6 — Record + Profile
 | Task | Done | Status |
@@ -385,7 +392,7 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 | M2 Auth screens | 1–2d | **Done** | 2026-08-26 |
 | M3 Shell + Dashboard | 1d | **Done** | 2026-08-26 |
 | M4 Documents core | 2–3d | **Done** | 2026-08-26 |
-| M5 Document detail | 1–2d | Planned | — |
+| M5 Document detail | 1–2d | **Done** | 2026-08-26 |
 | M6 Record + Profile | 1–2d | Planned | — |
 | M7 Hardening + E2E | 1–2d | Planned | — |
 | **Total** | **~8–12d** | | |
