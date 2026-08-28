@@ -5,7 +5,6 @@ import { identityFormSchema, type IdentityFormValues } from "../schemas";
 import { strings } from "@/lib/i18n/strings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 interface IdentityFormProps {
   pending: boolean;
@@ -40,11 +39,11 @@ export function IdentityForm({
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <Label htmlFor="identity">{strings.login.identityLabel}</Label>
         <Input
           id="identity"
           autoComplete="username"
           inputMode="email"
+          aria-label={strings.login.identityLabel}
           placeholder={strings.login.identityPlaceholder}
           aria-invalid={errorMessage ? true : undefined}
           aria-describedby={errorMessage ? "identity-error" : undefined}

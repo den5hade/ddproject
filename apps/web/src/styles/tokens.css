@@ -23,6 +23,9 @@
   --color-ink-secondary: #626b65;
   --color-ink-muted: #6b746c;
   --color-ink-disabled: #b5bbb7;
+  /* Decorative faded tone (login headline carousel, aria-hidden). Low
+     contrast on purpose — not used for readable text. */
+  --color-ink-faint: #d8d8d8;
 
   /* Borders */
   --color-border: #e2e6e2;

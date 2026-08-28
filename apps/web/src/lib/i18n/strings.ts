@@ -18,9 +18,8 @@ export const strings = {
   },
   login: {
     title: "Вход",
-    subtitle: "Введите email или телефон, мы пришлём код подтверждения",
     identityLabel: "Email или телефон",
-    identityPlaceholder: "you@example.com",
+    identityPlaceholder: "example@email.com or 9224111188",
     submit: "Получить код",
     submitting: "Отправляем…",
   },
