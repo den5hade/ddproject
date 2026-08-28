@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useController, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { useMe, useMyPatient, useLogout } from "@/features/auth/hooks";
 import { LogoutButton } from "@/features/auth/components/LogoutButton";
@@ -15,7 +15,7 @@ import { strings } from "@/lib/i18n/strings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import { SelectDropdown, type SelectOption } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /*
@@ -23,6 +23,12 @@ import { Skeleton } from "@/components/ui/skeleton";
  * invalidation → toast «Изменения сохранены» [SG §49]. Read-only
  * account block + tertiary logout.
  */
+
+const sexOptions: SelectOption[] = [
+  { value: "male", label: strings.profile.sexMale },
+  { value: "female", label: strings.profile.sexFemale },
+  { value: "unspecified", label: strings.profile.sexUnspecified },
+];
 
 export function ProfilePage() {
   const me = useMe();
@@ -34,12 +40,17 @@ export function ProfilePage() {
     register,
     handleSubmit,
     reset,
+    control,
     setError,
     formState: { errors },
   } = useForm<ProfileFormValues>({
     resolver: zodResolver(profileFormSchema),
     defaultValues: fromPerson({}),
   });
+
+  const {
+    field: { value: sexValue, onChange: onSexChange },
+  } = useController({ control, name: "sex" });
 
   // Sync defaults once patient data arrives
   useEffect(() => {
@@ -126,12 +137,15 @@ export function ProfilePage() {
             </Field>
 
             <Field label={strings.profile.sex} htmlFor="sex" error={errors.sex?.message}>
-              <Select id="sex" {...register("sex")}>
-                <option value="">{strings.profile.sexNotSet}</option>
-                <option value="male">{strings.profile.sexMale}</option>
-                <option value="female">{strings.profile.sexFemale}</option>
-                <option value="unspecified">{strings.profile.sexUnspecified}</option>
-              </Select>
+              <SelectDropdown
+                id="sex"
+                label={strings.profile.sex}
+                value={sexValue}
+                options={sexOptions}
+                placeholder={strings.profile.sexNotSet}
+                disabled={updatePerson.isPending}
+                onChange={onSexChange}
+              />
             </Field>
 
             {errors.root?.message && (
