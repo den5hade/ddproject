@@ -47,7 +47,7 @@ export function DocumentDetailPage() {
   const document = query.data;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-8 overflow-hidden">
       <Link
         to="/documents"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-primary underline-offset-4 hover:underline"
@@ -102,7 +102,7 @@ function DocumentHeader({ document }: { document: DocumentResponse }) {
   };
 
   return (
-    <header className="flex items-start justify-between gap-3">
+    <header className="relative flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center gap-2.5">
           <ProcessingStatus status={document.status} />
@@ -111,15 +111,13 @@ function DocumentHeader({ document }: { document: DocumentResponse }) {
             {formatBytes(document.size_bytes)}
           </span>
         </div>
-        <h1 className="text-[24px] font-semibold leading-tight text-ink lg:text-[28px]">
+        <h1 className="overflow-hidden break-all text-[24px] font-semibold leading-tight text-ink lg:text-[28px]">
           {document.title || document.original_filename}
         </h1>
         <p className="mt-1 text-sm text-ink-muted">
           <time dateTime={document.created_at}>
             {formatDateRu(document.created_at)}
           </time>
-          {" · "}
-          <span className="break-all">{document.original_filename}</span>
         </p>
       </div>
 

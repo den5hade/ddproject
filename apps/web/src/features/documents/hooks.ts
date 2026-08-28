@@ -61,6 +61,7 @@ export function useDocumentWithPolling(documentId: string | undefined) {
     queryKey: keys.document(documentId ?? "_"),
     queryFn: () => api.getDocument(documentId!),
     enabled: documentId !== undefined,
+    refetchOnWindowFocus: false,
     refetchInterval: (query) =>
       query.state.data && isProcessing(query.state.data.status) ? 4000 : false,
   });

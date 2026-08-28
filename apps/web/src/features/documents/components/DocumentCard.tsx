@@ -26,7 +26,7 @@ export function DocumentCard({ document, to }: DocumentCardProps) {
     <Link
       to={href}
       className={cn(
-        "flex items-center gap-4 rounded-xl border border-border bg-surface px-4 py-3.5",
+        "flex items-start gap-4 rounded-xl border border-border bg-surface px-4 py-3.5",
         "transition-colors duration-150 ease-out hover:bg-surface-muted",
       )}
     >
@@ -42,19 +42,19 @@ export function DocumentCard({ document, to }: DocumentCardProps) {
       </span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[15px] font-medium text-ink">
+        <span className="block text-[15px] font-medium text-ink break-all">
           {document.title || document.original_filename}
         </span>
         <span className="mt-0.5 flex items-center gap-2 text-caption text-ink-muted">
-          <span>{isImage(document.mime_type) ? "Изображение" : "PDF"}</span>
-          <span aria-hidden="true">·</span>
           <time dateTime={document.created_at}>
             {formatDateShortRu(document.created_at)}
           </time>
         </span>
+        <span className="mt-1.5">
+          <ProcessingStatus status={document.status} />
+        </span>
       </span>
 
-      <ProcessingStatus status={document.status} />
       <ChevronRight size={16} strokeWidth={2} className="shrink-0 text-ink-muted" />
     </Link>
   );
