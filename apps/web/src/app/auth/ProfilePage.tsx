@@ -115,16 +115,8 @@ export function ProfilePage() {
           </div>
         ) : (
           <form onSubmit={submit} noValidate className="flex max-w-[480px] flex-col gap-4">
-            <Field label={strings.profile.firstName} htmlFor="first_name" error={errors.first_name?.message}>
-              <Input id="first_name" autoComplete="given-name" {...register("first_name")} />
-            </Field>
-
-            <Field label={strings.profile.lastName} htmlFor="last_name" error={errors.last_name?.message}>
-              <Input id="last_name" autoComplete="family-name" {...register("last_name")} />
-            </Field>
-
-            <Field label={strings.profile.middleName} htmlFor="middle_name" error={errors.middle_name?.message}>
-              <Input id="middle_name" {...register("middle_name")} />
+            <Field label={strings.profile.name} htmlFor="name" error={errors.name?.message}>
+              <Input id="name" autoComplete="name" {...register("name")} />
             </Field>
 
             <Field label={strings.profile.dateOfBirth} htmlFor="date_of_birth" error={errors.date_of_birth?.message}>
@@ -147,6 +139,24 @@ export function ProfilePage() {
                 onChange={onSexChange}
               />
             </Field>
+
+            <Field label={strings.profile.city} htmlFor="city" error={errors.city?.message}>
+              <Input id="city" autoComplete="address-level2" {...register("city")} />
+            </Field>
+
+            <Field label={strings.profile.profession} htmlFor="profession" error={errors.profession?.message}>
+              <Input id="profession" {...register("profession")} />
+            </Field>
+
+            <div className="flex gap-4">
+              <Field label={strings.profile.height} htmlFor="height" error={errors.height?.message}>
+                <Input id="height" type="text" inputMode="decimal" {...register("height")} />
+              </Field>
+
+              <Field label={strings.profile.weight} htmlFor="weight" error={errors.weight?.message}>
+                <Input id="weight" type="text" inputMode="decimal" {...register("weight")} />
+              </Field>
+            </div>
 
             {errors.root?.message && (
               <p role="alert" className="text-sm text-danger">
