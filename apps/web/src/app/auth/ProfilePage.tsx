@@ -1,17 +1,19 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useController, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { useMe, useMyPatient, useLogout } from "@/features/auth/hooks";
 import { LogoutButton } from "@/features/auth/components/LogoutButton";
 import {
   fromPerson,
+  maskDateOfBirth,
   profileFormSchema,
   toPersonUpdate,
   type ProfileFormValues,
 } from "@/features/patients/schemas";
 import { useUpdateMyPerson } from "@/features/patients/hooks";
 import { strings } from "@/lib/i18n/strings";
+import { pluralYears } from "@/lib/utils/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,6 +37,8 @@ export function ProfilePage() {
   const patient = useMyPatient();
   const logout = useLogout();
   const updatePerson = useUpdateMyPerson();
+  const [editingDob, setEditingDob] = useState(false);
+  const person = patient.data?.person;
 
   const {
     register,
@@ -46,6 +50,7 @@ export function ProfilePage() {
   } = useForm<ProfileFormValues>({
     resolver: zodResolver(profileFormSchema),
     defaultValues: fromPerson({}),
+    shouldUnregister: true,
   });
 
   const {
@@ -61,7 +66,10 @@ export function ProfilePage() {
 
   const submit = handleSubmit((values) => {
     updatePerson.mutate(toPersonUpdate(values), {
-      onSuccess: () => toast(strings.profile.savedToast),
+      onSuccess: () => {
+        setEditingDob(false);
+        toast(strings.profile.savedToast);
+      },
       onError: (error) => {
         // Surface field errors from 422 loc mapping; generic otherwise
         const fields = (
@@ -119,15 +127,45 @@ export function ProfilePage() {
               <Input id="name" autoComplete="name" {...register("name")} />
             </Field>
 
-            <Field label={strings.profile.age} htmlFor="age" error={errors.age?.message}>
-              <Input
-                id="age"
-                type="text"
-                inputMode="numeric"
-                placeholder={strings.profile.agePlaceholder}
-                {...register("age")}
-              />
-            </Field>
+            {person?.date_of_birth && !editingDob ? (
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col gap-2">
+                  <span className="select-none text-sm font-medium text-ink">
+                    {strings.profile.dateOfBirth}
+                  </span>
+                  <p className="text-[15px] text-ink">
+                    {person.age != null ? pluralYears(person.age) : "—"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setEditingDob(true)}
+                >
+                  {strings.profile.dateOfBirthEdit}
+                </Button>
+              </div>
+            ) : (
+              <Field
+                label={strings.profile.dateOfBirth}
+                htmlFor="date_of_birth"
+                error={errors.date_of_birth?.message}
+              >
+                <Input
+                  id="date_of_birth"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="bday"
+                  maxLength={10}
+                  placeholder={strings.profile.dateOfBirthPlaceholder}
+                  {...register("date_of_birth", {
+                    onChange: (event) => {
+                      event.target.value = maskDateOfBirth(event.target.value);
+                    },
+                  })}
+                />
+              </Field>
+            )}
 
             <Field label={strings.profile.sex} htmlFor="sex" error={errors.sex?.message}>
               <SelectDropdown

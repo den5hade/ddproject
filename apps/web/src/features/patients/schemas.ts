@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { PersonUpdate } from "./api";
 
 /*
- * Profile form schema. Backend stores date_of_birth, but the UI
- * shows age in full years. toPersonUpdate converts age → date_of_birth,
- * fromPerson converts date_of_birth → age.
+ * Profile form schema. The UI collects date_of_birth in a masked
+ * ДД.ММ.ГГГГ input; toPersonUpdate converts it to the ISO YYYY-MM-DD
+ * format the API stores, fromPerson converts back for prefill.
  */
 
 const SEX_VALUES = ["male", "female", "unspecified"] as const;
@@ -14,15 +14,21 @@ const optionalName = z
   .trim()
   .max(255, "Максимум 255 символов");
 
+const FULL_DOB = /^(\d{2}\.\d{2}\.\d{4})?$/;
+const DOB_REQUIRED = "ДД.ММ.ГГГГ";
+const DATE_INVALID = "Такой даты не существует";
+const DATE_FUTURE = "Дата не может быть в будущем";
+
+const dateOfBirthField = z
+  .string()
+  .trim()
+  .regex(FULL_DOB, DOB_REQUIRED)
+  .refine((v) => v === "" || isRealCalendarDate(parseMask(v)), DATE_INVALID)
+  .refine((v) => v === "" || !isFutureDate(parseMask(v)), DATE_FUTURE);
+
 export const profileFormSchema = z.object({
   name: optionalName,
-  age: z
-    .string()
-    .regex(/^(\d{1,3})?$/, "Возраст: 0–150")
-    .refine(
-      (v) => v === "" || (Number(v) >= 0 && Number(v) <= 150),
-      "Возраст: 0–150",
-    ),
+  date_of_birth: dateOfBirthField,
   sex: z.enum(["", ...SEX_VALUES]),
   city: optionalName,
   profession: optionalName,
@@ -44,25 +50,53 @@ export const profileFormSchema = z.object({
 
 export type ProfileFormValues = z.infer<typeof profileFormSchema>;
 
-/** Convert age in years → approximate date_of_birth (YYYY-MM-DD). */
-function ageToDateOfBirth(ageStr: string): string | undefined {
-  const age = Number(ageStr);
-  if (!age || age < 0 || age > 150) return undefined;
-  const now = new Date();
-  const dob = new Date(now.getFullYear() - age, now.getMonth(), now.getDate());
-  return dob.toISOString().slice(0, 10);
+/** Digits-only → masked ДД.ММ.ГГГГ (typing mask, capped at 8 digits). */
+export function maskDateOfBirth(input: string): string {
+  const digits = input.replace(/\D/g, "").slice(0, 8);
+  return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)]
+    .filter(Boolean)
+    .join(".");
 }
 
-/** Convert date_of_birth (YYYY-MM-DD) → age in full years. */
-function dateOfBirthToAge(dob: string): string {
-  const birth = new Date(dob);
-  const now = new Date();
-  let age = now.getFullYear() - birth.getFullYear();
-  const monthDiff = now.getMonth() - birth.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birth.getDate())) {
-    age--;
-  }
-  return age >= 0 ? String(age) : "";
+type MaskParts = { day: number; month: number; year: number };
+
+function parseMask(mask: string): MaskParts | null {
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(mask)) return null;
+  const [day, month, year] = mask.split(".").map(Number);
+  return { day, month, year };
+}
+
+/** Reject overflow dates like 30.02 or 31.04 via UTC-normalization round-trip. */
+function isRealCalendarDate(parts: MaskParts | null): boolean {
+  if (!parts) return false;
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  return (
+    date.getUTCFullYear() === parts.year &&
+    date.getUTCMonth() === parts.month - 1 &&
+    date.getUTCDate() === parts.day
+  );
+}
+
+function isFutureDate(parts: MaskParts | null): boolean {
+  if (!parts) return false;
+  const birth = new Date(parts.year, parts.month - 1, parts.day);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return birth > today;
+}
+
+/** ДД.ММ.ГГГГ → YYYY-MM-DD (or undefined for incomplete masks). */
+function maskToIso(mask: string): string | undefined {
+  const parts = parseMask(mask);
+  if (!parts) return undefined;
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+/** YYYY-MM-DD → ДД.ММ.ГГГГ (or "" for malformed input). */
+function isoToMask(iso: string): string {
+  const [year, month, day] = iso.split("-");
+  if (!year || !month || !day) return "";
+  return `${day}.${month}.${year}`;
 }
 
 /** "" → omit key entirely so PATCH never clears fields unintentionally. */
@@ -72,7 +106,7 @@ export function toPersonUpdate(values: ProfileFormValues): PersonUpdate {
     if (raw !== "") body[key] = raw as PersonUpdate[K];
   };
   assign("name", values.name);
-  const dob = ageToDateOfBirth(values.age);
+  const dob = maskToIso(values.date_of_birth);
   if (dob) body.date_of_birth = dob;
   if (values.sex !== "") body.sex = values.sex;
   assign("city", values.city);
@@ -94,7 +128,7 @@ export function fromPerson(person: {
 }): ProfileFormValues {
   return {
     name: person.name ?? "",
-    age: person.date_of_birth ? dateOfBirthToAge(person.date_of_birth.slice(0, 10)) : "",
+    date_of_birth: person.date_of_birth ? isoToMask(person.date_of_birth.slice(0, 10)) : "",
     sex: (person.sex as ProfileFormValues["sex"]) ?? "",
     city: person.city ?? "",
     profession: person.profession ?? "",

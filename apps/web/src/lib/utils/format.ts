@@ -65,3 +65,13 @@ export function formatBytes(bytes: number): string {
   const mb = kb / 1024;
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(mb)} МБ`;
 }
+
+/** «1 год» · «3 года» · «25 лет» — Russian pluralization for age. */
+export function pluralYears(years: number): string {
+  const abs = Math.abs(Math.trunc(years)) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return `${years} лет`;
+  if (last === 1) return `${years} год`;
+  if (last >= 2 && last <= 4) return `${years} года`;
+  return `${years} лет`;
+}

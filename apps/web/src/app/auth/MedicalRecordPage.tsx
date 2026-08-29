@@ -5,6 +5,7 @@ import { DocumentList } from "@/features/documents/components/DocumentList";
 import { TabPanel, Tabs, TabsList } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { strings } from "@/lib/i18n/strings";
+import { pluralYears } from "@/lib/utils/format";
 
 /*
  * Medical record (plan §6.7): read-only for MVP.
@@ -26,7 +27,7 @@ export function MedicalRecordPage() {
     [strings.profile.name, person?.name?.trim() || "—"],
     [
       strings.profile.age,
-      person?.age != null ? `${person.age} лет` : "—",
+      person?.age != null ? pluralYears(person.age) : "—",
     ],
     [strings.profile.sex, person?.sex ? (SEX_LABELS[person.sex] ?? "—") : "—"],
     [strings.profile.city, person?.city?.trim() || "—"],
