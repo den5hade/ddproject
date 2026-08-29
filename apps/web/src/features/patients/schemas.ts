@@ -15,9 +15,7 @@ const optionalName = z
   .max(255, "Максимум 255 символов");
 
 export const profileFormSchema = z.object({
-  first_name: optionalName,
-  last_name: optionalName,
-  middle_name: optionalName.max(255, "Максимум 255 символов"),
+  name: optionalName,
   date_of_birth: z
     .string()
     .regex(/^(\d{4}-\d{2}-\d{2})?$/, "Формат даты: ГГГГ-ММ-ДД")
@@ -26,6 +24,22 @@ export const profileFormSchema = z.object({
       "Дата рождения не может быть в будущем",
     ),
   sex: z.enum(["", ...SEX_VALUES]),
+  city: optionalName,
+  profession: optionalName,
+  height: z
+    .string()
+    .regex(/^(\d+\.?\d*)?$/, "Только числа")
+    .refine(
+      (v) => v === "" || (Number(v) >= 0 && Number(v) <= 300),
+      "Рост: 0–300 см",
+    ),
+  weight: z
+    .string()
+    .regex(/^(\d+\.?\d*)?$/, "Только числа")
+    .refine(
+      (v) => v === "" || (Number(v) >= 0 && Number(v) <= 500),
+      "Вес: 0–500 кг",
+    ),
 });
 
 export type ProfileFormValues = z.infer<typeof profileFormSchema>;
@@ -36,27 +50,33 @@ export function toPersonUpdate(values: ProfileFormValues): PersonUpdate {
   const assign = <K extends keyof PersonUpdate>(key: K, raw: string) => {
     if (raw !== "") body[key] = raw as PersonUpdate[K];
   };
-  assign("first_name", values.first_name);
-  assign("last_name", values.last_name);
-  assign("middle_name", values.middle_name);
+  assign("name", values.name);
   assign("date_of_birth", values.date_of_birth);
   if (values.sex !== "") body.sex = values.sex;
+  assign("city", values.city);
+  assign("profession", values.profession);
+  if (values.height !== "") body.height = Number(values.height);
+  if (values.weight !== "") body.weight = Number(values.weight);
   return body;
 }
 
 /** Reverse mapping for form default values from the API person object. */
 export function fromPerson(person: {
-  first_name?: string | null;
-  last_name?: string | null;
-  middle_name?: string | null;
+  name?: string | null;
   date_of_birth?: string | null;
   sex?: string | null;
+  city?: string | null;
+  profession?: string | null;
+  height?: number | null;
+  weight?: number | null;
 }): ProfileFormValues {
   return {
-    first_name: person.first_name ?? "",
-    last_name: person.last_name ?? "",
-    middle_name: person.middle_name ?? "",
+    name: person.name ?? "",
     date_of_birth: person.date_of_birth?.slice(0, 10) ?? "",
     sex: (person.sex as ProfileFormValues["sex"]) ?? "",
+    city: person.city ?? "",
+    profession: person.profession ?? "",
+    height: person.height != null ? String(person.height) : "",
+    weight: person.weight != null ? String(person.weight) : "",
   };
 }
