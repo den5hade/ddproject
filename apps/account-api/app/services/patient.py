@@ -100,7 +100,7 @@ class PatientService:
         person = Person()
         if data is not None and data.person is not None:
             for field, value in data.person.model_dump(exclude_unset=True).items():
-                if value is None and field in {"first_name", "last_name"}:
+                if value is None and field == "name":
                     continue
                 setattr(person, field, value)
         return person
