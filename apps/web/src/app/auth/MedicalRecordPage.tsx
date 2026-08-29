@@ -23,14 +23,20 @@ export function MedicalRecordPage() {
   const person = patient.data?.person;
 
   const rows: Array<[string, string]> = [
-    [strings.profile.firstName, person?.first_name?.trim() || "—"],
-    [strings.profile.lastName, person?.last_name?.trim() || "—"],
-    [strings.profile.middleName, person?.middle_name?.trim() || "—"],
+    [strings.profile.name, person?.name?.trim() || "—"],
+    [
+      strings.profile.age,
+      person?.age != null ? String(person.age) : "—",
+    ],
     [
       strings.profile.dateOfBirth,
       person?.date_of_birth ? person.date_of_birth.slice(0, 10) : "—",
     ],
     [strings.profile.sex, person?.sex ? (SEX_LABELS[person.sex] ?? "—") : "—"],
+    [strings.profile.city, person?.city?.trim() || "—"],
+    [strings.profile.profession, person?.profession?.trim() || "—"],
+    [strings.profile.height, person?.height != null ? String(person.height) : "—"],
+    [strings.profile.weight, person?.weight != null ? String(person.weight) : "—"],
   ];
 
   return (
