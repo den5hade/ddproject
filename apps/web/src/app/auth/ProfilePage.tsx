@@ -119,12 +119,13 @@ export function ProfilePage() {
               <Input id="name" autoComplete="name" {...register("name")} />
             </Field>
 
-            <Field label={strings.profile.dateOfBirth} htmlFor="date_of_birth" error={errors.date_of_birth?.message}>
+            <Field label={strings.profile.age} htmlFor="age" error={errors.age?.message}>
               <Input
-                id="date_of_birth"
-                type="date"
-                max={new Date().toISOString().slice(0, 10)}
-                {...register("date_of_birth")}
+                id="age"
+                type="text"
+                inputMode="numeric"
+                placeholder={strings.profile.agePlaceholder}
+                {...register("age")}
               />
             </Field>
 

@@ -103,6 +103,7 @@ export const strings = {
     height: "Рост (см)",
     weight: "Вес (кг)",
     age: "Возраст",
+    agePlaceholder: "Например, 25",
     sexMale: "Мужской",
     sexFemale: "Женский",
     sexUnspecified: "Не указан",

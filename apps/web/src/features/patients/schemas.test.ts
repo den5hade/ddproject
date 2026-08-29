@@ -5,13 +5,11 @@ import {
   toPersonUpdate,
 } from "./schemas";
 
-const today = new Date().toISOString().slice(0, 10);
-
 describe("profileFormSchema", () => {
   it("accepts empty form (all optional)", () => {
     const result = profileFormSchema.safeParse({
       name: "",
-      date_of_birth: "",
+      age: "",
       sex: "",
       city: "",
       profession: "",
@@ -21,10 +19,23 @@ describe("profileFormSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects future dates of birth (mirrors backend validator)", () => {
+  it("accepts valid age", () => {
     const result = profileFormSchema.safeParse({
       name: "",
-      date_of_birth: "2100-01-01",
+      age: "25",
+      sex: "",
+      city: "",
+      profession: "",
+      height: "",
+      weight: "",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects age > 150", () => {
+    const result = profileFormSchema.safeParse({
+      name: "",
+      age: "151",
       sex: "",
       city: "",
       profession: "",
@@ -32,28 +43,10 @@ describe("profileFormSchema", () => {
       weight: "",
     });
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues[0]?.message).toMatch(/будущем/);
-    }
-  });
-
-  it("accepts today and past dates", () => {
-    for (const dob of [today, "1990-05-15"]) {
-      const result = profileFormSchema.safeParse({
-        name: "",
-        date_of_birth: dob,
-        sex: "",
-        city: "",
-        profession: "",
-        height: "",
-        weight: "",
-      });
-      expect(result.success).toBe(true);
-    }
   });
 
   it("restricts sex to backend enum values or empty", () => {
-    const base = { name: "", date_of_birth: "", city: "", profession: "", height: "", weight: "" };
+    const base = { name: "", age: "", city: "", profession: "", height: "", weight: "" };
     expect(profileFormSchema.safeParse({ ...base, sex: "male" }).success).toBe(true);
     expect(profileFormSchema.safeParse({ ...base, sex: "robot" }).success).toBe(false);
   });
@@ -61,7 +54,7 @@ describe("profileFormSchema", () => {
   it("caps name length at 255", () => {
     const result = profileFormSchema.safeParse({
       name: "a".repeat(256),
-      date_of_birth: "",
+      age: "",
       sex: "",
       city: "",
       profession: "",
@@ -76,7 +69,7 @@ describe("toPersonUpdate", () => {
   it("omits empty fields so PATCH never clears data unintentionally", () => {
     const body = toPersonUpdate({
       name: "Анна",
-      date_of_birth: "",
+      age: "",
       sex: "",
       city: "",
       profession: "",
@@ -87,48 +80,60 @@ describe("toPersonUpdate", () => {
     expect(body.name).toBe("Анна");
   });
 
-  it("includes provided values only", () => {
+  it("converts age to date_of_birth", () => {
     const body = toPersonUpdate({
       name: "",
-      date_of_birth: today,
+      age: "30",
       sex: "female",
       city: "Москва",
       profession: "Врач",
       height: "170",
       weight: "65",
     });
-    expect(body).toEqual({
-      date_of_birth: today,
-      sex: "female",
-      city: "Москва",
-      profession: "Врач",
-      height: 170,
-      weight: 65,
-    } as Record<string, unknown>);
+    expect(body.date_of_birth).toBeDefined();
+    expect(body.sex).toBe("female");
+    expect(body.city).toBe("Москва");
+    expect(body.profession).toBe("Врач");
+    expect(body.height).toBe(170);
+    expect(body.weight).toBe(65);
   });
 });
 
 describe("fromPerson round-trip", () => {
-  it("maps API person → form defaults with nulls as empty strings", () => {
+  it("converts date_of_birth to age string", () => {
+    const today = new Date();
+    const dob = new Date(today.getFullYear() - 25, today.getMonth(), today.getDate());
+    const dobStr = dob.toISOString().slice(0, 10);
+
     const values = fromPerson({
       name: "Анна",
-      date_of_birth: "1990-05-15T00:00:00+03:00",
+      date_of_birth: dobStr,
       sex: null,
       city: null,
       profession: null,
       height: 165.5,
       weight: 60.0,
     });
-    expect(values).toEqual({
-      name: "Анна",
-      date_of_birth: "1990-05-15",
-      sex: "",
-      city: "",
-      profession: "",
-      height: "165.5",
-      weight: "60",
-    });
+    expect(values.name).toBe("Анна");
+    expect(values.age).toBe("25");
+    expect(values.sex).toBe("");
+    expect(values.city).toBe("");
+    expect(values.height).toBe("165.5");
+    expect(values.weight).toBe("60");
     // And the values must validate
     expect(profileFormSchema.safeParse(values).success).toBe(true);
+  });
+
+  it("returns empty age when date_of_birth is null", () => {
+    const values = fromPerson({
+      name: "Иван",
+      date_of_birth: null,
+      sex: null,
+      city: null,
+      profession: null,
+      height: null,
+      weight: null,
+    });
+    expect(values.age).toBe("");
   });
 });
