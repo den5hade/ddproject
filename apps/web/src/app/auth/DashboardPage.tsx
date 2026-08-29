@@ -25,7 +25,7 @@ export function DashboardPage() {
   const patient = useMyPatient();
   const documents = useMyPatientDocuments(patient.data?.id);
 
-  const firstName = patient.data?.person.first_name.trim();
+  const firstName = patient.data?.person.name.trim();
   const greetingKey =
     firstName && firstName.length > 0 ? greetingForHour(new Date().getHours()) : null;
   const GREETINGS = {
