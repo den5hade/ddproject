@@ -26,17 +26,13 @@ export function MedicalRecordPage() {
     [strings.profile.name, person?.name?.trim() || "—"],
     [
       strings.profile.age,
-      person?.age != null ? String(person.age) : "—",
-    ],
-    [
-      strings.profile.dateOfBirth,
-      person?.date_of_birth ? person.date_of_birth.slice(0, 10) : "—",
+      person?.age != null ? `${person.age} лет` : "—",
     ],
     [strings.profile.sex, person?.sex ? (SEX_LABELS[person.sex] ?? "—") : "—"],
     [strings.profile.city, person?.city?.trim() || "—"],
     [strings.profile.profession, person?.profession?.trim() || "—"],
-    [strings.profile.height, person?.height != null ? String(person.height) : "—"],
-    [strings.profile.weight, person?.weight != null ? String(person.weight) : "—"],
+    [strings.profile.height, person?.height != null ? `${person.height} см` : "—"],
+    [strings.profile.weight, person?.weight != null ? `${person.weight} кг` : "—"],
   ];
 
   return (
