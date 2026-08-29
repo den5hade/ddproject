@@ -925,27 +925,37 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** First Name */
-            first_name: string;
-            /** Last Name */
-            last_name: string;
-            /** Middle Name */
-            middle_name: string | null;
+            /** Name */
+            name: string;
             /** Date Of Birth */
             date_of_birth: string | null;
             sex: components["schemas"]["Sex"] | null;
+            /** City */
+            city: string | null;
+            /** Profession */
+            profession: string | null;
+            /** Height */
+            height: number | null;
+            /** Weight */
+            weight: number | null;
+            /** Age */
+            age: number | null;
         };
         /** PersonUpdate */
         PersonUpdate: {
-            /** First Name */
-            first_name?: string | null;
-            /** Last Name */
-            last_name?: string | null;
-            /** Middle Name */
-            middle_name?: string | null;
+            /** Name */
+            name?: string | null;
             /** Date Of Birth */
             date_of_birth?: string | null;
             sex?: components["schemas"]["Sex"] | null;
+            /** City */
+            city?: string | null;
+            /** Profession */
+            profession?: string | null;
+            /** Height */
+            height?: number | null;
+            /** Weight */
+            weight?: number | null;
         };
         /**
          * ProcessingJobStatus
