@@ -72,19 +72,23 @@ async def test_create_patient_applies_person_data(db_session):
         account,
         PatientCreateRequest(
             person=PersonUpdate(
-                first_name="Anna",
-                last_name="Smith",
-                middle_name="V.",
+                name="Anna Smith V.",
                 date_of_birth=date(1990, 1, 1),
                 sex=Sex.FEMALE,
+                city="Moscow",
+                profession="Doctor",
+                height=165.0,
+                weight=60.0,
             )
         ),
     )
-    assert context.person.first_name == "Anna"
-    assert context.person.last_name == "Smith"
-    assert context.person.middle_name == "V."
+    assert context.person.name == "Anna Smith V."
     assert context.person.date_of_birth == date(1990, 1, 1)
     assert context.person.sex == Sex.FEMALE
+    assert context.person.city == "Moscow"
+    assert context.person.profession == "Doctor"
+    assert context.person.height == 165.0
+    assert context.person.weight == 60.0
 
 
 async def test_update_person_persists_and_clears_nullable(db_session):
@@ -92,15 +96,15 @@ async def test_update_person_persists_and_clears_nullable(db_session):
     account = await _account(db_session)
 
     context = await service.update_person(
-        account, PersonUpdate(first_name="Alex", date_of_birth=date(1995, 5, 5))
+        account, PersonUpdate(name="Alex", date_of_birth=date(1995, 5, 5))
     )
-    assert context.person.first_name == "Alex"
+    assert context.person.name == "Alex"
     assert context.person.date_of_birth == date(1995, 5, 5)
 
     context = await service.update_person(account, PersonUpdate(date_of_birth=None))
-    assert context.person.first_name == "Alex"
+    assert context.person.name == "Alex"
     assert context.person.date_of_birth is None
 
     person = await db_session.get(Person, context.person.id)
     assert person.date_of_birth is None
-    assert person.first_name == "Alex"
+    assert person.name == "Alex"

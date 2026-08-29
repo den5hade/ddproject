@@ -62,7 +62,7 @@ async def test_create_patient_and_read_me(app_client, fake_redis):
     assert created.status_code == 201
     body = created.json()
     assert body["status"] == "active"
-    assert body["person"]["first_name"] == ""
+    assert body["person"]["name"] == ""
 
     me = await app_client.get("/api/v1/patients/me", headers=headers)
     assert me.status_code == 200
@@ -75,12 +75,11 @@ async def test_create_patient_with_person_data(app_client, fake_redis):
 
     resp = await app_client.post(
         "/api/v1/patients",
-        json={"person": {"first_name": "Ivan", "last_name": "Petrov", "sex": "male"}},
+        json={"person": {"name": "Ivan Petrov", "sex": "male"}},
         headers=headers,
     )
     assert resp.status_code == 201
-    assert resp.json()["person"]["first_name"] == "Ivan"
-    assert resp.json()["person"]["last_name"] == "Petrov"
+    assert resp.json()["person"]["name"] == "Ivan Petrov"
 
 
 async def test_create_patient_conflict(app_client, fake_redis):
@@ -119,14 +118,14 @@ async def test_patch_me_updates_person(app_client, fake_redis):
 
     patched = await app_client.patch(
         "/api/v1/patients/me",
-        json={"first_name": "Olga", "date_of_birth": "1992-03-03"},
+        json={"name": "Olga Petrova", "date_of_birth": "1992-03-03"},
         headers=headers,
     )
     assert patched.status_code == 200
-    assert patched.json()["person"]["first_name"] == "Olga"
+    assert patched.json()["person"]["name"] == "Olga Petrova"
 
     me = await app_client.get("/api/v1/patients/me", headers=headers)
-    assert me.json()["person"]["first_name"] == "Olga"
+    assert me.json()["person"]["name"] == "Olga Petrova"
     assert me.json()["person"]["date_of_birth"] == "1992-03-03"
 
 
