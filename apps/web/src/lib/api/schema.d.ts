@@ -939,7 +939,7 @@ export interface components {
             /** Weight */
             weight: number | null;
             /** Age */
-            age: number | null;
+            readonly age: number | null;
         };
         /** PersonUpdate */
         PersonUpdate: {
