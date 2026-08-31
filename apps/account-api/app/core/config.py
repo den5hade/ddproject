@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     log_max_bytes: int = 10 * 1024 * 1024
     log_backup_count: int = 5
     enable_request_logging: bool = True
-    log_request_body: bool = True
+    log_request_body: bool = False
     log_response_body: bool = False
     max_log_body_size: int = 10000
 

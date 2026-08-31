@@ -79,6 +79,11 @@ class CloudS3:
             if code == 404:
                 self.client.create_bucket(Bucket=bucket)
                 logger.info("s3_bucket_created bucket=%s", bucket)
+            elif code == 403:
+                logger.warning(
+                    "s3_bucket_head_denied bucket=%s — credentials lack HeadBucket permission, proceeding anyway",
+                    bucket,
+                )
             else:
                 raise
 
@@ -91,6 +96,12 @@ class CloudS3:
         except ClientError as exc:
             code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             if code == 404:
+                return None
+            if code == 403:
+                logger.warning(
+                    "s3_head_denied key=%s — credentials lack read permission, treating as absent",
+                    key,
+                )
                 return None
             raise
 
