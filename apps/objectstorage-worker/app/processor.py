@@ -47,13 +47,17 @@ class StorageProcessor:
         actual_size = os.path.getsize(local_path)
         checksum = await asyncio.to_thread(_sha256, local_path)
         filename = original_filename_for(event.mime_type)
-        key = build_key(
-            event.tenant_id,
-            event.patient_id,
-            event.document_id,
-            event.document_version_id,
-            filename,
-        ) if event.document_version_id else ""
+        key = (
+            build_key(
+                event.tenant_id,
+                event.patient_id,
+                event.document_id,
+                event.document_version_id,
+                filename,
+            )
+            if event.document_version_id
+            else ""
+        )
 
         if await asyncio.to_thread(self._s3.head, key):
             logger.info("object_already_stored key=%s; skipping upload", key)
@@ -88,12 +92,12 @@ class StorageProcessor:
                 mime_type=event.mime_type,
                 size_bytes=size,
                 checksum=checksum,
+                original_filename=event.original_filename,
+                document_type=event.document_type,
             ),
         )
 
-    async def _fail(
-        self, event: DocumentUploadRequested, error_code: str, message: str
-    ) -> None:
+    async def _fail(self, event: DocumentUploadRequested, error_code: str, message: str) -> None:
         logger.warning(
             "upload_rejected code=%s document_id=%s message=%s",
             error_code,

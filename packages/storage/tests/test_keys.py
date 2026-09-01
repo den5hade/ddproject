@@ -1,7 +1,12 @@
 from uuid import uuid4
 
 from storage import ALLOWED_MIME_TYPES
-from storage.keys import build_key, original_filename_for
+from storage.keys import (
+    build_key,
+    markdown_artifact_filename,
+    markdown_key,
+    original_filename_for,
+)
 
 
 def test_build_key_uses_immutable_ids():
@@ -36,3 +41,52 @@ def test_allowed_mime_types_match_extension_map():
     for mime in ALLOWED_MIME_TYPES:
         ext = original_filename_for(mime).split(".")[-1]
         assert ext != "bin"
+
+
+def test_markdown_artifact_filename_known_kinds():
+    assert markdown_artifact_filename("unstructured") == "marker.md"
+    assert markdown_artifact_filename("structured") == "structured.md"
+    assert markdown_artifact_filename("canonical") == "canonical.json"
+
+
+def test_markdown_artifact_filename_unknown_kind_raises():
+    try:
+        markdown_artifact_filename("nope")
+    except ValueError as exc:
+        assert "unknown markdown artifact" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_markdown_key_builds_full_immutable_path():
+    tenant = "acme"
+    patient_id, document_id, version_id = uuid4(), uuid4(), uuid4()
+    key = markdown_key(
+        tenant_id=tenant,
+        patient_id=patient_id,
+        document_id=document_id,
+        version_id=version_id,
+        kind="unstructured",
+    )
+    expected = (
+        f"tenants/{tenant}/patients/{patient_id}"
+        f"/documents/{document_id}/versions/{version_id}/marker.md"
+    )
+    assert key == expected
+
+
+def test_markdown_key_canonical_builds_full_immutable_path():
+    tenant = "acme"
+    patient_id, document_id, version_id = uuid4(), uuid4(), uuid4()
+    key = markdown_key(
+        tenant_id=tenant,
+        patient_id=patient_id,
+        document_id=document_id,
+        version_id=version_id,
+        kind="canonical",
+    )
+    expected = (
+        f"tenants/{tenant}/patients/{patient_id}"
+        f"/documents/{document_id}/versions/{version_id}/canonical.json"
+    )
+    assert key == expected

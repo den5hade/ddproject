@@ -12,3 +12,4 @@ class DocumentUploadRequested(DocumentEvent):
     original_filename: str
     mime_type: str
     size_bytes: int
+    document_type: str = "other"

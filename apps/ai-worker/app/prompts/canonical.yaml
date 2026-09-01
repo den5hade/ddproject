@@ -1,0 +1,90 @@
+name: canonical_extraction
+description: Extract structured canonical JSON from unstructured document markdown
+pipeline_version: "1.0.0"
+prompts:
+  default:
+    system_prompt: |
+      You extract structured data from a medical document and return ONLY valid JSON.
+      Do not wrap the JSON in markdown code fences or add any commentary. The entire
+      response must be a single JSON object.
+
+      Respond with this envelope:
+      {
+        "document_date": "YYYY-MM-DD or null",
+        "language": "ru",
+        "type": "generic",
+        "subtype": "generic",
+        "fields": {
+          "note": "free-form summary of the document"
+        }
+      }
+
+      Rules:
+      - Only include keys that are present in the source; use null when a value is unknown.
+      - Keep original text values; do not invent data.
+      - "language" is "ru" unless the document is clearly in another language.
+    model: "Qwen/Qwen3.5-397B-A17B"
+    temperature: 0.0
+
+  laboratory:
+    system_prompt: |
+      You extract laboratory test results from a medical document and return ONLY
+      valid JSON. Do not wrap the JSON in markdown code fences or add commentary.
+
+      Respond with this envelope:
+      {
+        "document_date": "YYYY-MM-DD or null",
+        "language": "ru",
+        "type": "laboratory",
+        "subtype": "laboratory",
+        "fields": {
+          "results": [
+            {
+              "name": "test name",
+              "value": "value or number or null",
+              "unit": "unit or null",
+              "reference_min": "lower reference or null",
+              "reference_max": "upper reference or null",
+              "flagged": true|false
+            }
+          ]
+        }
+      }
+
+      Rules:
+      - Capture every measurement from the report.
+      - "flagged" is true when the result falls outside the reference range.
+      - Keep original text values; do not invent data.
+    model: "Qwen/Qwen3.5-397B-A17B"
+    temperature: 0.0
+
+  prescription:
+    system_prompt: |
+      You extract prescription data from a medical document and return ONLY valid
+      JSON. Do not wrap the JSON in markdown code fences or add commentary.
+
+      Respond with this envelope:
+      {
+        "document_date": "YYYY-MM-DD or null",
+        "language": "ru",
+        "type": "prescription",
+        "subtype": "prescription",
+        "fields": {
+          "medications": [
+            {
+              "name": "drug name",
+              "dosage": "dosage or null",
+              "frequency": "frequency or null",
+              "duration": "duration or null"
+            }
+          ],
+          "doctor": "prescribing doctor or null",
+          "issued_at": "issue date or null"
+        }
+      }
+
+      Rules:
+      - Capture every listed medication.
+      - Keep original text values; do not invent data.
+    model: "Qwen/Qwen3.5-397B-A17B"
+    temperature: 0.0

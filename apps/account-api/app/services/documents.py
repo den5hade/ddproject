@@ -14,10 +14,14 @@ from contracts.events import (
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from storage import ALLOWED_MIME_TYPES
+from storage import (
+    ALLOWED_MIME_TYPES,
+    MARKDOWN_KIND_STRUCTURED,
+)
 
 from app.core.config import settings
 from app.domain.medical import (
+    CanonicalDataNotFoundError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentStatus,
@@ -42,7 +46,12 @@ from app.repositories.document import (
 )
 from app.repositories.encounter import EncounterRepository
 from app.repositories.patient import PatientRepository
-from app.schemas.document import DocumentCreateRequest, DocumentVersionCreateRequest
+from app.schemas.document import (
+    CanonicalDataResponse,
+    CanonicalResponse,
+    DocumentCreateRequest,
+    DocumentVersionCreateRequest,
+)
 from app.services.storage import StorageService
 
 logger = logging.getLogger("account_api.documents")
@@ -167,6 +176,7 @@ class DocumentService:
                     original_filename=filename,
                     mime_type=mime,
                     size_bytes=size,
+                    document_type=data.document_type.value,
                 ),
             )
             if not published:
@@ -230,6 +240,7 @@ class DocumentService:
                     original_filename=filename,
                     mime_type=mime,
                     size_bytes=size,
+                    document_type=document.document_type.value,
                 ),
             )
             if not published:
@@ -260,6 +271,24 @@ class DocumentService:
         document = await self.get_document(document_id)
         return await self._extractions.list_by_document(document.id)
 
+    async def get_canonical(self, document_id: UUID) -> CanonicalDataResponse:
+        """Return the persisted canonical data of the latest succeeded extraction.
+
+        Raises :class:`CanonicalDataNotFoundError` when the document has no
+        succeeded extraction yet.
+        """
+        document = await self.get_document(document_id)
+        extractions = await self._extractions.list_by_document(document.id)
+        for extraction in extractions:  # already newest-first
+            if extraction.status == ExtractionStatus.SUCCEEDED and extraction.data is not None:
+                return CanonicalDataResponse(
+                    schema_name=extraction.schema_name,
+                    schema_version=extraction.schema_version,
+                    confidence=extraction.confidence,
+                    data=extraction.data,
+                )
+        raise CanonicalDataNotFoundError("document has no canonical data yet")
+
     async def get_download_url(
         self,
         document_id: UUID,
@@ -274,6 +303,47 @@ class DocumentService:
         if version is None or not version.s3_key:
             raise DocumentNotFoundError("no stored version available yet")
         return self._storage.download_url(version.s3_key, filename=document.original_filename)
+
+    async def get_markdown(
+        self,
+        document_id: UUID,
+        version_id: UUID | None = None,
+    ) -> CanonicalResponse:
+        """Return inline canonical JSON + rendered markdown for a document version."""
+        document = await self.get_document(document_id)
+        version = (
+            await self._versions.get(version_id)
+            if version_id is not None
+            else await self._versions.latest(document.id)
+        )
+        if version is None or not version.s3_key:
+            raise DocumentNotFoundError("no stored version available yet")
+
+        patient = await self._document_patient(document)
+        if patient is None:
+            raise DocumentNotFoundError("document has no owning patient")
+
+        canonical_key = self._storage.canonical_object_key(
+            patient_id=patient.id,
+            document_id=document.id,
+            version_id=version.id,
+        )
+        canonical = await self._storage.download_json(canonical_key)
+
+        structured_key = self._storage.markdown_object_key(
+            patient_id=patient.id,
+            document_id=document.id,
+            version_id=version.id,
+            kind=MARKDOWN_KIND_STRUCTURED,
+        )
+        structured_markdown = await self._storage.download_text(structured_key)
+
+        return CanonicalResponse(
+            canonical=canonical,
+            canonical_key=canonical_key if canonical is not None else None,
+            structured_markdown=structured_markdown,
+            has_canonical=canonical is not None,
+        )
 
     # ----------------------------------------------------- pipeline event sinks
     async def on_document_stored(self, event: DocumentStored) -> None:
@@ -302,6 +372,10 @@ class DocumentService:
                     document_version_id=event.document_version_id,
                     patient_id=event.patient_id,
                     storage_key=event.storage_key,
+                    original_filename=event.original_filename,
+                    mime_type=event.mime_type,
+                    sha256=event.checksum,
+                    document_type=event.document_type,
                 ),
             )
         await self._session.commit()
@@ -320,9 +394,7 @@ class DocumentService:
             event.document_version_id,
         )
 
-    async def on_document_analysis_completed(
-        self, event: DocumentAnalysisCompleted
-    ) -> None:
+    async def on_document_analysis_completed(self, event: DocumentAnalysisCompleted) -> None:
         extraction = await self._extractions.get(event.extraction_id)
         if extraction is None:
             extraction = DocumentExtraction(
@@ -350,9 +422,7 @@ class DocumentService:
             event.status,
         )
 
-    async def on_document_processing_failed(
-        self, event: DocumentProcessingFailed
-    ) -> None:
+    async def on_document_processing_failed(self, event: DocumentProcessingFailed) -> None:
         document = await self._documents.get(event.document_id)
         if document is not None:
             document.status = DocumentStatus.FAILED
@@ -370,9 +440,7 @@ class DocumentService:
         )
 
     # ---------------------------------------------------------------- helpers
-    async def _conversion_job_or_skip(
-        self, event
-    ) -> DocumentProcessingJob | None:
+    async def _conversion_job_or_skip(self, event) -> DocumentProcessingJob | None:
         if event.document_version_id is None:
             return None
         job = await self._jobs.get_by_version(event.document_version_id)
@@ -409,9 +477,7 @@ class DocumentService:
         await self._publisher.publish(routing_key, event)
         return True
 
-    async def _stage_upload(
-        self, upload: UploadFile, expected_mime: str
-    ) -> tuple[str, int]:
+    async def _stage_upload(self, upload: UploadFile, expected_mime: str) -> tuple[str, int]:
         if upload.size is not None and upload.size > settings.max_upload_bytes:
             raise FileTooLargeError(
                 f"file exceeds the maximum of {settings.max_upload_bytes} bytes"
@@ -439,9 +505,7 @@ class DocumentService:
             _safe_remove(temp_path)
             raise
         if magic_seen is None:
-            raise UnsupportedFileTypeError(
-                "file is empty or has no recognizable content signature"
-            )
+            raise UnsupportedFileTypeError("file is empty or has no recognizable content signature")
         return temp_path, size
 
     @staticmethod
@@ -466,9 +530,7 @@ class DocumentService:
         return patient, medical_record
 
     async def _document_patient(self, document: Document) -> Patient | None:
-        medical_record = await self._session.get(
-            MedicalRecord, document.medical_record_id
-        )
+        medical_record = await self._session.get(MedicalRecord, document.medical_record_id)
         if medical_record is None:
             return None
         return await self._patients.get_by_id(medical_record.patient_id)

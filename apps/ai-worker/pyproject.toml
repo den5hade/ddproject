@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "aio-pika>=9.4",
     "openai>=1.50",
+    "pymupdf>=1.24",
+    "pyyaml>=6.0",
     "qdrant-client>=1.12",
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
@@ -13,6 +15,7 @@ dependencies = [
     "pdf-messaging",
     "pdf-storage",
     "pdf-observability",
+    "pdf-canonical",
 ]
 
 [dependency-groups]
@@ -24,3 +27,8 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -14,4 +14,4 @@ COPY . .
 RUN uv sync --project apps/ai-worker --no-dev --no-install-project
 
 WORKDIR /app/apps/ai-worker
-CMD ["uv", "run", "--no-project", "python", "app/main.py"]
+CMD ["uv", "run", "--no-project", "python", "-m", "app.main"]

@@ -1,5 +1,7 @@
 from contracts.events.auth_otp_requested import AuthOtpRequested
+from contracts.events.document_analysis_requested import DocumentAnalysisRequested
 from contracts.events.document_completed import DocumentAnalysisCompleted
+from contracts.events.document_conversion_requested import DocumentConversionRequested
 from contracts.events.document_converted import DocumentConverted
 from contracts.events.document_processing_failed import DocumentProcessingFailed
 from contracts.events.document_stored import DocumentStored
@@ -9,6 +11,8 @@ from contracts.events.document_uploaded import DocumentUploaded
 __all__ = [
     "AuthOtpRequested",
     "DocumentAnalysisCompleted",
+    "DocumentAnalysisRequested",
+    "DocumentConversionRequested",
     "DocumentConverted",
     "DocumentProcessingFailed",
     "DocumentStored",

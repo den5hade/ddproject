@@ -148,6 +148,13 @@ class CloudS3:
     def download_file(self, key: str, local_path: str) -> None:
         self.client.download_file(self._config.s3_bucket_name, key, local_path)
 
+    def download_bytes(self, key: str) -> bytes:
+        response = self.client.get_object(Bucket=self._config.s3_bucket_name, Key=key)
+        try:
+            return response["Body"].read()
+        finally:
+            response["Body"].close()
+
     def delete_object(self, key: str) -> None:
         self.client.delete_object(Bucket=self._config.s3_bucket_name, Key=key)
         logger.info("s3_deleted key=%s", key)

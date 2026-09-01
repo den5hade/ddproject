@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from app.domain.access import PatientAccessGrantNotFoundError
 from app.domain.account import RoleNotFoundError
 from app.domain.medical import (
+    CanonicalDataNotFoundError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     EncounterNotFoundError,
@@ -33,6 +34,7 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     PatientAlreadyExistsError: status.HTTP_409_CONFLICT,
     # Documents
     DocumentNotFoundError: status.HTTP_404_NOT_FOUND,
+    CanonicalDataNotFoundError: status.HTTP_404_NOT_FOUND,
     DocumentQuotaExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
     FileTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     UnsupportedFileTypeError: status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

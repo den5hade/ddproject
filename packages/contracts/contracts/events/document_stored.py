@@ -8,3 +8,5 @@ class DocumentStored(DocumentEvent):
     mime_type: str
     size_bytes: int
     checksum: str
+    original_filename: str = ""
+    document_type: str = "other"

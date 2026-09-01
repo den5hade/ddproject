@@ -16,6 +16,7 @@ members = [
     "packages/messaging",
     "packages/storage",
     "packages/observability",
+    "packages/canonical",
 ]
 
 [tool.uv.sources]
@@ -23,6 +24,7 @@ pdf-contracts = { workspace = true }
 pdf-messaging = { workspace = true }
 pdf-storage = { workspace = true }
 pdf-observability = { workspace = true }
+pdf-canonical = { workspace = true }
 
 [tool.ruff]
 line-length = 100

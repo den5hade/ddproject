@@ -1,7 +1,18 @@
+import asyncio
+import json
 import logging
 from uuid import UUID
 
-from storage import CloudS3, StorageConfig, build_key, original_filename_for
+from storage import (
+    MARKDOWN_KIND_CANONICAL,
+    MARKDOWN_KIND_STRUCTURED,
+    MARKDOWN_KIND_UNSTRUCTURED,
+    CloudS3,
+    StorageConfig,
+    build_key,
+    markdown_key,
+    original_filename_for,
+)
 
 from app.core.config import settings
 
@@ -57,6 +68,75 @@ class StorageService:
 
     def canonical_filename(self, mime_type: str) -> str:
         return original_filename_for(mime_type)
+
+    def markdown_object_key(
+        self,
+        *,
+        patient_id: UUID,
+        document_id: UUID,
+        version_id: UUID,
+        kind: str,
+    ) -> str:
+        if kind not in (
+            MARKDOWN_KIND_UNSTRUCTURED,
+            MARKDOWN_KIND_STRUCTURED,
+            MARKDOWN_KIND_CANONICAL,
+        ):
+            raise ValueError(f"unknown markdown kind: {kind}")
+        return markdown_key(
+            tenant_id=self.tenant_id(),
+            patient_id=patient_id,
+            document_id=document_id,
+            version_id=version_id,
+            kind=kind,
+        )
+
+    def canonical_object_key(
+        self,
+        *,
+        patient_id: UUID,
+        document_id: UUID,
+        version_id: UUID,
+    ) -> str:
+        return self.markdown_object_key(
+            patient_id=patient_id,
+            document_id=document_id,
+            version_id=version_id,
+            kind=MARKDOWN_KIND_CANONICAL,
+        )
+
+    async def download_text(self, key: str) -> str | None:
+        """Download a UTF-8 text file from S3.
+
+        Returns ``None`` when object storage is not configured or the object
+        does not exist, so callers can treat a missing blob as a graceful
+        absence rather than an error.
+        """
+        if self._s3 is None:
+            return None
+        try:
+            content_bytes = await asyncio.to_thread(self._s3.download_bytes, key)
+        except Exception:
+            logger.debug("download_text_missing key=%s", key)
+            return None
+        return content_bytes.decode("utf-8")
+
+    async def download_json(self, key: str) -> dict | None:
+        """Download a JSON file from S3 and parse it.
+
+        Returns ``None`` when object storage is not configured or the object
+        does not exist, so callers can treat a missing file as a graceful
+        absence rather than an error.
+        """
+        text = await self.download_text(key)
+        if text is None:
+            return None
+        return json.loads(text)
+
+    def object_exists(self, key: str) -> bool:
+        if self._s3 is None:
+            return False
+        return self._s3.head(key) is not None
 
     def download_url(
         self,

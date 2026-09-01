@@ -110,6 +110,10 @@ class DocumentNotFoundError(Exception):
     """A document (or its owning patient) does not exist for the given id."""
 
 
+class CanonicalDataNotFoundError(Exception):
+    """A document has no succeeded extraction yet (no canonical data available)."""
+
+
 class DocumentAccessDeniedError(Exception):
     """The account has no access right to view/upload the document."""
 

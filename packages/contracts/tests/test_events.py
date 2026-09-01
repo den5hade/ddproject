@@ -1,8 +1,12 @@
 from uuid import uuid4
 
 from contracts.events import (
+    DocumentAnalysisRequested,
+    DocumentConversionRequested,
+    DocumentConverted,
     DocumentProcessingFailed,
     DocumentStored,
+    DocumentUploaded,
     DocumentUploadRequested,
 )
 
@@ -25,11 +29,61 @@ def test_document_stored_round_trip():
         mime_type="application/pdf",
         size_bytes=2048,
         checksum="sha256:abc",
+        original_filename="cbc.pdf",
+        document_type="lab_result",
     )
     parsed = DocumentStored.model_validate_json(event.model_dump_json())
     assert parsed == event
     assert parsed.storage_key.endswith("original.pdf")
     assert parsed.schema_version == 1
+    assert parsed.original_filename == "cbc.pdf"
+    assert parsed.document_type == "lab_result"
+
+
+def test_document_stored_source_defaults():
+    event = DocumentStored(
+        event_id=uuid4(),
+        **_base_kwargs(),
+        storage_key="k",
+        mime_type="application/pdf",
+        size_bytes=1,
+        checksum="sha256:x",
+    )
+    assert event.original_filename == ""
+    assert event.document_type == "other"
+
+
+def test_document_uploaded_round_trip():
+    event = DocumentUploaded(
+        event_id=uuid4(),
+        **_base_kwargs(),
+        storage_key="tenants/t/patients/p/documents/d/versions/v/original.pdf",
+        original_filename="cbc.pdf",
+        mime_type="application/pdf",
+        sha256="abc123",
+        document_type="lab_result",
+    )
+    parsed = DocumentUploaded.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.sha256 == "abc123"
+    assert parsed.document_type == "lab_result"
+
+
+def test_document_converted_round_trip():
+    event = DocumentConverted(
+        event_id=uuid4(),
+        **_base_kwargs(),
+        output_storage_key="tenants/t/patients/p/documents/d/versions/v/marker.md",
+        original_filename="cbc.pdf",
+        mime_type="application/pdf",
+        sha256="abc123",
+        document_type="lab_result",
+    )
+    parsed = DocumentConverted.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.output_storage_key.endswith("marker.md")
+    assert parsed.original_filename == "cbc.pdf"
+    assert parsed.document_type == "lab_result"
 
 
 def test_document_upload_requested_round_trip():
@@ -42,16 +96,16 @@ def test_document_upload_requested_round_trip():
         original_filename="cbc.pdf",
         mime_type="application/pdf",
         size_bytes=1024,
+        document_type="lab_result",
     )
     parsed = DocumentUploadRequested.model_validate_json(event.model_dump_json())
     assert parsed == event
     assert parsed.tenant_id == "acme"
+    assert parsed.document_type == "lab_result"
 
 
 def test_document_processing_failed_defaults():
-    event = DocumentProcessingFailed(
-        event_id=uuid4(), **_base_kwargs(), job_type="pdf_conversion"
-    )
+    event = DocumentProcessingFailed(event_id=uuid4(), **_base_kwargs(), job_type="pdf_conversion")
     assert event.error_code is None
     assert event.error_message is None
     parsed = DocumentProcessingFailed.model_validate_json(event.model_dump_json())
@@ -68,3 +122,29 @@ def test_schema_version_defaults_to_one():
         checksum="sha256:x",
     )
     assert event.schema_version == 1
+
+
+def test_document_conversion_requested_round_trip():
+    event = DocumentConversionRequested(
+        event_id=uuid4(),
+        **_base_kwargs(),
+        storage_key="tenants/t/patients/p/documents/d/versions/v/original.pdf",
+        mime_type="application/pdf",
+    )
+    parsed = DocumentConversionRequested.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.storage_key.endswith("original.pdf")
+    assert parsed.mime_type == "application/pdf"
+
+
+def test_document_analysis_requested_round_trip():
+    event = DocumentAnalysisRequested(
+        event_id=uuid4(),
+        **_base_kwargs(),
+        output_storage_key="tenants/t/patients/p/documents/d/versions/v/marker.md",
+        mime_type="text/markdown",
+    )
+    parsed = DocumentAnalysisRequested.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.output_storage_key.endswith("marker.md")
+    assert parsed.mime_type == "text/markdown"

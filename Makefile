@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs migrate
+.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -59,6 +59,12 @@ compose-stop: ## Stop dev stack, keeping containers (restart with compose-start)
 
 compose-logs: ## Tail dev stack logs; SVC=<service> to filter one
 	docker compose -f infrastructure/development/docker-compose.yml logs -f $(SVC)
+
+compose-ai-worker: ## Build & start the ai-worker (opt-in containerized dev mode)
+	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker up -d --build
+
+compose-ai-worker-logs: ## Tail ai-worker logs
+	$(MAKE) compose-logs SVC=ai-worker --no-print-directory
 
 compose-down: ## Stop local dev infra
 	docker compose -f infrastructure/development/docker-compose.yml down

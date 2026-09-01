@@ -183,6 +183,81 @@ async def test_on_document_analysis_completed_creates_extraction(db_session):
     assert (await db_session.get(Document, document.id)).status == DocumentStatus.COMPLETED
 
 
+async def test_analysis_completed_persists_enriched_canonical_and_keys(db_session):
+    """Phase F: enriched DocumentAnalysisCompleted.data (canonical + keys)
+    round-trips into the document_extractions.data JSON column."""
+    account = Account(id=uuid4())
+    db_session.add(account)
+    await db_session.commit()
+    document, version, _job, patient = await _owned_document(db_session, account.id)
+
+    canonical = {"type": "laboratory", "fields": {"wbc": "6.4"}}
+    canonical_key = (
+        f"tenants/default/patients/{patient.id}/documents/{document.id}"
+        f"/versions/{version.id}/canonical.json"
+    )
+    structured_key = canonical_key.replace("canonical.json", "structured.md")
+
+    extraction_id = uuid4()
+    service = DocumentService(db_session)
+    await service.on_document_analysis_completed(
+        DocumentAnalysisCompleted(
+            event_id=uuid4(),
+            document_id=document.id,
+            document_version_id=version.id,
+            patient_id=patient.id,
+            extraction_id=extraction_id,
+            schema_name="laboratory",
+            schema_version="1.0.0",
+            status="succeeded",
+            confidence=1.0,
+            data={**canonical, "canonical_key": canonical_key, "structured_key": structured_key},
+        )
+    )
+
+    extraction = await db_session.get(DocumentExtraction, extraction_id)
+    assert extraction is not None
+    assert extraction.schema_name == "laboratory"
+    assert extraction.schema_version == "1.0.0"
+    assert extraction.status == ExtractionStatus.SUCCEEDED
+    assert extraction.data["type"] == "laboratory"
+    assert extraction.data["fields"] == {"wbc": "6.4"}
+    assert extraction.data["canonical_key"] == canonical_key
+    assert extraction.data["structured_key"] == structured_key
+    assert (await db_session.get(Document, document.id)).status == DocumentStatus.COMPLETED
+
+
+async def test_analysis_completed_creates_extraction_when_id_is_new(db_session):
+    account = Account(id=uuid4())
+    db_session.add(account)
+    await db_session.commit()
+    document, version, _job, patient = await _owned_document(db_session, account.id)
+
+    service = DocumentService(db_session)
+    await service.on_document_analysis_completed(
+        DocumentAnalysisCompleted(
+            event_id=uuid4(),
+            document_id=document.id,
+            document_version_id=version.id,
+            patient_id=patient.id,
+            extraction_id=uuid4(),
+            schema_name="generic",
+            schema_version="1.0.0",
+            status="succeeded",
+            confidence=1.0,
+            data={"type": "generic", "canonical_key": "k", "structured_key": "s"},
+        )
+    )
+
+    extraction = await db_session.scalar(
+        select(DocumentExtraction).where(DocumentExtraction.schema_name == "generic")
+    )
+    assert extraction is not None
+    assert extraction.data["type"] == "generic"
+    assert extraction.data["canonical_key"] == "k"
+    assert extraction.data["structured_key"] == "s"
+
+
 async def test_on_document_analysis_completed_failure_marks_document_failed(db_session):
     account = Account(id=uuid4())
     db_session.add(account)

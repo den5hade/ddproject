@@ -111,3 +111,40 @@ class JobResponse(BaseModel):
 class DownloadUrlResponse(BaseModel):
     download_url: str
     expires_in: int
+
+
+class MarkdownResponse(BaseModel):
+    """Markdown artifacts (unstructured/structured) for a document version."""
+
+    unstructured_key: str | None = None
+    structured_key: str | None = None
+    unstructured_url: str | None = None
+    structured_url: str | None = None
+    has_unstructured: bool = False
+    has_structured: bool = False
+
+
+class CanonicalResponse(BaseModel):
+    """Inline parsed canonical JSON + rendered markdown for a document version.
+
+    ``canonical.json`` is the single source of truth from the ai-worker; the
+    rendered markdown is the deterministic Python `structured.md` view.
+    """
+
+    canonical: dict | None = None
+    canonical_key: str | None = None
+    structured_markdown: str | None = None
+    has_canonical: bool = False
+
+
+class CanonicalDataResponse(BaseModel):
+    """Persisted canonical data (latest succeeded extraction) for a document.
+
+    ``data`` mirrors ``document_extractions.data`` and includes the canonical
+    object plus ``canonical_key`` / ``structured_key``.
+    """
+
+    schema_name: str
+    schema_version: str
+    confidence: float | None = None
+    data: dict

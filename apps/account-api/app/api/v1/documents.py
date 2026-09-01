@@ -13,6 +13,7 @@ from app.dependencies.documents import (
 )
 from app.domain.access import AuditAction
 from app.domain.medical import (
+    CanonicalDataNotFoundError,
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentType,
@@ -21,6 +22,8 @@ from app.domain.medical import (
     UnsupportedFileTypeError,
 )
 from app.schemas.document import (
+    CanonicalDataResponse,
+    CanonicalResponse,
     DocumentCreateRequest,
     DocumentExtractionResponse,
     DocumentResponse,
@@ -38,11 +41,7 @@ router = APIRouter(tags=["documents"])
     "/patients/{patient_id}/documents",
     response_model=list[DocumentResponse],
     dependencies=[
-        Depends(
-            require_patient_access(
-                can_view_documents=True, action=AuditAction.VIEW_DOCUMENT
-            )
-        )
+        Depends(require_patient_access(can_view_documents=True, action=AuditAction.VIEW_DOCUMENT))
     ],
 )
 async def list_patient_documents(
@@ -62,9 +61,7 @@ async def list_patient_documents(
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(
-            require_patient_access(
-                can_upload_documents=True, action=AuditAction.UPLOAD_DOCUMENT
-            )
+            require_patient_access(can_upload_documents=True, action=AuditAction.UPLOAD_DOCUMENT)
         ),
         Depends(reject_oversized_upload),
     ],
@@ -97,9 +94,7 @@ async def create_document(
 @router.get(
     "/documents/{document_id}",
     response_model=DocumentResponse,
-    dependencies=[
-        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
-    ],
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
 )
 async def get_document(
     document_id: UUID,
@@ -115,9 +110,7 @@ async def get_document(
 @router.get(
     "/documents/{document_id}/versions",
     response_model=list[DocumentVersionResponse],
-    dependencies=[
-        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
-    ],
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
 )
 async def list_versions(
     document_id: UUID,
@@ -135,9 +128,7 @@ async def list_versions(
     response_model=DocumentVersionResponse,
     dependencies=[
         Depends(
-            require_document_access(
-                flag="can_upload_documents", action=AuditAction.UPLOAD_DOCUMENT
-            )
+            require_document_access(flag="can_upload_documents", action=AuditAction.UPLOAD_DOCUMENT)
         ),
         Depends(reject_oversized_upload),
     ],
@@ -165,9 +156,7 @@ async def create_version(
 @router.get(
     "/documents/{document_id}/extractions",
     response_model=list[DocumentExtractionResponse],
-    dependencies=[
-        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
-    ],
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
 )
 async def list_extractions(
     document_id: UUID,
@@ -183,9 +172,7 @@ async def list_extractions(
 @router.get(
     "/documents/{document_id}/jobs",
     response_model=list[JobResponse],
-    dependencies=[
-        Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))
-    ],
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
 )
 async def list_jobs(
     document_id: UUID,
@@ -201,9 +188,7 @@ async def list_jobs(
 @router.get(
     "/documents/{document_id}/download",
     response_model=DownloadUrlResponse,
-    dependencies=[
-        Depends(require_document_access(action=AuditAction.DOWNLOAD_DOCUMENT))
-    ],
+    dependencies=[Depends(require_document_access(action=AuditAction.DOWNLOAD_DOCUMENT))],
 )
 async def download_document(
     document_id: UUID,
@@ -215,3 +200,34 @@ async def download_document(
     except (DocumentNotFoundError, StorageUnavailableError) as exc:
         raise_for(exc)
     return DownloadUrlResponse(download_url=url, expires_in=900)
+
+
+@router.get(
+    "/documents/{document_id}/markdown",
+    response_model=CanonicalResponse,
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
+)
+async def get_document_markdown(
+    document_id: UUID,
+    service: DocumentServiceDep,
+    version_id: UUID | None = None,
+) -> CanonicalResponse:
+    try:
+        return await service.get_markdown(document_id, version_id)
+    except DocumentNotFoundError as exc:
+        raise_for(exc)
+
+
+@router.get(
+    "/documents/{document_id}/canonical",
+    response_model=CanonicalDataResponse,
+    dependencies=[Depends(require_document_access(action=AuditAction.VIEW_DOCUMENT))],
+)
+async def get_document_canonical(
+    document_id: UUID,
+    service: DocumentServiceDep,
+) -> CanonicalDataResponse:
+    try:
+        return await service.get_canonical(document_id)
+    except (DocumentNotFoundError, CanonicalDataNotFoundError) as exc:
+        raise_for(exc)

@@ -17,6 +17,7 @@ dependencies = [
     "pdf-messaging",
     "pdf-storage",
     "pdf-observability",
+    "pdf-canonical",
     "python-multipart>=0.0.32",
 ]
 

@@ -106,6 +106,22 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  ai-worker:
+    build:
+      context: ../..
+      dockerfile: apps/ai-worker/Dockerfile
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pdf}:${RABBITMQ_PASSWORD:-pdf123}@rabbitmq:5672/
+      AI_BASE_URL: ${AI_BASE_URL:-https://foundation-models.api.cloud.ru/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-Qwen/Qwen3.5-397B-A17B}
+    profiles: ["ai-worker"]
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   pgdata:
   uploads:
