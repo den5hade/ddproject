@@ -45,6 +45,73 @@ def test_build_canonical_laboratory_valid():
     assert canonical.fields.results[0].flagged is False
 
 
+def test_build_canonical_laboratory_rich_fields():
+    raw = {
+        "document_date": "2026-02-28",
+        "language": "ru",
+        "type": "laboratory",
+        "subtype": "laboratory",
+        "institution": {
+            "name": "Клиника № 2",
+            "address": "г. Сургут",
+            "ogrn": "1028600607441",
+        },
+        "material": "Кровь венозная",
+        "equipment": "Анализатор X",
+        "conclusion": "В пределах нормы",
+        "performed_by": ["Иванов - врач", "Петров - техник"],
+        "fields": {
+            "results": [
+                {
+                    "name": "СОЭ",
+                    "value": "4",
+                    "unit": "мм/ч",
+                    "interpretation": "норма",
+                    "comment": "повторить",
+                }
+            ]
+        },
+    }
+    canonical = build_canonical("laboratory", raw)
+    assert canonical.schema_name == "laboratory"
+    assert canonical.institution.name == "Клиника № 2"
+    assert canonical.material == "Кровь венозная"
+    assert canonical.equipment == "Анализатор X"
+    assert canonical.conclusion == "В пределах нормы"
+    assert canonical.performed_by == ["Иванов - врач", "Петров - техник"]
+    item = canonical.fields.results[0]
+    assert item.interpretation == "норма"
+    assert item.comment == "повторить"
+
+
+def test_render_markdown_laboratory_rich_fields():
+    raw = {
+        "type": "laboratory",
+        "subtype": "laboratory",
+        "material": "Кровь венозная",
+        "conclusion": "В пределах нормы",
+        "performed_by": ["Иванов - врач"],
+        "fields": {
+            "results": [
+                {
+                    "name": "СОЭ",
+                    "value": "4",
+                    "unit": "мм/ч",
+                    "interpretation": "норма",
+                    "comment": "повторить",
+                }
+            ]
+        },
+    }
+    canonical = build_canonical("laboratory", raw)
+    body = render_markdown(canonical)
+    assert "Кровь венозная" in body
+    assert "В пределах нормы" in body
+    assert "Иванов - врач" in body
+    assert "норма" in body
+    assert "повторить" in body
+
+
 def test_build_canonical_prescription_valid():
     raw = {
         "type": "prescription",

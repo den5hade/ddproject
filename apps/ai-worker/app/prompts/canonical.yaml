@@ -37,6 +37,15 @@ prompts:
         "language": "ru",
         "type": "laboratory",
         "subtype": "laboratory",
+        "institution": {
+          "name": "healthcare institution name or null",
+          "address": "institution address or null",
+          "ogrn": "institution OGRN or null"
+        },
+        "material": "tested material, e.g. 'Кровь венозная', or null",
+        "equipment": "analyzer/lab equipment, e.g. 'Анализатор X', or null",
+        "conclusion": "final conclusion text or null",
+        "performed_by": ["names/titles of staff who ran or signed the test"],
         "fields": {
           "results": [
             {
@@ -45,15 +54,50 @@ prompts:
               "unit": "unit or null",
               "reference_min": "lower reference or null",
               "reference_max": "upper reference or null",
-              "flagged": true|false
+              "flagged": true|false,
+              "interpretation": "interpretation text or null",
+              "comment": "commentary text or null"
+            }
+          ]
+        }
+      }
+
+      Example:
+      {
+        "document_date": "2026-02-28",
+        "language": "ru",
+        "type": "laboratory",
+        "subtype": "laboratory",
+        "institution": {
+          "name": "СУРГУТСКАЯ ГОРОДСКАЯ КЛИНИЧЕСКАЯ ПОЛИКЛИНИКА № 2",
+          "address": "ХМАО-Югра, г. Сургут, пр-кт Комсомольский, д. 10/1",
+          "ogrn": "1028600607441"
+        },
+        "material": "Кровь венозная",
+        "equipment": null,
+        "conclusion": null,
+        "performed_by": ["Моздор М. И. - врач-терапевт участковый", "Алиева А. Р. - медицинский лабораторный техник"],
+        "fields": {
+          "results": [
+            {
+              "name": "Скорость оседания эритроцитов по Панченкову",
+              "value": "4",
+              "unit": "мм/ч",
+              "reference_min": null,
+              "reference_max": null,
+              "flagged": false,
+              "interpretation": null,
+              "comment": null
             }
           ]
         }
       }
 
       Rules:
-      - Capture every measurement from the report.
+      - Capture every measurement from the report, including reference ranges.
       - "flagged" is true when the result falls outside the reference range.
+      - "interpretation" and "comment" come from the corresponding source table columns.
+      - Never include patient identity (name, date of birth, SNILS, insurance policy number).
       - Keep original text values; do not invent data.
     model: "Qwen/Qwen3.5-397B-A17B"
     temperature: 0.0

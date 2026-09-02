@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -22,6 +23,7 @@ from storage import (
 
 from app.ai_client import AIClient
 from app.config import Settings
+from app.doc_classifier import classify_document_type
 from app.pdf_converter import convert_pdf_to_images
 from app.prompts import PromptManager
 
@@ -29,19 +31,21 @@ logger = logging.getLogger("ai_worker")
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif"}
 _PDF_EXTENSION = ".pdf"
-_DEFAULT_DOC_TYPE = "default"
 _SCHEMA_VERSION = "1.0.0"
 _PIPELINE_VERSION = "1.0.0"
 
-_DOC_TYPE_TO_CANONICAL = {
-    "lab_result": "laboratory",
-    "prescription": "prescription",
-}
+_PAGE_MARKER_RE = re.compile(r"^## Page (\d+)", re.MULTILINE)
 
 
-def _canonical_doc_type(document_type: str) -> str:
-    """Map an account-api domain ``document_type`` to a canonical schema name."""
-    return _DOC_TYPE_TO_CANONICAL.get(document_type or "", _DEFAULT_DOC_TYPE)
+def _count_pages(markdown: str) -> int:
+    """Count the number of rendered image pages from their ``## Page N`` markers."""
+    markers = _PAGE_MARKER_RE.findall(markdown or "")
+    if not markers:
+        return 1
+    try:
+        return max(int(number) for number in markers)
+    except ValueError:
+        return len(markers)
 
 
 class DocumentProcessor:
@@ -129,7 +133,8 @@ class DocumentProcessor:
             )
             unstructured_markdown = markdown_bytes.decode("utf-8")
 
-            canonical_doc_type = _canonical_doc_type(getattr(event, "document_type", None) or "")
+            client_type = getattr(event, "document_type", None) or ""
+            canonical_doc_type = classify_document_type(unstructured_markdown, client_type)
             canonical_prompt = self._prompt_manager.load_prompt("canonical", canonical_doc_type)
 
             result = await self._ai_client.extract_canonical(
@@ -140,8 +145,16 @@ class DocumentProcessor:
             )
             raw = json.loads(result.content)
             canonical = build_canonical(canonical_doc_type, raw)
+            page_count = _count_pages(unstructured_markdown)
 
-            meta = self._build_frontmatter(event, canonical, canonical_prompt, result.usage)
+            meta = self._build_frontmatter(
+                event,
+                canonical,
+                canonical_prompt,
+                result.usage,
+                client_type=client_type,
+                page_count=page_count,
+            )
 
             canonical_key = self._build_canonical_key(event)
             structured_key = self._build_key(event, MARKDOWN_KIND_STRUCTURED)
@@ -202,10 +215,27 @@ class DocumentProcessor:
                 str(exc),
             )
 
-    def _build_frontmatter(self, event, canonical, prompt: dict, usage: dict) -> FrontmatterMeta:
+    def _build_frontmatter(
+        self,
+        event,
+        canonical,
+        prompt: dict,
+        usage: dict,
+        client_type: str | None = None,
+        page_count: int | None = None,
+    ) -> FrontmatterMeta:
         """Compose the Python-built YAML metadata envelope around a canonical doc."""
         model = prompt.get("model", self._settings.ai_model)
         prompt_version = str(prompt.get("prompt_version") or _PIPELINE_VERSION)
+
+        source = {
+            "object_key": event.output_storage_key,
+            "filename": getattr(event, "original_filename", None),
+            "mime_type": getattr(event, "mime_type", None),
+            "sha256": getattr(event, "sha256", None),
+        }
+        if client_type:
+            source["declared_type"] = client_type
 
         return FrontmatterMeta(
             doc_id=str(event.document_id),
@@ -214,13 +244,9 @@ class DocumentProcessor:
             document={
                 "language": canonical.language,
                 "document_date": canonical.document_date,
+                "page_count": page_count,
             },
-            source={
-                "object_key": event.output_storage_key,
-                "filename": getattr(event, "original_filename", None),
-                "mime_type": getattr(event, "mime_type", None),
-                "sha256": getattr(event, "sha256", None),
-            },
+            source=source,
             processing={
                 "pipeline_version": _PIPELINE_VERSION,
                 "extraction": {

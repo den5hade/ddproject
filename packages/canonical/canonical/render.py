@@ -25,9 +25,25 @@ def render_frontmatter(meta: FrontmatterMeta) -> str:
 
 def _render_laboratory(canonical: BaseCanonical) -> str:
     fields = canonical.fields
+    lines: list[str] = []
+
+    material = canonical.material
+    if material:
+        lines.append(f"Материал: {material}")
+    if canonical.equipment:
+        lines.append(f"Оборудование: {canonical.equipment}")
+    if canonical.conclusion:
+        lines.append(f"Заключение: {canonical.conclusion}")
+    if canonical.performed_by:
+        lines.append("Выполнили: " + ", ".join(canonical.performed_by))
+    if lines:
+        lines.append("")
+
+    lines.append("### Результаты")
+    lines.append("")
     if fields is None or not fields.results:
-        return "### Результаты\n\n_(нет данных)_\n"
-    lines = ["### Результаты", ""]
+        lines.append("_(нет данных)_\n")
+        return "\n".join(lines)
     for item in fields.results:
         flag = " ⚠" if item.flagged else ""
         value = item.value if item.value is not None else "—"
@@ -37,7 +53,12 @@ def _render_laboratory(canonical: BaseCanonical) -> str:
             lo = item.reference_min if item.reference_min is not None else "∞"
             hi = item.reference_max if item.reference_max is not None else "∞"
             ref = f" (реф. {lo}–{hi})"
-        lines.append(f"- **{item.name}**: {value}{unit}{ref}{flag}")
+        line = f"- **{item.name}**: {value}{unit}{ref}{flag}"
+        if item.interpretation:
+            line += f" — интерпретация: {item.interpretation}"
+        if item.comment:
+            line += f" — комментарий: {item.comment}"
+        lines.append(line)
     lines.append("")
     return "\n".join(lines)
 

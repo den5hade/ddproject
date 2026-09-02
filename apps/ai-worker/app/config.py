@@ -1,5 +1,6 @@
 from functools import cached_property
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -38,7 +39,7 @@ class Settings(BaseSettings):
     prompts_dir: str = "app/prompts"
 
     pdf_dpi: int = 300
-    pdf_format: str = "png"
+    pdf_format: Literal["png", "jpeg"] = "png"
 
     @cached_property
     def rabbitmq_dsn(self) -> str:

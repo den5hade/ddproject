@@ -54,8 +54,8 @@ compose-dev: ## Build & start dev stack: postgres, rabbitmq, redis, account-api,
 compose-start: ## Start dev stack from existing images (no build)
 	docker compose -f infrastructure/development/docker-compose.yml up -d
 
-compose-stop: ## Stop dev stack, keeping containers (restart with compose-start)
-	docker compose -f infrastructure/development/docker-compose.yml stop
+compose-stop: ## Stop dev stack (+ ai-worker), keeping containers (restart with compose-start)
+	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker stop
 
 compose-logs: ## Tail dev stack logs; SVC=<service> to filter one
 	docker compose -f infrastructure/development/docker-compose.yml logs -f $(SVC)
@@ -66,5 +66,5 @@ compose-ai-worker: ## Build & start the ai-worker (opt-in containerized dev mode
 compose-ai-worker-logs: ## Tail ai-worker logs
 	$(MAKE) compose-logs SVC=ai-worker --no-print-directory
 
-compose-down: ## Stop local dev infra
-	docker compose -f infrastructure/development/docker-compose.yml down
+compose-down: ## Stop and remove dev infra (+ ai-worker)
+	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker down

@@ -20,6 +20,14 @@ __all__ = [
 ]
 
 
+class Institution(BaseModel):
+    """The issuing healthcare institution (never includes patient PII)."""
+
+    name: str | None = None
+    address: str | None = None
+    ogrn: str | None = None
+
+
 class ResultItem(BaseModel):
     """A single laboratory measurement."""
 
@@ -29,6 +37,8 @@ class ResultItem(BaseModel):
     reference_min: str | float | None = None
     reference_max: str | float | None = None
     flagged: bool = False
+    interpretation: str | None = None
+    comment: str | None = None
 
 
 class ResultSet(BaseModel):
@@ -72,6 +82,10 @@ class BaseCanonical(BaseModel):
     type: str = "generic"
     subtype_value: str = Field(default="", alias="subtype")
 
+    institution: Institution | None = None
+    material: str | None = None
+    conclusion: str | None = None
+
     fields: Any = None
 
 
@@ -82,6 +96,8 @@ class LaboratoryCanonical(BaseCanonical):
     subtype: ClassVar[str] = "laboratory"
 
     type: str = "laboratory"
+    equipment: str | None = None
+    performed_by: list[str] | None = None
     fields: ResultSet | None = None
 
 
