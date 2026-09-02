@@ -350,6 +350,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/documents/{document_id}/markdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Document Markdown */
+        get: operations["get_document_markdown_api_v1_documents__document_id__markdown_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{document_id}/canonical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Document Canonical */
+        get: operations["get_document_canonical_api_v1_documents__document_id__canonical_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/patients/{patient_id}/encounters": {
         parameters: {
             query?: never;
@@ -627,6 +661,47 @@ export interface components {
              */
             title: string;
         };
+        /**
+         * CanonicalDataResponse
+         * @description Persisted canonical data (latest succeeded extraction) for a document.
+         *
+         *     ``data`` mirrors ``document_extractions.data`` and includes the canonical
+         *     object plus ``canonical_key`` / ``structured_key``.
+         */
+        CanonicalDataResponse: {
+            /** Schema Name */
+            schema_name: string;
+            /** Schema Version */
+            schema_version: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * CanonicalResponse
+         * @description Inline parsed canonical JSON + rendered markdown for a document version.
+         *
+         *     ``canonical.json`` is the single source of truth from the ai-worker; the
+         *     rendered markdown is the deterministic Python `structured.md` view.
+         */
+        CanonicalResponse: {
+            /** Canonical */
+            canonical?: {
+                [key: string]: unknown;
+            } | null;
+            /** Canonical Key */
+            canonical_key?: string | null;
+            /** Structured Markdown */
+            structured_markdown?: string | null;
+            /**
+             * Has Canonical
+             * @default false
+             */
+            has_canonical: boolean;
+        };
         /** DocumentExtractionResponse */
         DocumentExtractionResponse: {
             /**
@@ -652,16 +727,10 @@ export interface components {
             data: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
         };
         /** DocumentResponse */
         DocumentResponse: {
@@ -691,16 +760,10 @@ export interface components {
             status: components["schemas"]["DocumentStatus"];
             /** Uploaded By Account Id */
             uploaded_by_account_id: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
         };
         /**
          * DocumentStatus
@@ -736,11 +799,8 @@ export interface components {
             checksum: string | null;
             /** Created By Account Id */
             created_by_account_id: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            /** Created At */
+            created_at: string | null;
         };
         /** DownloadUrlResponse */
         DownloadUrlResponse: {
@@ -857,30 +917,18 @@ export interface components {
             status: components["schemas"]["ProcessingJobStatus"];
             /** Attempts */
             attempts: number;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /**
-             * Finished At
-             * Format: date-time
-             */
-            finished_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
             /** Error Code */
             error_code: string | null;
             /** Error Message */
             error_message: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
         };
         /** PatientCreateRequest */
         PatientCreateRequest: {
@@ -1864,6 +1912,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DownloadUrlResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_document_markdown_api_v1_documents__document_id__markdown_get: {
+        parameters: {
+            query?: {
+                version_id?: string | null;
+            };
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanonicalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_document_canonical_api_v1_documents__document_id__canonical_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanonicalDataResponse"];
                 };
             };
             /** @description Validation Error */

@@ -11,6 +11,7 @@ import {
 import type { DocumentStatus } from "./api";
 import { keys } from "@/lib/query/keys";
 import { strings } from "@/lib/i18n/strings";
+import { ApiError } from "@/lib/api/errors";
 
 export { isProcessing };
 export type { DocumentStatus };
@@ -37,6 +38,28 @@ export function useExtractions(documentId: string | undefined) {
     queryKey: keys.extractions(documentId ?? "_"),
     queryFn: () => api.getExtractions(documentId!),
     enabled: documentId !== undefined,
+  });
+}
+
+/**
+ * Canonical extraction data (latest succeeded extraction) for a document.
+ * The route 404s until the document has been processed — map that to
+ * `null` (not-ready) rather than a hard error. Enabled only when a
+ * document id is present; callers gate additionally on terminal status.
+ */
+export function useCanonical(documentId: string | undefined) {
+  return useQuery({
+    queryKey: keys.canonical(documentId ?? "_"),
+    queryFn: async () => {
+      try {
+        return await api.getCanonical(documentId!);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    enabled: documentId !== undefined,
+    retry: 1,
   });
 }
 

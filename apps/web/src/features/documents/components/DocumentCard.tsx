@@ -46,9 +46,11 @@ export function DocumentCard({ document, to }: DocumentCardProps) {
           {document.title || document.original_filename}
         </span>
         <span className="mt-0.5 flex items-center gap-2 text-caption text-ink-muted">
-          <time dateTime={document.created_at}>
-            {formatDateShortRu(document.created_at)}
-          </time>
+          {document.created_at && (
+            <time dateTime={document.created_at}>
+              {formatDateShortRu(document.created_at)}
+            </time>
+          )}
         </span>
         <span className="mt-1.5">
           <ProcessingStatus status={document.status} />

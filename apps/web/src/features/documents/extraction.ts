@@ -17,6 +17,11 @@ export interface Observation {
   value: string;
   unit?: string;
   reference?: string;
+  /** Canonical numeric reference bounds (envelope keys from the canonical schema). */
+  referenceMin?: number;
+  referenceMax?: number;
+  /** Canonical flag (e.g. lab result outside expected range). */
+  flagged?: boolean;
 }
 
 const NAME_KEYS = ["name", "title", "label", "indicator", "parameter"] as const;

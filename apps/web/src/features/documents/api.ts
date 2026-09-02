@@ -13,6 +13,8 @@ export type DocumentExtractionResponse =
   components["schemas"]["DocumentExtractionResponse"];
 export type DownloadUrlResponse = components["schemas"]["DownloadUrlResponse"];
 export type DocumentStatus = components["schemas"]["DocumentStatus"];
+export type CanonicalDataResponse =
+  components["schemas"]["CanonicalDataResponse"];
 
 /** Statuses that still move — polling continues while in this set (plan §5.2). */
 const NON_TERMINAL_STATUSES: ReadonlySet<DocumentStatus> = new Set([
@@ -55,6 +57,19 @@ export function getVersions(documentId: string) {
 export function getExtractions(documentId: string) {
   return authed(() =>
     api.GET("/api/v1/documents/{document_id}/extractions", {
+      params: { path: { document_id: documentId } },
+    }),
+  );
+}
+
+/**
+ * GET /documents/{id}/canonical — persisted canonical data of the latest
+ * succeeded extraction (DB-only, no S3 round-trip). 404 when the document
+ * has not been processed yet.
+ */
+export function getCanonical(documentId: string) {
+  return authed(() =>
+    api.GET("/api/v1/documents/{document_id}/canonical", {
       params: { path: { document_id: documentId } },
     }),
   );

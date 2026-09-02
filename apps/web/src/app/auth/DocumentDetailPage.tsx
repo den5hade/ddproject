@@ -115,9 +115,11 @@ function DocumentHeader({ document }: { document: DocumentResponse }) {
           {document.title || document.original_filename}
         </h1>
         <p className="mt-1 text-sm text-ink-muted">
-          <time dateTime={document.created_at}>
-            {formatDateRu(document.created_at)}
-          </time>
+          {document.created_at && (
+            <time dateTime={document.created_at}>
+              {formatDateRu(document.created_at)}
+            </time>
+          )}
         </p>
       </div>
 

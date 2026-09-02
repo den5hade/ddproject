@@ -40,6 +40,7 @@ export function groupDocumentsByMonth(
 ): MonthGroup[] {
   const groups = new Map<string, MonthGroup>();
   for (const document of documents) {
+    if (document.created_at === null) continue;
     const key = monthKey(document.created_at);
     let group = groups.get(key);
     if (!group) {
