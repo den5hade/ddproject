@@ -46,7 +46,7 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
 
     @field_serializer("created_at", "updated_at")
-    def _tz(self, v: datetime) -> datetime:
+    def _tz(self, v: datetime) -> datetime | None:
         return to_api_tz(v)
 
 
@@ -64,7 +64,7 @@ class DocumentVersionResponse(BaseModel):
     created_at: datetime
 
     @field_serializer("created_at")
-    def _tz(self, v: datetime) -> datetime:
+    def _tz(self, v: datetime) -> datetime | None:
         return to_api_tz(v)
 
 
@@ -83,7 +83,7 @@ class DocumentExtractionResponse(BaseModel):
     updated_at: datetime
 
     @field_serializer("created_at", "updated_at")
-    def _tz(self, v: datetime) -> datetime:
+    def _tz(self, v: datetime) -> datetime | None:
         return to_api_tz(v)
 
 
@@ -104,7 +104,7 @@ class JobResponse(BaseModel):
     updated_at: datetime
 
     @field_serializer("created_at", "updated_at", "started_at", "finished_at")
-    def _tz(self, v: datetime) -> datetime:
+    def _tz(self, v: datetime) -> datetime | None:
         return to_api_tz(v)
 
 

@@ -211,7 +211,7 @@ async def get_document_markdown(
     document_id: UUID,
     service: DocumentServiceDep,
     version_id: UUID | None = None,
-) -> CanonicalResponse:
+) -> CanonicalResponse | None:
     try:
         return await service.get_markdown(document_id, version_id)
     except DocumentNotFoundError as exc:
@@ -226,7 +226,7 @@ async def get_document_markdown(
 async def get_document_canonical(
     document_id: UUID,
     service: DocumentServiceDep,
-) -> CanonicalDataResponse:
+) -> CanonicalDataResponse | None:
     try:
         return await service.get_canonical(document_id)
     except (DocumentNotFoundError, CanonicalDataNotFoundError) as exc:
