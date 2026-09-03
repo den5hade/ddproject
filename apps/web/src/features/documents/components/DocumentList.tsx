@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { DocumentCard } from "./DocumentCard";
 import type { DocumentResponse } from "../api";
-import { groupDocumentsByMonth } from "../grouping";
+import { NEW_GROUP_KEY, groupDocumentsByMonth } from "../grouping";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { strings } from "@/lib/i18n/strings";
@@ -61,7 +61,11 @@ export function DocumentList({
           aria-label={group.label}
           className="flex flex-col gap-3"
         >
-          <h2 className="text-sm font-semibold text-ink-secondary">{group.label}</h2>
+          <h2 className="text-sm font-semibold text-ink-secondary">
+            {group.key === NEW_GROUP_KEY
+              ? strings.documents.newGroup
+              : group.label}
+          </h2>
           <div className="flex flex-col gap-3">
             {group.documents.map((document) => (
               <DocumentCard key={document.id} document={document} />

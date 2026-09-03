@@ -64,6 +64,7 @@ export const strings = {
     filtersLaboratory: "Лаборатория",
     filtersVisits: "Приёмы",
     filtersOther: "Другое",
+    newGroup: "Новые",
   },
   detail: {
     back: "Назад к документам",

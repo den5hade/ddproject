@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight, FileText, ImageIcon } from "lucide-react";
 import type { DocumentResponse } from "../api";
@@ -13,6 +14,12 @@ import { cn } from "@/lib/utils";
 
 function isImage(mime: string): boolean {
   return mime.startsWith("image/");
+}
+
+/** Shows the medical date (document_date), falling back to upload time. */
+function renderCardDate(document: DocumentResponse): ReactNode {
+  const iso = document.document_date ?? document.created_at;
+  return iso ? <time dateTime={iso}>{formatDateShortRu(iso)}</time> : null;
 }
 
 interface DocumentCardProps {
@@ -46,11 +53,7 @@ export function DocumentCard({ document, to }: DocumentCardProps) {
           {document.title || document.original_filename}
         </span>
         <span className="mt-0.5 flex items-center gap-2 text-caption text-ink-muted">
-          {document.created_at && (
-            <time dateTime={document.created_at}>
-              {formatDateShortRu(document.created_at)}
-            </time>
-          )}
+          {renderCardDate(document)}
         </span>
         <span className="mt-1.5">
           <ProcessingStatus status={document.status} />

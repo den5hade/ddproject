@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-logs migrate
+.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-stop compose-ai-worker-start compose-ai-worker-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -62,6 +62,12 @@ compose-logs: ## Tail dev stack logs; SVC=<service> to filter one
 
 compose-ai-worker: ## Build & start the ai-worker (opt-in containerized dev mode)
 	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker up -d --build
+
+compose-ai-worker-stop: ## Stop just the ai-worker, keeping its container (restart with compose-ai-worker-start)
+	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker stop ai-worker
+
+compose-ai-worker-start: ## Restart a stopped ai-worker without rebuild or recreating other containers
+	docker compose -f infrastructure/development/docker-compose.yml --profile ai-worker start ai-worker
 
 compose-ai-worker-logs: ## Tail ai-worker logs
 	$(MAKE) compose-logs SVC=ai-worker --no-print-directory

@@ -92,6 +92,23 @@ def _safe_remove(path: str) -> None:
         logger.warning("staged_file_cleanup_failed path=%s", path)
 
 
+def _parse_document_date(data: dict | None) -> datetime | None:
+    """Parse the canonical `document_date` ("YYYY-MM-DD" or null) as UTC midnight.
+
+    Returns tz-aware UTC datetime so values are comparable and serialize to a
+    consistent ISO timestamp; None when absent or unparseable (document stays
+    in the «Новые» bucket)."""
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("document_date")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip()).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
 class DocumentService:
     """Document/version persistence, quota, access checks and pipeline events."""
 
@@ -414,6 +431,8 @@ class DocumentService:
         document = await self._documents.get(event.document_id)
         if document is not None:
             document.status = DocumentStatus.COMPLETED if succeeded else DocumentStatus.FAILED
+            if succeeded:
+                document.document_date = _parse_document_date(event.data)
         await self._session.commit()
         logger.info(
             "document_analysis document_id=%s extraction_id=%s status=%s",

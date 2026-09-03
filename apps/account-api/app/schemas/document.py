@@ -41,13 +41,14 @@ class DocumentResponse(BaseModel):
     size_bytes: int
     storage_key: str
     status: DocumentStatus
+    document_date: datetime | None = None
     uploaded_by_account_id: UUID | None
     created_at: datetime
     updated_at: datetime
 
-    @field_serializer("created_at", "updated_at")
-    def _tz(self, v: datetime) -> datetime | None:
-        return to_api_tz(v)
+    @field_serializer("created_at", "updated_at", "document_date")
+    def _tz(self, v: datetime | None) -> datetime | None:
+        return to_api_tz(v) if v is not None else None
 
 
 class DocumentVersionResponse(BaseModel):

@@ -227,6 +227,59 @@ async def test_analysis_completed_persists_enriched_canonical_and_keys(db_sessio
     assert (await db_session.get(Document, document.id)).status == DocumentStatus.COMPLETED
 
 
+async def test_analysis_completed_persists_document_date(db_session):
+    """document_date from the canonical payload is persisted onto the document."""
+    account = Account(id=uuid4())
+    db_session.add(account)
+    await db_session.commit()
+    document, version, _job, patient = await _owned_document(db_session, account.id)
+
+    service = DocumentService(db_session)
+    await service.on_document_analysis_completed(
+        DocumentAnalysisCompleted(
+            event_id=uuid4(),
+            document_id=document.id,
+            document_version_id=version.id,
+            patient_id=patient.id,
+            extraction_id=uuid4(),
+            schema_name="laboratory",
+            status="succeeded",
+            confidence=1.0,
+            data={"document_date": "2026-09-03", "fields": {"wbc": "6.4"}},
+        )
+    )
+
+    refreshed = await db_session.get(Document, document.id)
+    assert refreshed.document_date is not None
+    assert refreshed.document_date.strftime("%Y-%m-%d") == "2026-09-03"
+
+
+async def test_analysis_completed_keeps_document_date_null_when_absent(db_session):
+    """A missing/unparseable document_date leaves the column null (Новые bucket)."""
+    account = Account(id=uuid4())
+    db_session.add(account)
+    await db_session.commit()
+    document, version, _job, patient = await _owned_document(db_session, account.id)
+
+    service = DocumentService(db_session)
+    await service.on_document_analysis_completed(
+        DocumentAnalysisCompleted(
+            event_id=uuid4(),
+            document_id=document.id,
+            document_version_id=version.id,
+            patient_id=patient.id,
+            extraction_id=uuid4(),
+            schema_name="generic",
+            status="succeeded",
+            confidence=1.0,
+            data={"fields": {"x": "y"}},
+        )
+    )
+
+    refreshed = await db_session.get(Document, document.id)
+    assert refreshed.document_date is None
+
+
 async def test_analysis_completed_creates_extraction_when_id_is_new(db_session):
     account = Account(id=uuid4())
     db_session.add(account)

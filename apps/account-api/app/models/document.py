@@ -41,6 +41,9 @@ class Document(Base):
     status: Mapped[DocumentStatus] = mapped_column(
         Enum(DocumentStatus, native_enum=False, length=16), default=DocumentStatus.UPLOADED
     )
+    document_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     uploaded_by_account_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )

@@ -758,6 +758,8 @@ export interface components {
             /** Storage Key */
             storage_key: string;
             status: components["schemas"]["DocumentStatus"];
+            /** Document Date */
+            document_date?: string | null;
             /** Uploaded By Account Id */
             uploaded_by_account_id: string | null;
             /** Created At */
