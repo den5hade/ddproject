@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.medical import MembershipStatus
-from app.models.organization import Organization, OrganizationMembership
+from app.models.organization import Organization, OrganizationBranch, OrganizationMembership
 
 
 class OrganizationRepository:
@@ -23,6 +23,36 @@ class OrganizationRepository:
     async def find_by_ogrn(self, ogrn: str) -> Organization | None:
         result = await self._session.execute(
             select(Organization).where(Organization.ogrn == ogrn)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_branches(self, organization_id: UUID) -> list[OrganizationBranch]:
+        result = await self._session.execute(
+            select(OrganizationBranch)
+            .where(OrganizationBranch.organization_id == organization_id)
+            .order_by(OrganizationBranch.created_at, OrganizationBranch.code)
+        )
+        return list(result.scalars().all())
+
+    async def get_branch(
+        self, organization_id: UUID, branch_id: UUID
+    ) -> OrganizationBranch | None:
+        result = await self._session.execute(
+            select(OrganizationBranch).where(
+                OrganizationBranch.id == branch_id,
+                OrganizationBranch.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_branch_by_code(
+        self, organization_id: UUID, code: str
+    ) -> OrganizationBranch | None:
+        result = await self._session.execute(
+            select(OrganizationBranch).where(
+                OrganizationBranch.organization_id == organization_id,
+                OrganizationBranch.code == code,
+            )
         )
         return result.scalar_one_or_none()
 

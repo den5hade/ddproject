@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from app.domain.account import RoleCode
 from app.domain.medical import MembershipStatus, OrganizationType
 from app.models.audit_log import AuditLog
-from app.models.organization import Organization, OrganizationMembership
+from app.models.organization import Organization, OrganizationBranch, OrganizationMembership
 from app.repositories.rbac import RbacRepository
 from sqlalchemy import select
 
@@ -68,6 +68,16 @@ async def _seed_admin(session, account_id: UUID) -> None:
     rbac = RbacRepository(session)
     await rbac.seed_defaults()
     await rbac.assign_roles(account_id, [RoleCode.ORGANIZATION_ADMIN.value])
+
+
+async def _create_branch(db_factory, organization_id: UUID, code: str, name: str) -> UUID:
+    async with db_factory() as session:
+        branch = OrganizationBranch(
+            organization_id=organization_id, code=code, name=name
+        )
+        session.add(branch)
+        await session.commit()
+        return branch.id
 
 
 async def test_get_me_requires_auth(app_client, fake_redis):
@@ -228,3 +238,172 @@ async def test_patch_writes_audit_log(app_client, fake_redis, db_factory):
     assert rows[0].action.value == "ORGANIZATION_UPDATED"
     assert rows[0].resource_id == org_id
     assert rows[0].metadata_["fields"] == ["website"]
+
+
+async def test_branches_require_auth(app_client, fake_redis):
+    resp = await app_client.get("/api/v1/organizations/me/branches")
+    assert resp.status_code == 401
+
+
+async def test_branches_require_admin(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    resp = await app_client.get("/api/v1/organizations/me/branches", headers=_auth(token))
+    assert resp.status_code == 403
+
+
+async def test_create_branch(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/branches",
+        headers=_auth(token),
+        json={"code": "br-1", "name": "Main Branch", "address": "ул. Кирова, 5"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["code"] == "br-1"
+    assert body["name"] == "Main Branch"
+    assert body["address"] == "ул. Кирова, 5"
+    assert body["phone"] is None
+    assert body["status"] == "active"
+
+
+async def test_create_branch_invalid_code_422(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/branches",
+        headers=_auth(token),
+        json={"code": "bad code", "name": "X"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_duplicate_branch_code_409(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    await _create_branch(db_factory, org_id, "br-1", "Main")
+    resp = await app_client.post(
+        "/api/v1/organizations/me/branches",
+        headers=_auth(token),
+        json={"code": "br-1", "name": "Dup"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_list_branches_scoped_to_my_org(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    await _create_branch(db_factory, org_a, "br-a1", "A One")
+    await _create_branch(db_factory, org_a, "br-a2", "A Two")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    org_b = await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    await _create_branch(db_factory, org_b, "br-b1", "B One")
+
+    resp = await app_client.get("/api/v1/organizations/me/branches", headers=_auth(token_a))
+    assert resp.status_code == 200
+    codes = [branch["code"] for branch in resp.json()]
+    assert codes == ["br-a1", "br-a2"]
+
+
+async def test_get_branch_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    branch_id = await _create_branch(db_factory, org_a, "br-1", "Main")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.get(
+        f"/api/v1/organizations/me/branches/{branch_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404
+
+
+async def test_patch_branch(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    branch_id = await _create_branch(db_factory, org_id, "br-1", "Main")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/branches/{branch_id}",
+        headers=_auth(token),
+        json={"name": "HQ", "phone": "+7 495 000-00-00"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "HQ"
+    assert body["phone"] == "+7 495 000-00-00"
+    assert body["code"] == "br-1"
+
+
+async def test_patch_duplicate_branch_code_409(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    await _create_branch(db_factory, org_id, "br-1", "One")
+    branch_id = await _create_branch(db_factory, org_id, "br-2", "Two")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/branches/{branch_id}",
+        headers=_auth(token),
+        json={"code": "br-1"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_patch_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    branch_id = await _create_branch(db_factory, org_a, "br-1", "Main")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/branches/{branch_id}",
+        headers=_auth(token_b),
+        json={"name": "Hijack"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_delete_branch_soft_deactivates(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    branch_id = await _create_branch(db_factory, org_id, "br-1", "Main")
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/branches/{branch_id}", headers=_auth(token)
+    )
+    assert resp.status_code == 204
+    list_resp = await app_client.get(
+        "/api/v1/organizations/me/branches", headers=_auth(token)
+    )
+    assert list_resp.status_code == 200
+    bodies = list_resp.json()
+    assert len(bodies) == 1
+    assert bodies[0]["status"] == "inactive"
+    assert bodies[0]["id"] == str(branch_id)
+
+
+async def test_delete_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    branch_id = await _create_branch(db_factory, org_a, "br-1", "Main")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/branches/{branch_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404

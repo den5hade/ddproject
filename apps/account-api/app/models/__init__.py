@@ -7,7 +7,11 @@ from app.models.document import Document, DocumentVersion
 from app.models.encounter import Encounter
 from app.models.extraction import DocumentExtraction
 from app.models.medical_record import MedicalRecord
-from app.models.organization import Organization, OrganizationMembership
+from app.models.organization import (
+    Organization,
+    OrganizationBranch,
+    OrganizationMembership,
+)
 from app.models.patient import Patient
 from app.models.person import Person
 from app.models.processing_job import DocumentProcessingJob
@@ -27,6 +31,7 @@ __all__ = [
     "Encounter",
     "MedicalRecord",
     "Organization",
+    "OrganizationBranch",
     "OrganizationMembership",
     "Patient",
     "PatientAccessGrant",

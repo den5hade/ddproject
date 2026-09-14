@@ -14,6 +14,8 @@ from app.domain.medical import (
     UnsupportedFileTypeError,
 )
 from app.domain.organization import (
+    OrganizationBranchConflictError,
+    OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
     OrganizationNotFoundError,
 )
@@ -52,6 +54,8 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     # Organizations
     OrganizationNotFoundError: status.HTTP_404_NOT_FOUND,
     OrganizationLegalDataConflictError: status.HTTP_409_CONFLICT,
+    OrganizationBranchNotFoundError: status.HTTP_404_NOT_FOUND,
+    OrganizationBranchConflictError: status.HTTP_409_CONFLICT,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }

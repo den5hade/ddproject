@@ -9,13 +9,16 @@ from alembic.operations import Operations
 from app.domain.access import AuditAction
 from app.domain.medical import OrganizationType
 from app.domain.organization import (
+    BranchStatus,
+    OrganizationBranchConflictError,
+    OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
     OrganizationNotFoundError,
     OrganizationVerificationStatus,
 )
 from app.models.audit_log import AuditLog
-from app.models.organization import Organization
-from app.schemas.organization import OrganizationUpdate
+from app.models.organization import Organization, OrganizationBranch
+from app.schemas.organization import BranchCreate, BranchUpdate, OrganizationUpdate
 from app.services.organization import OrganizationService
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -24,6 +27,15 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 def _load_migration_0006():
     path = REPO_ROOT / "migrations/alembic/versions/0006_organization_legal_data.py"
     spec = spec_from_file_location("migration_0006", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0007():
+    path = REPO_ROOT / "migrations/alembic/versions/0007_organization_branches.py"
+    spec = spec_from_file_location("migration_0007", path)
     module = module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -184,3 +196,214 @@ def test_migration_0006_upgrade_downgrade_round_trip() -> None:
         }
         assert "uq_organizations_inn" not in indexes_after
         assert "uq_organizations_ogrn" not in indexes_after
+
+
+async def _branch(db_session, org: Organization, **fields) -> OrganizationBranch:
+    branch = OrganizationBranch(
+        organization_id=org.id,
+        code=fields.pop("code", "br-1"),
+        name=fields.pop("name", "Main Branch"),
+        **fields,
+    )
+    db_session.add(branch)
+    await db_session.commit()
+    return branch
+
+
+async def test_create_branch(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    branch = await service.create_branch(
+        org.id, uuid4(), BranchCreate(code="br-9", name="East", address="prosp. 1")
+    )
+    assert branch.organization_id == org.id
+    assert branch.code == "br-9"
+    assert branch.name == "East"
+    assert branch.address == "prosp. 1"
+    assert branch.status == BranchStatus.ACTIVE
+
+
+async def test_create_branch_duplicate_code_conflict(db_session) -> None:
+    org = await _org(db_session)
+    await _branch(db_session, org, code="br-1")
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationBranchConflictError):
+        await service.create_branch(org.id, uuid4(), BranchCreate(code="br-1", name="Dup"))
+
+
+async def test_create_branch_same_code_in_different_org_ok(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    service = OrganizationService(db_session)
+    await service.create_branch(org_a.id, uuid4(), BranchCreate(code="br-1", name="A"))
+    branch_b = await service.create_branch(
+        org_b.id, uuid4(), BranchCreate(code="br-1", name="B")
+    )
+    assert branch_b.organization_id == org_b.id
+
+
+async def test_list_branches(db_session) -> None:
+    org = await _org(db_session)
+    await _branch(db_session, org, code="br-2", name="Two")
+    await _branch(db_session, org, code="br-1", name="One")
+    service = OrganizationService(db_session)
+    branches = await service.list_branches(org.id)
+    assert [b.code for b in branches] == ["br-2", "br-1"]
+
+
+async def test_get_branch_not_found(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationBranchNotFoundError):
+        await service.get_branch(org.id, uuid4())
+
+
+async def test_get_branch_is_org_scoped(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    branch = await _branch(db_session, org_a, code="br-1")
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationBranchNotFoundError):
+        await service.get_branch(org_b.id, branch.id)
+
+
+async def test_update_branch(db_session) -> None:
+    org = await _org(db_session)
+    branch = await _branch(db_session, org, code="br-1", name="Main")
+    service = OrganizationService(db_session)
+    updated = await service.update_branch(
+        org.id, branch.id, uuid4(), BranchUpdate(name="HQ", phone="+7")
+    )
+    assert updated.name == "HQ"
+    assert updated.phone == "+7"
+    assert updated.code == "br-1"
+
+
+async def test_update_branch_duplicate_code_conflict(db_session) -> None:
+    org = await _org(db_session)
+    await _branch(db_session, org, code="br-1", name="One")
+    branch = await _branch(db_session, org, code="br-2", name="Two")
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationBranchConflictError):
+        await service.update_branch(org.id, branch.id, uuid4(), BranchUpdate(code="br-1"))
+
+
+async def test_update_branch_clears_address(db_session) -> None:
+    org = await _org(db_session)
+    branch = await _branch(db_session, org, code="br-1", address="Somewhere")
+    service = OrganizationService(db_session)
+    updated = await service.update_branch(org.id, branch.id, uuid4(), BranchUpdate(address=""))
+    assert updated.address is None
+
+
+async def test_deactivate_branch_sets_inactive_and_keeps_history(db_session) -> None:
+    org = await _org(db_session)
+    branch = await _branch(db_session, org, code="br-1")
+    service = OrganizationService(db_session)
+    await service.deactivate_branch(org.id, branch.id, uuid4())
+    fetched = await service.get_branch(org.id, branch.id)
+    assert fetched.status == BranchStatus.INACTIVE
+    assert [b.id for b in await service.list_branches(org.id)] == [branch.id]
+
+
+async def test_deactivate_branch_not_found(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationBranchNotFoundError):
+        await service.deactivate_branch(org.id, uuid4(), uuid4())
+
+
+async def test_branch_operations_write_audit_log(db_session) -> None:
+    org = await _org(db_session)
+    actor = uuid4()
+    service = OrganizationService(db_session)
+    branch = await service.create_branch(org.id, actor, BranchCreate(code="br-1", name="Main"))
+    await service.update_branch(org.id, branch.id, actor, BranchUpdate(name="HQ"))
+    await service.deactivate_branch(org.id, branch.id, actor)
+    rows = (await db_session.execute(sa.select(AuditLog))).scalars().all()
+    actions = [row.action for row in rows]
+    assert AuditAction.ORGANIZATION_BRANCH_CREATED in actions
+    assert AuditAction.ORGANIZATION_BRANCH_UPDATED in actions
+    assert AuditAction.ORGANIZATION_BRANCH_DEACTIVATED in actions
+
+
+def test_migration_0007_revision_wiring() -> None:
+    migration = _load_migration_0007()
+    assert migration.revision == "0007"
+    assert migration.down_revision == "0006"
+
+
+def test_migration_0007_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0007()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')"
+            )
+        )
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_branches" in tables
+        columns = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA table_info(organization_branches)"))
+        }
+        assert {
+            "id",
+            "organization_id",
+            "code",
+            "name",
+            "address",
+            "phone",
+            "status",
+            "created_at",
+            "updated_at",
+        } <= columns
+        indexes = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA index_list(organization_branches)"))
+        }
+        assert "uq_organization_branches_org_code" in indexes
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_branches (id, organization_id, code, name,"
+                " status, created_at, updated_at)"
+                " VALUES ('b1', '1', 'br-1', 'Main', 'active', '2026-01-01', '2026-01-01')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT status FROM organization_branches WHERE id = 'b1'")
+            ).scalar_one()
+            == "active"
+        )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        tables_after = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_branches" not in tables_after

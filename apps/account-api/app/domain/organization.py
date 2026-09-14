@@ -149,3 +149,11 @@ class OrganizationNotFoundError(Exception):
 
 class OrganizationLegalDataConflictError(Exception):
     """An organization with the same INN or OGRN already exists."""
+
+
+class OrganizationBranchNotFoundError(Exception):
+    """A branch does not exist for the given organization and id."""
+
+
+class OrganizationBranchConflictError(Exception):
+    """A branch with the same code already exists in the organization."""

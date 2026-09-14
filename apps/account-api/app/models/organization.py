@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
-from app.domain.organization import OrganizationVerificationStatus
+from app.domain.organization import BranchStatus, OrganizationVerificationStatus
 from app.models.utils import utcnow
 
 
@@ -65,3 +65,30 @@ class OrganizationMembership(Base):
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrganizationBranch(Base):
+    """A branch (filial) of an organization."""
+
+    __tablename__ = "organization_branches"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "code", name="uq_organization_branches_org_code"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    code: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(255))
+    address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[BranchStatus] = mapped_column(
+        Enum(BranchStatus, native_enum=False, length=16), default=BranchStatus.ACTIVE
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

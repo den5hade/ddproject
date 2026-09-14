@@ -7,6 +7,10 @@ client notifications, organization document schemas, API-usage monitoring, and
 the registry-verification extension point. Built on existing infrastructure
 only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/OAI_IMPL_ARCH.md` (arch) + `docs/development/ORGS/OAI_IMPL_SPEC.md` (spec).
 
+**Revision 3** — Phase 2 (Branches) completed; `0007` marked done;
+`ORGANIZATION_BRANCH_*` audit actions and branch schemas/endpoints folded into
+§4.
+
 **Revision 2** — restructured into the concise step/status format of
 `docs/development/DOC_PROC_DEV_FLOW_IMPL_PLAN.md`; the 28-section spec was
 condensed into the locked design reference (§4). Phase 1 completed
@@ -55,7 +59,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Organization core | [x] done |
-| 2 | Branches | [ ] |
+| 2 | Branches | [x] done |
 | 3 | Licenses | [ ] |
 | 4 | API keys | [ ] |
 | 5 | API-key auth | [ ] |
@@ -113,19 +117,56 @@ apps/account-api` clean.
 - The human API can only move status **to `PENDING`**; `VERIFIED`/`REJECTED` are
   set exclusively by the registry provider (Phase 12).
 
+### Phase 2 — Branches [x]
+
+**Objective.** 1:N branches with full CRUD under `/organizations/me/branches`,
+org-scoped (no IDOR), duplicate `code` → 409, soft deactivate (DELETE sets
+`INACTIVE`, never hard-delete).
+
+**Changes.** `OrganizationBranch` model (+ `BranchStatus` enum use); migration
+`0007` (`organization_branches`, `(organization_id, code)` unique index,
+FK CASCADE); `BranchCreate`/`BranchUpdate`/`BranchResponse` schemas (code
+pattern `^[A-Za-z0-9_-]{1,32}$`, `""` clears a field); `OrganizationRepository`
+branch queries (`list_branches`/`get_branch`/`find_branch_by_code`, all org-
+scoped); `OrganizationService` branch methods with duplicate pre-check + audit
+(`ORGANIZATION_BRANCH_CREATED/UPDATED/DEACTIVATED`); 5 routes
+(`GET/POST /me/branches`, `GET/PATCH/DELETE /me/branches/{id}` — DELETE → 204);
+404/409 mapping in `http_errors`.
+
+**Verification.** 26 new tests (14 unit + 12 API) + full account-api suite
+**251 pass**; `uvx ruff check apps/account-api` clean. Details in the
+Implementation Status block below.
+
+#### Phase 2 Implementation Status
+
+- Files created: `migrations/alembic/versions/0007_organization_branches.py`.
+- Files modified: `app/models/organization.py`, `app/models/__init__.py`,
+  `app/domain/organization.py` (branch errors), `app/domain/access.py`
+  (branch audit actions), `app/schemas/organization.py`, `app/repositories/organization.py`,
+  `app/services/organization.py`, `app/api/v1/organizations.py`,
+  `app/api/v1/http_errors.py`, `tests/test_organizations_api.py`,
+  `tests/unit/test_organization.py`.
+- New tests: 14 unit (service CRUD, org-scoping, dup-code, soft-deactivate
+  keeps history, migration 0007 round-trip) + 12 API (auth/admin gates,
+  CRUD, 404 cross-org, 409 dup code, invalid code 422, soft delete 204).
+- Full account-api suite **251 pass** (was 225); `uvx ruff check
+  apps/account-api` clean. Committed: pending (will commit with Phase 2).
+- Deviation from plan: the repo convention for SQLite-testable migrations is a
+  **unique index** (`op.create_index(..., unique=True)`) instead of a
+  `create_unique_constraint` — SQLite cannot `ALTER` unique constraints
+  (`NotImplementedError`); the model still declares
+  `UniqueConstraint(name="uq_organization_branches_org_code")`, matched by
+  index name. Same pattern as `0006` (inn/ogrn).
+- Branch `code` is mutable via PATCH (dup-pre-checked); `status` is only
+  mutated by DELETE (deactivate). Inactive branches stay in list/get results
+  (history preserved), ready for `branch_code` use by later phases.
+
 ---
 
 ## 3. Pending phases
 
 Vertical slices; migration numbers from §4.4. Each phase ends with tests +
 `docs` status update + a pause to confirm with the user.
-
-### Phase 2 — Branches [ ]
-DB `0007`. `OrganizationBranch` table + branch CRUD (`GET/POST/PATCH/DELETE
-/me/branches[/{id}]`), soft deactivate (`status=INACTIVE`, never hard-delete),
-duplicate `code` → 409, org isolation → 404. Tests: CRUD, isolation, duplicate
-code, deactivation keeps history. Deps: Ph1. **Accept:** 1:N branches,
-`branch_code` usable by later phases.
 
 ### Phase 3 — Licenses [ ]
 DB `0008`. `OrganizationLicense` table + license CRUD (status/validity/scope/
@@ -200,8 +241,9 @@ weighted control digits), `normalize_ogrn`/`ogrn_checksum_valid` (13 digits,
 first-12 mod 11 mod 10).
 
 `AuditAction` additions (each in its phase): `ORGANIZATION_UPDATED` ✓ (Ph1),
-`ORGANIZATION_BRANCH_*`, `ORGANIZATION_LICENSE_*`, `API_KEY_CREATED`,
-`API_KEY_REVOKED`, `API_KEY_AUTH_FAILED`, `INTEGRATION_DOCUMENT_UPLOADED`,
+`ORGANIZATION_BRANCH_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph2),
+`ORGANIZATION_LICENSE_*`, `API_KEY_CREATED`, `API_KEY_REVOKED`,
+`API_KEY_AUTH_FAILED`, `INTEGRATION_DOCUMENT_UPLOADED`,
 `INTEGRATION_BATCH_CREATED` (string values → fits `length=64`).
 
 Config additions: `integration_api_hmac_key` (empty default; goes in
@@ -238,7 +280,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | Migration | Contents |
 |---|---|
 | `0006_organization_legal_data.py` ✓ | org legal columns + `verification_status` (server default `'UNVERIFIED'`) + `uq_organizations_inn`/`_ogrn` |
-| `0007_organization_branches.py` | `organization_branches` + unique constraint |
+| `0007_organization_branches.py` ✓ | `organization_branches` + `(organization_id, code)` unique index (see note §7) |
 | `0008_organization_licenses.py` | `organization_licenses` + unique constraint |
 | `0009_organization_api_keys.py` | `organization_api_keys` + unique `key_hash` |
 | `0010_organization_api_requests.py` | `organization_api_requests` + indexes |
@@ -265,7 +307,7 @@ Management (JWT + org_admin + member):
 | Method/Path | Request → Response | Notes |
 |---|---|---|
 | `GET/PATCH /organizations/me` ✓ | — / `OrganizationUpdate` → `OrganizationResponse` | Ph1 |
-| `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | dup code 409; DELETE = soft deactivate |
+| `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | ✓ Ph2; dup code 409; DELETE = soft deactivate |
 | `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | dup number 409; soft status change |
 | `GET/POST /organizations/me/api-keys` · `DELETE/Rotate /…/{id}` | `ApiKeyCreate` → response (**raw once**) · 204 | list hides raw |
 | `GET /organizations/me/api-usage` | `?from&to` → aggregates | Ph11 |
@@ -285,7 +327,7 @@ Codes: 401 · 403 · 429 · 404 · 409 · 413 (oversized) · 415 (bad type) · 4
 ### 4.8 Schemas (`app/schemas/organization.py` ✓, `integration.py`, `notification.py`)
 
 - `OrganizationUpdate` ✓ — optional name/inn/ogrn/legal_address/email/phone/website; INN/OGRN normalized + checksum-checked; legal-data change → `PENDING` (re-verification).
-- Branch: `code ^[A-Za-z0-9_-]{1,32}$`, `name ≤255`, `address`, `phone`.
+- Branch ✓: `code ^[A-Za-z0-9_-]{1,32}$`, `name ≤255`, `address`, `phone`; PATCH `""` → `NULL`.
 - License: `license_number ≤64`, `license_type`, `status`, `issued_at`, `expires_at`, `scope`, `issuer`.
 - ApiKey: `name`, `scopes` (required, non-empty), `expires_at?`; response includes `raw_key` only on create/rotate.
 - Integration: upload request `patient_email` (Identity-validated), `document_type?`, `external_id?`, `branch_code?`, `title?`; response `document_id`, `status="processing"`, `external_id`, `patient_id`. Bulk: `items ≤ integration_max_batch_size`, `idempotency_key?`. Status reads only (no canonical content for orgs in v1).
@@ -337,8 +379,8 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 ## 6. Implementation order
 
 1. Phase 1 — Organization core. [x]
-2. Phase 2 — Branches. [ ] (next)
-3. Phase 3 — Licenses. [ ]
+2. Phase 2 — Branches. [x]
+3. Phase 3 — Licenses. [ ] (next)
 4. Phase 4 — API keys. [ ]
 5. Phase 5 — API-key auth. [ ]
 6. Phase 7 — Patient resolver. [ ] (ordered before 6: §4.9 unblocks single upload)
@@ -359,6 +401,7 @@ Each phase: implement → update this status → pause for confirmation.
 
 - SQLAlchemy stores `str, Enum` members by **name** (`native_enum=False`); migration backfill/defaults must use uppercase (e.g. `'UNVERIFIED'`).
 - Full alembic chain is not SQLite-portable (0002 uses PG `btrim`); migration tests exercise individual revisions in isolation.
+- Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code).
 - `PATCH ""` clears a field → `NULL`; verification status can only move **to `PENDING`** via the human API.
 - `uv run` at the workspace root resolves all members incl. ai-worker → `torch` (no mac-x86 wheel); use `uv run --project apps/account-api …`.
 - Follow `docs/development/CONTRIBUTING.md`: `Annotated` service aliases, router `raise_for`, service commits once.
