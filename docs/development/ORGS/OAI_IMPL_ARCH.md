@@ -2584,6 +2584,78 @@ Create API key
 Integration ready
 ```
 
+## 73.1 Phase 4a — Organization self-registration
+
+Пользователь **сам регистрирует** организацию и становится её первым
+администратором:
+
+```text
+ACTIVE Account (JWT)
+       │
+       │ POST /api/v1/organizations
+       ▼
+Organization
+   status = ACTIVE
+   verification_status = PENDING
+   created_by_account_id = <account>
+       │
+       ▼
+OrganizationMembership
+   role = owner
+   status = ACTIVE
+       │
+       ▼
+organization_admin (transitional, phased out in 4b)
+```
+
+Требования (роль обязанности **до** регистрации не требуется — пользователь
+становится admin **в результате** операции):
+
+- **Вход:** `name`, `type`, `inn`, `ogrn` (обязательно), `legal_address`,
+  `email`, `phone`, `website` (опционально). INN/OGRN нормализуются до
+  канонических цифр (включая внутренние пробелы) + контрольная сумма.
+- **Дополнительный endpoint:** `GET /api/v1/organizations` — список организаций
+  с ACTIVE membership (multi-organization виден сразу).
+- **Multi-membership:** один аккаунт может принадлежать нескольким
+  организациям. Наличие существующего membership **не запрещает** создание
+  новой организации — это продуктовая политика, а не следствие модели.
+- **Idempotency:** источник гарантии — уникальные индексы БД
+  (`uq_organizations_inn` / `uq_organizations_ogrn`); проверка в service нужна
+  для UX, `IntegrityError` → rollback → 409 (по конкурентному INN/OGRN).
+- **Роль в организации** (`OrganizationMembership.role` = `owner|admin|member`)
+  — вместо глобальной `AccountRole(organization_admin)`. Глобальная роль в 4a
+  выдаётся только transitional (append-only, существующие роли сохраняются),
+  чтобы не ломать уже реализованные `/organizations/me/*`, и убирается в 4b.
+- **`created_by_account_id`** на `Organization` — для расследований, support,
+  verification и будущих invite/claim (4i). Ownership и membership — разные
+  понятия.
+- **`Organization.email`/`phone`** — контактные данные, никогда не выводятся из
+  `Account.email`/`phone` (authentication identity).
+- **Audit:** `ORGANIZATION_REGISTERED` = actor + organization + request; без
+  INN/OGRN/email/секретов в metadata.
+- **Миграция `0010`:** `organizations.created_by_account_id` (FK SET NULL),
+  `organization_memberships.role` (default `member`).
+
+## 73.2 Phase 4b — Organization context & membership-role auth
+
+`/organizations/me/*` переходит с глобальной роли на авторизацию по
+`OrganizationMembership.role ∈ {owner, admin}`:
+
+```text
+authenticated account
+        ↓
+organization context (explicit current-org selection)
+        ↓
+active membership
+        ↓
+membership role (owner|admin|member)
+        ↓
+permission
+```
+
+Для account с несколькими ACTIVE membership выбор текущей организации в write
+endpoints становится явным; каждый подресурс остаётся org-scoped (no IDOR).
+
 ---
 
 # 74. Verification status
@@ -2616,6 +2688,32 @@ manual
 federal_registry
 license_registry
 ```
+
+## 74.1 Правило доступа (locked)
+
+`Organization.status = ACTIVE` — необходимое, но **не достаточное** условие
+для integration-доступа. API ключи и ingestion документов (4c+):
+
+```text
+ACTIVE + PENDING verification
+        ≠
+fully verified organization
+```
+
+Полный доступ интеграции требует:
+
+```text
+status = ACTIVE
+   +
+verification_status ≠ REJECTED
+   +
+активный membership (role owner|admin после 4b)
+   +
+scope ключа
+```
+
+Management-эндпоинты (`/organizations/me/*`, создание API-ключей) verification
+не гейтятся; гейт относится к production-доступу (integration API).
 
 ---
 
@@ -2999,7 +3097,38 @@ expiration
 
 ---
 
-# 88. Phase 5 — API Key authentication
+# 87a. Phase 4a — Organization self-registration (onboarding)
+
+См. §73.1. Реализовать:
+
+```text
+POST /api/v1/organizations     (ACTIVE JWT; роли не требуется)
+GET  /api/v1/organizations     (список моих организаций)
+```
+
+```text
+OrganizationCreate (name, type, inn, ogrn + optional)
+        ↓
+register_organization
+        ↓
+Organization (ACTIVE, verification=PENDING, created_by)
+   + OrganizationMembership (ACTIVE, role=owner)
+   + organization_admin (transitional, append-only)
+        ↓
+audit ORGANIZATION_REGISTERED
+        ↓
+commit; IntegrityError → 409
+```
+
+Миграция `0010`: `created_by_account_id` + `organization_memberships.role`.
+
+# 87b. Phase 4b — Organization context & membership-role authorization
+
+См. §73.2. Авторизация `/organizations/me/*` по `OrganizationMembership.role`
+вместо глобальной `organization_admin` `AccountRole`; явный выбор текущей
+организации для multi-membership account; убрать transitional глобальную роль.
+
+# 88. Phase 4c — API Key authentication & verification policy
 
 Создать:
 
@@ -3016,9 +3145,11 @@ permissions
 rate limiting
 request ID
 audit
+verification gate: verification_status ≠ REJECTED
 ```
 
-На этом этапе внешний API пока может иметь один endpoint:
+Правило: `status = ACTIVE` необходимо, но недостаточно (§74.1). На этом этапе
+внешний API пока может иметь один endpoint:
 
 ```text
 POST /integration/documents
@@ -3026,7 +3157,7 @@ POST /integration/documents
 
 ---
 
-# 89. Phase 6 — Single document integration
+# 89. Phase 4d — Single document integration & patient resolver
 
 Реализовать:
 
@@ -3065,7 +3196,7 @@ Response:
 
 ---
 
-# 90. Phase 7 — Patient resolver
+# 90. Phase 4d — Patient resolver (single-document prerequisite)
 
 Реализовать:
 
@@ -3091,7 +3222,7 @@ race condition handling
 
 ---
 
-# 91. Phase 8 — Notifications
+# 91. Phase 4f — Notifications
 
 Добавить:
 
@@ -3131,7 +3262,7 @@ Client
 
 ---
 
-# 92. Phase 9 — Bulk upload
+# 92. Phase 4e — Bulk upload
 
 Добавить:
 
@@ -3159,7 +3290,7 @@ retry
 
 ---
 
-# 93. Phase 10 — Organization schemas
+# 93. Phase 4g — Organization schemas
 
 Добавить:
 
@@ -3188,7 +3319,7 @@ schema v3
 
 ---
 
-# 94. Phase 11 — Monitoring
+# 94. Phase 4h — Monitoring
 
 Добавить:
 
@@ -3220,7 +3351,7 @@ Documents:
 
 ---
 
-# 95. Phase 12 — Registry verification
+# 95. Phase 4i — Registry verification + ownership/invite
 
 Это отдельная последующая фаза:
 
@@ -3333,6 +3464,8 @@ Licenses
 API Keys
 
 API Key authentication
+
+Organization self-registration (Phase 4a)
 
 Single document integration
 
@@ -3514,6 +3647,10 @@ expired key → 401/403
 inactive organization → reject
 
 missing permission → 403
+
+concurrent registration with same INN → exactly one 201, other 409
+
+account with two ACTIVE memberships → deterministic org resolution, no 500
 ```
 
 ## E2E
@@ -3692,29 +3829,38 @@ Medical Platform ───┼── Specialist
         ↓
 04. Organization management API
         ↓
-05. API Keys
+05. API Keys                     ← реализовано (Phase 4)
         ↓
-06. API Key authentication
+06. Organization self-registration  (Phase 4a) ← следующий шаг
         ↓
-07. Organization integration API
+07. Organization context & membership-role auth (Phase 4b)
         ↓
-08. Patient resolver
+08. API Key authentication + verification policy (Phase 4c)
         ↓
-09. Organization → Document
+09. Patient resolver
         ↓
-10. Notification
+10. Organization → Document / single integration (Phase 4d)
         ↓
-11. Bulk upload
+11. Notification                  (Phase 4f)
         ↓
-12. Idempotency / external IDs
+12. Bulk upload                   (Phase 4e)
         ↓
-13. API monitoring
+13. Idempotency / external IDs
         ↓
-14. Organization document schemas
+14. API monitoring                (Phase 4h)
         ↓
-15. Registry verification
+15. Organization document schemas (Phase 4g)
+        ↓
+16. Registry verification + ownership/invite (Phase 4i)
 ```
 
-Именно такой порядок я считаю оптимальным для текущей стадии проекта: сначала закрыть **реальный Organization → Client document delivery workflow**, затем масштабировать его bulk/API/schema/monitoring возможностями.
+Примечание: self-registration (4a) и организация контекста/авторизации (4b)
+закрывают вход организации в платформу **до** API-key политики (4c) и
+integration API (4d). API-ключи (05) уже реализованы; создание ключей не
+входит в acceptance 4a.
+
+Именно такой порядок я считаю оптимальным для текущей стадии проекта: сначала
+закрыть **реальный Organization → Client document delivery workflow**, затем
+масштабировать его bulk/API/schema/monitoring возможностями.
 
 Это также не конфликтует с текущим roadmap проекта, где Organization workflow и document delivery являются ближайшими незакрытыми продуктовыми слоями, а medical normalization, analytics, Qdrant и Longitudinal AI остаются последующими этапами.

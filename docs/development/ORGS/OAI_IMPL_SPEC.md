@@ -41,6 +41,10 @@ Create a detailed implementation plan for evolving the existing `Organization` d
 * INN;
 * OGRN;
 * legal address;
+* **organization self-registration (onboarding)** — an ACTIVE account creates an
+  organization and becomes its first admin via an **organization-scoped role**
+  (`OrganizationMembership.role`, not a global `AccountRole`); multi-membership
+  allowed;
 * multiple organization licenses;
 * multiple organization branches with separate addresses;
 * organization API keys;
@@ -169,6 +173,7 @@ Start the document with a table similar to:
 | Area                  | Current state | Required state | Action |
 | --------------------- | ------------- | -------------- | ------ |
 | Organization          | ...           | ...            | modify |
+| Organization onboarding | ...         | self-registration: `POST /organizations`, membership role `owner`, `created_by`, multi-membership | modify + create |
 | Branches              | ...           | ...            | create |
 | Licenses              | ...           | ...            | create |
 | API Keys              | ...           | ...            | create |
@@ -211,6 +216,7 @@ At minimum evaluate these entities:
 
 ```text
 Organization
+OrganizationMembership (add organization-scoped `role` owner|admin|member)
 OrganizationBranch
 OrganizationLicense
 OrganizationApiKey
@@ -409,6 +415,8 @@ At minimum cover:
 ## Organization management
 
 ```text
+POST /organizations            (self-registration; ACTIVE JWT only)
+GET  /organizations            (list my organizations)
 GET    /organizations/me
 PATCH  /organizations/me
 ```
@@ -462,6 +470,7 @@ Specify every required request/response schema.
 At minimum:
 
 ```text
+OrganizationCreate
 OrganizationUpdate
 OrganizationResponse
 
@@ -507,11 +516,14 @@ Define the validation strategy.
 Determine:
 
 * acceptable formats;
-* normalization;
+* normalization — strip **all** whitespace so only canonical digits persist;
 * whether checksum validation should be implemented;
-* whether uniqueness is database-enforced;
+* whether uniqueness is database-enforced (yes — unique indexes are the
+  idempotency source of truth; service pre-check is UX-only);
 * whether values are optional for existing organizations;
-* when they become required.
+* when they become required (required at self-registration);
+* shared validators reused by `OrganizationCreate`, `OrganizationUpdate` and
+  future registry verification.
 
 Do not blindly implement validation based only on frontend assumptions.
 
@@ -1100,21 +1112,33 @@ Prefer vertical slices rather than creating all database tables first.
 A likely structure is:
 
 ```text
-Phase 1 — Organization core
-Phase 2 — Branches
-Phase 3 — Licenses
-Phase 4 — API Keys
-Phase 5 — API-key authentication
-Phase 6 — Single document integration
-Phase 7 — Patient resolver
-Phase 8 — Notifications
-Phase 9 — Bulk upload
-Phase 10 — Organization schemas
-Phase 11 — Monitoring
-Phase 12 — Registry verification extension
+Phase 1  — Organization core
+Phase 2  — Branches
+Phase 3  — Licenses
+Phase 4  — API Keys
+Phase 4a — Organization onboarding (self-registration)
+Phase 4b — Organization context & membership-role authorization
+Phase 4c — API-key authentication & verification policy
+Phase 4d — Integration API + patient resolver
+Phase 4e — Bulk upload
+Phase 4f — Notifications
+Phase 4g — Organization schemas
+Phase 4h — Monitoring
+Phase 4i — Registry verification + ownership/invite
 ```
 
-Adjust this order after inspecting the codebase.
+Adjust this order after inspecting the codebase. Key constraints:
+
+- Registration (`POST /organizations`) must NOT require a pre-existing
+  `organization_admin` role; the creator becomes admin **as a result**.
+- One account may hold memberships in several organizations; an existing
+  membership must not block creating another organization.
+- Organization authorization uses `OrganizationMembership.role`, not the global
+  `organization_admin` `AccountRole` (global grant is transitional only).
+- `Organization.status = ACTIVE` is necessary-not-sufficient for integration
+  access: verification status (`≠ REJECTED`) gates API-key/integration policy.
+- DB unique indexes are the idempotency source of truth for INN/OGRN
+  (`IntegrityError` → rollback → 409).
 
 For every phase specify:
 
@@ -1168,14 +1192,18 @@ For example:
 2. Add organization branches
 3. Add organization licenses
 4. Add organization API key model
-5. Add API key authentication
-6. Add organization integration document endpoint
-7. Add patient resolver
-8. Add organization document source
-9. Add notification flow
-10. Add bulk upload
-11. Add API monitoring
-12. Add organization document schemas
+5. Add organization self-registration (onboarding): POST /organizations,
+   OrganizationMembership.role, created_by_account_id, multi-membership,
+   IntegrityError → 409
+6. Add organization context & membership-role authorization (migrate
+   /organizations/me/* off the global organization_admin role)
+7. Add API key authentication + verification policy
+8. Add patient resolver
+9. Add organization document source + single integration upload
+10. Add notification flow
+11. Add bulk upload
+12. Add API monitoring
+13. Add organization document schemas
 ```
 
 Adapt the actual commit structure based on the repository.

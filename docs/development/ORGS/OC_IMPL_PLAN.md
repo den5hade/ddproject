@@ -7,6 +7,16 @@ client notifications, organization document schemas, API-usage monitoring, and
 the registry-verification extension point. Built on existing infrastructure
 only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/OAI_IMPL_ARCH.md` (arch) + `docs/development/ORGS/OAI_IMPL_SPEC.md` (spec).
 
+**Revision 6** — Phase 4a (organization self-registration / onboarding) planned
+and staged first among the pending phases; new **membership-role** authorization
+model (`OrganizationMembership.role`) replaces the global `organization_admin`
+role as the org-access source (transitional grant kept until 4b); multi-membership
+allowed; DB unique indexes remain the idempotency source of truth
+(`IntegrityError`→409); `verification_status` gated integration (status ACTIVE is
+necessary-not-sufficient). `/organizations/me/api-keys` is **not** a Phase 4a
+acceptance criterion. Pending phases restaged to 4a–4i; `0010` = onboarding
+(role + `created_by_account_id`), future migrations renumbered (0011–0014).
+
 **Revision 5** — Phase 4 (API keys) completed; `0009` marked done;
 `API_KEY_CREATED/REVOKED` audit actions, api-key schemas/service/endpoints folded
 into §4; Phase 5 marked next.
@@ -70,14 +80,15 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 2 | Branches | [x] done |
 | 3 | Licenses | [x] done |
 | 4 | API keys | [x] done |
-| 5 | API-key auth | [ ] |
-| 6 | Single document integration | [ ] |
-| 7 | Patient resolver | [ ] |
-| 8 | Notifications | [ ] |
-| 9 | Bulk upload | [ ] |
-| 10 | Organization schemas | [ ] |
-| 11 | Monitoring | [ ] |
-| 12 | Registry verification extension | [ ] |
+| 4a | Organization onboarding (self-registration) | [ ] |
+| 4b | Organization context & membership-role authorization | [ ] |
+| 4c | API-key auth & verification policy | [ ] |
+| 4d | Integration API & patient resolver | [ ] |
+| 4e | Bulk upload | [ ] |
+| 4f | Notifications | [ ] |
+| 4g | Organization schemas | [ ] |
+| 4h | Monitoring | [ ] |
+| 4i | Registry verification + ownership/invite | [ ] |
 
 ---
 
@@ -123,7 +134,7 @@ apps/account-api` clean.
 - `PATCH` with `""` clears the field (→ `NULL`); clearing legal data also moves
   status to `PENDING`.
 - The human API can only move status **to `PENDING`**; `VERIFIED`/`REJECTED` are
-  set exclusively by the registry provider (Phase 12).
+  set exclusively by the registry provider (Phase 4i).
 
 ### Phase 2 — Branches [x]
 
@@ -284,30 +295,128 @@ Implementation Status block below.
 Vertical slices; migration numbers from §4.4. Each phase ends with tests +
 `docs` status update + a pause to confirm with the user.
 
-### Phase 5 — API-key auth [ ]
-Deps module + `OrganizationApiContext`, scopes, Redis rate limit, `OrganizationApiRequest` writes (`0010`), `request_id` (echoed `X-Request-Id`). Tests: 401/403/429 matrix. Deps: Ph4. **Accept:** a key authenticates, is org-scoped, rate-limited, and audited.
+### Phase 4a — Organization onboarding (self-registration) [ ]
 
-### Phase 6 — Single document integration [ ]
-Extend `DocumentService` (`0013` document columns), `OrganizationDocumentService`, patient resolver. API: `POST /integration/documents`, `GET /integration/documents/{id}`. Event `OrganizationDocumentSubmitted`. Tests: upload → status, doc-type conflict (422), `external_id` idempotency, MIME/size. Deps: Ph5 + resolver. **Accept:** org uploads a doc end-to-end through the existing pipeline.
+**Objective.** An ACTIVE account registers a new organization and becomes its
+first admin through a **membership role** — no `organization_admin` role is
+required beforehand. Multi-membership is allowed (an account may belong to any
+number of organizations; nothing blocks creating another one).
 
-### Phase 7 — Patient resolver [ ]
-`OrganizationPatientResolver` + concurrency/race tests (spec §15, §4.9).
-Deps: —. **Accept:** unknown email → PENDING account + Person + Patient + MedicalRecord exactly once under concurrency.
+**Endpoints.** `POST /api/v1/organizations` → 201 `OrganizationResponse`
+(gate: `CurrentAccount` only); `GET /api/v1/organizations` → `list[OrganizationResponse]`
+(all orgs with an ACTIVE membership).
 
-### Phase 8 — Notifications [ ]
-DB `notifications` (part of `0013`); `NotificationService`; extend `notification-worker` (provider `send_message`, consume `notification.requested`); hook after analysis completed/failed for org-sourced docs. Tests: row created, email has no medical data, worker delivery. Deps: Ph6. **Accept:** client receives "document processed/failed" email with org name + secure link, no medical data.
+**Schema.** `OrganizationCreate` — required `name`, `type`, `inn`, `ogrn`;
+optional `legal_address`, `email`, `phone`, `website`. INN/OGRN validators are
+**shared** with `OrganizationUpdate` (`app/schemas/organization.py`), normalize
+to canonical digits (inner whitespace stripped) and checksum-check behind
+`integration_validate_inn_checksum`.
 
-### Phase 9 — Bulk upload [ ]
-DB `0011`; `OrganizationBulkUploadService`; API `POST /integration/documents/bulk`, `GET /integration/batches/{id}(/items)`; batch events; partial failure/idempotency (`(org, external_id)` skip). Tests: batch state machine, per-item failures, duplicates, no giant transaction. Deps: Ph6/7. **Accept:** 100-doc batch, partial failures tracked per item, resubmission idempotent.
+**Service.** `OrganizationService.register_organization(account, data, request)`:
+1. UX pre-check: duplicate `inn`/`ogrn` → 409 (`OrganizationLegalDataConflictError`).
+2. One transaction: `Organization(status=ACTIVE, verification_status=PENDING,
+   created_by_account_id=account.id, legal + contacts)` + `OrganizationMembership(
+   role=OWNER, status=ACTIVE)` + **append-only** `organization_admin` grant —
+   transitional, preserved roles (e.g. `CLIENT`) untouched — + commit + audit
+   `ORGANIZATION_REGISTERED`.
+3. **Idempotency source of truth = DB unique indexes** `uq_organizations_inn` /
+   `uq_organizations_ogrn` (from `0006`); `IntegrityError` → rollback → 409.
+4. Multi-membership safety: `get_active_organization_for_account` becomes
+   deterministic (earliest `joined_at`), plus new
+   `list_active_organizations_for_account` (no `MultipleResultsFound` on a 2nd
+   membership).
 
-### Phase 10 — Organization schemas [ ]
-DB `0012`; `OrganizationSchemaService`; API schemas CRUD + publish (immutable). Tests: versioning, publish-immutability, JSON-Schema validation. Deps: Ph1. **Accept:** org drafts/publishes versioned schemas without touching the canonical model.
+**Migration** `0010_organization_onboarding.py` — `organizations.created_by_account_id`
+(Uuid FK `accounts.id` ondelete `SET NULL`, index) + `organization_memberships.role`
+String(16) `OrganizationMembershipRole` (`owner|admin|member`), server default
+`'MEMBER'` (uppercase), existing rows default `member`. Downgrade drops both.
 
-### Phase 11 — Monitoring [ ]
-`GET /organizations/me/api-usage` aggregates; `OrganizationApiRequest` volume; metrics/log notes. Tests: aggregation filters by org, no PII columns. Deps: Ph5. **Accept:** org sees requests/day, success/error, docs, batches, failures.
+**Boundaries.** `Organization.email`/`phone` are contact data — never derived
+from the account identity. Audit metadata carries no legal data, contacts or
+secrets. `POST /organizations/me/api-keys` is **not** a 4a acceptance criterion;
+API-key policies land in 4c. Verification-gated integration (status ACTIVE
+necessary-not-sufficient) is fixed in §4.15.
 
-### Phase 12 — Registry verification extension point [ ]
-Add `OrganizationRegistryProvider` `Protocol` + `OrganizationVerificationResult`; **no** provider implementation. Deps: Ph1. **Accept:** a future `FederalRegistryProvider` injects without changing `OrganizationService`.
+**Accept.** 201 → creator immediately resolves `GET /organizations/me` + `GET
+/organizations`; membership.role=owner + created_by set; dup INN/OGRN → 409 via
+both paths; same account registers a second org (multi-org); audit has no
+sensitive values; existing roles preserved.
+
+### Phase 4b — Organization context & membership-role authorization [ ]
+
+**Objective.** Replace the global `organization_admin` `AccountRole` as the
+org-authorization source for `/organizations/me/*` with a check on
+`OrganizationMembership.role ∈ {owner, admin}`.
+
+**Changes.** Refactor `require_organization_admin()` / `_resolve_organization_admin_membership`
+in `app/dependencies/organization.py` to authorize via the resolved membership
+role; explicit current-org selection for multi-membership accounts (no implicit
+"first membership" on write endpoints); drop the transitional global-role grant
+introduced in 4a; every sub-resource stays org-scoped (no IDOR). Tests:
+multi-org account manages each org without ambiguity, role downgrade `owner→member`
+loses access, isolation kept. Deps: 4a. **Accept:** org management works without
+any global `organization_admin` role; ambiguous multi-org access is resolved
+explicitly.
+
+### Phase 4c — API-key auth & verification policy [ ]
+
+Deps module + `OrganizationApiContext`, scopes, Redis rate limit,
+`OrganizationApiRequest` writes (`0011`), `request_id` (echoed `X-Request-Id`).
+**Verification gate** (locked): integration additionally requires
+`verification_status ≠ REJECTED`; `Organization.status = ACTIVE` is
+necessary-not-sufficient — PENDING verification never grants unrestricted
+production access. Tests: 401/403/429 matrix + unverified/rejected org. Deps: 4b.
+**Accept:** a key authenticates, is org-scoped, rate-limited, verification-gated
+and audited.
+
+### Phase 4d — Integration API & patient resolver [ ]
+
+`OrganizationPatientResolver` (§4.9) + `POST /integration/documents`,
+`GET /integration/documents/{id}`; extend `DocumentService` (`0014` document
+columns incl. `organization_id`/`organization_branch_id`/`external_id`/
+`idempotency_key`/`provided_document_type`); event `OrganizationDocumentSubmitted`.
+Tests: upload → status, doc-type conflict (422), `external_id` idempotency,
+MIME/size, resolver concurrency. Deps: 4c + resolver. **Accept:** org uploads a
+doc end-to-end through the existing pipeline.
+
+### Phase 4e — Bulk upload [ ]
+
+DB `0012`; `OrganizationBulkUploadService`; API `POST /integration/documents/bulk`,
+`GET /integration/batches/{id}(/items)`; batch events; per-item **own**
+transactions; partial failures; idempotency `(org, external_id)`. Tests: batch
+state machine, per-item failures, duplicates, no giant transaction. Deps: 4d.
+**Accept:** 100-doc batch, partial failures tracked per item, resubmission
+idempotent.
+
+### Phase 4f — Notifications [ ]
+
+DB `notifications` (in `0014`); `NotificationService`; extend `notification-worker`
+(provider `send_message`, consume `notification.requested`); hook after analysis
+completed/failed for org-sourced docs. Tests: row created, email has no medical
+data, worker delivery. Deps: 4d. **Accept:** client receives "document
+processed/failed" email with org name + secure link, no medical data.
+
+### Phase 4g — Organization schemas [ ]
+
+DB `0013`; `OrganizationSchemaService`; API schemas CRUD + publish (immutable).
+Tests: versioning, publish-immutability, JSON-Schema validation. Deps: 4b.
+**Accept:** org drafts/publishes versioned schemas without touching the canonical
+model.
+
+### Phase 4h — Monitoring [ ]
+
+`GET /organizations/me/api-usage` aggregates; `OrganizationApiRequest` volume;
+metrics/log notes; retention purge (§7 open decision 7). Tests: aggregation
+filters by org, no PII columns. Deps: 4c. **Accept:** org sees requests/day,
+success/error, docs, batches, failures.
+
+### Phase 4i — Registry verification + ownership/invite [ ]
+
+Add `OrganizationRegistryProvider` `Protocol` + `OrganizationVerificationResult`;
+**no** provider implementation; `Organization.created_by_account_id` as the
+ownership anchor for future invite/claim flows (join existing org by INN).
+Deps: 4b. **Accept:** a future `FederalRegistryProvider` injects without changing
+`OrganizationService`; ownership/membership remain separate concepts.
 
 ---
 
@@ -342,12 +451,20 @@ processing_failed`), `NotificationStatus` (`pending|sent|failed|read`),
 
 INN/OGRN helpers (Phase 1): `normalize_inn`/`inn_checksum_valid` (10|12 digits,
 weighted control digits), `normalize_ogrn`/`ogrn_checksum_valid` (13 digits,
-first-12 mod 11 mod 10).
+first-12 mod 11 mod 10). Phase 4a additionally normalizes away **inner**
+whitespace so only canonical digits persist.
+
+`OrganizationMembershipRole` (Phase 4a): `owner|admin|member` — the
+**organization-scoped** role (column on `organization_memberships`). Owner =
+creator of a self-registered org. Authorization for `/organizations/me/*`
+migrates from the global `organization_admin` `AccountRole` to this column in
+Phase 4b (the global grant from 4a is transitional only).
 
 `AuditAction` additions (each in its phase): `ORGANIZATION_UPDATED` ✓ (Ph1),
 `ORGANIZATION_BRANCH_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph2),
 `ORGANIZATION_LICENSE_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph3),
 `API_KEY_CREATED` / `_REVOKED` ✓ (Ph4),
+`ORGANIZATION_REGISTERED` (4a — actor/org/request only, no legal data/contacts),
 `API_KEY_AUTH_FAILED`, `INTEGRATION_DOCUMENT_UPLOADED`,
 `INTEGRATION_BATCH_CREATED` (string values → fits `length=64`).
 
@@ -365,7 +482,8 @@ All new columns nullable for existing rows (never force NOT NULL on prod data).
 
 | Table | Key columns / constraints |
 |---|---|
-| `organizations` (modified) | + `inn` String(12) unique · `ogrn` String(13) unique · `legal_address` Text · `email` · `phone` · `website` · `verification_status` (default `UNVERIFIED`) |
+| `organizations` (modified) | + `inn` String(12) unique · `ogrn` String(13) unique · `legal_address` Text · `email` · `phone` · `website` · `verification_status` (default `UNVERIFIED`) · `created_by_account_id` FK accounts.id SET NULL ix (4a) |
+| `organization_memberships` | `organization_id` FK CASCADE · `account_id` FK CASCADE · `role` `OrganizationMembershipRole` (default `member`) (4a) · `position` · `status` · `joined_at`/`left_at` · `UniqueConstraint(organization_id, account_id, name="uq_organization_memberships_org_account")` |
 | `organization_branches` | `organization_id` FK CASCADE · `code` String(32) · `name` · `address` · `phone` · `status` `BranchStatus` · `UniqueConstraint(organization_id, code, name="uq_organization_branches_org_code")` |
 | `organization_licenses` | `organization_id` FK CASCADE · `license_number` String(64) · `license_type` · `status` · `issued_at`/`expires_at` Date · `scope` · `issuer` · `UniqueConstraint(organization_id, license_number, name="uq_organization_licenses_org_number")` |
 | `organization_api_keys` | `organization_id` FK CASCADE · `name` · `prefix` String(16) · `key_hash` String(128) unique · `permissions` JSON(scopes) · `status` · `created_by_account_id` FK SET NULL · `expires_at`/`revoked_at`/`last_used_at` |
@@ -380,7 +498,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 `Account`, `Patient`, `Person`, `MedicalRecord`, `AuditLog`,
 `PatientAccessGrant` (already carries `organization_id`).
 
-### 4.4 Migrations (8 on top of `0005`; each downgrade-safe, independently reviewable)
+### 4.4 Migrations (9 on top of `0005`; each downgrade-safe, independently reviewable)
 
 | Migration | Contents |
 |---|---|
@@ -388,10 +506,11 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | `0007_organization_branches.py` ✓ | `organization_branches` + `(organization_id, code)` unique index (see note §7) |
 | `0008_organization_licenses.py` ✓ | `organization_licenses` + `(organization_id, license_number)` unique index (see note §7) |
 | `0009_organization_api_keys.py` ✓ | `organization_api_keys` + unique `key_hash` index (see note §7) |
-| `0010_organization_api_requests.py` | `organization_api_requests` + indexes |
-| `0011_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
-| `0012_organization_document_schemas.py` | `organization_document_schemas` |
-| `0013_notifications.py` + document source | `notifications`; `documents` source columns + partial unique indexes |
+| `0010_organization_onboarding.py` | `organizations.created_by_account_id` (FK SET NULL, ix) + `organization_memberships.role` (server default `'MEMBER'`) |
+| `0011_organization_api_requests.py` | `organization_api_requests` + indexes |
+| `0012_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
+| `0013_organization_document_schemas.py` | `organization_document_schemas` |
+| `0014_notifications.py` + document source | `notifications`; `documents` source columns + partial unique indexes |
 
 ### 4.5 API-key architecture
 
@@ -403,15 +522,32 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 
 ### 4.6 Authentication & authorization
 
-- Management (`/organizations/me/*`): JWT `get_current_account` → `require_roles(RoleCode.ORGANIZATION_ADMIN)` → `get_current_organization` (ACTIVE membership) → 403 `"no active organization membership"`. Every sub-resource scoped by `organization.id` (no IDOR).
-- Integration (`/integration/*`): `Bearer` → hash → `find_by_hash` → 401 (none/revoked/expired) → org status ≠ ACTIVE → 403 → `OrganizationApiContext(organization, api_key, permissions)`. Per-endpoint scope `require_api_key_permission(scope)`; Redis sliding-window rate limit `rl:{api_key_id}:{minute}` vs `integration_rate_limit_per_minute` → 429.
+- Onboarding (`POST/GET /organizations`): JWT `get_current_account` (ACTIVE) only —
+  no pre-existing role required. The creator becomes `owner` **as a result** of
+  registration.
+- Management (`/organizations/me/*`): JWT `get_current_account` →
+  `require_roles(RoleCode.ORGANIZATION_ADMIN)` (global role — **transitional**,
+  see 4a/4b) → `get_current_organization` (ACTIVE membership) → 403
+  `"no active organization membership"`. Phase 4b migrates the role check to the
+  resolved `OrganizationMembership.role ∈ {owner, admin}` and removes the global
+  role. Multi-membership: membership resolution is deterministic (earliest
+  `joined_at`) until 4b makes current-org selection explicit. Every sub-resource
+  scoped by `organization.id` (no IDOR).
+- Integration (`/integration/*`): `Bearer` → hash → `find_by_hash` → 401
+  (none/revoked/expired) → org status ≠ ACTIVE → 403 → **verification gate**:
+  `verification_status = REJECTED` → 403 (4c) → `OrganizationApiContext(
+  organization, api_key, permissions)`. Per-endpoint scope
+  `require_api_key_permission(scope)`; Redis sliding-window rate limit
+  `rl:{api_key_id}:{minute}` vs `integration_rate_limit_per_minute` → 429.
 
 ### 4.7 Endpoints
 
-Management (JWT + org_admin + member):
+Management (JWT + member; role = global `organization_admin` until 4b, then
+`OrganizationMembership.role`):
 
 | Method/Path | Request → Response | Notes |
 |---|---|---|
+| `POST /organizations` · `GET /organizations` | `OrganizationCreate` → `OrganizationResponse` 201 · list my orgs | **4a (next)**; no prior role; creator becomes `owner` |
 | `GET/PATCH /organizations/me` ✓ | — / `OrganizationUpdate` → `OrganizationResponse` | Ph1 |
 | `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | ✓ Ph2; dup code 409; DELETE = soft deactivate |
 | `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | ✓ Ph3; dup number 409; DELETE = soft revoke; auto `EXPIRED` on list/get |
@@ -432,7 +568,7 @@ Codes: 401 · 403 · 429 · 404 · 409 · 413 (oversized) · 415 (bad type) · 4
 
 ### 4.8 Schemas (`app/schemas/organization.py` ✓, `integration.py`, `notification.py`)
 
-- `OrganizationUpdate` ✓ — optional name/inn/ogrn/legal_address/email/phone/website; INN/OGRN normalized + checksum-checked; legal-data change → `PENDING` (re-verification).
+- `OrganizationCreate` **4a** — required `name`, `type`, `inn`, `ogrn`; optional `legal_address`, `email`, `phone`, `website`; shared INN/OGRN validators (canonical digits, checksum). `OrganizationUpdate` ✓ — optional name/inn/ogrn/legal_address/email/phone/website; INN/OGRN normalized + checksum-checked; legal-data change → `PENDING` (re-verification).
 - Branch ✓: `code ^[A-Za-z0-9_-]{1,32}$`, `name ≤255`, `address`, `phone`; PATCH `""` → `NULL`.
 - License ✓: `license_number ≤64`, `license_type`, `status`, `issued_at`, `expires_at`, `scope`, `issuer`; `expires_at` must not precede `issued_at`; PATCH `""` clears `scope`/`issuer`; explicit `status` change allowed.
 - ApiKey ✓: `name ≤128`, `scopes` (required, non-empty list of the 4 scopes), `expires_at?`; `ApiKeyResponse` hides `key_hash`; `raw_key` present only on `ApiKeyCreateResponse` (create/rotate).
@@ -471,12 +607,40 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 - Medical audit → existing patient-scoped `AuditLog`, untouched.
 - v1 metrics = structured logs + `GET /organizations/me/api-usage` DB aggregates; Prometheus = P2. `request_id` echoed as `X-Request-Id`.
 
+### 4.15 Organization onboarding & access policy (4a)
+
+- **Flow:** ACTIVE account → `POST /organizations` → `Organization` (ACTIVE,
+  verification PENDING, `created_by_account_id`) + `OrganizationMembership`
+  (ACTIVE, role `owner`) → (transitional) global `organization_admin` grant.
+- **Multi-membership:** one account may hold memberships in N orgs; existing
+  memberships never block creating a new organization. No "already a member"
+  409.
+- **Idempotency:** `uq_organizations_inn` / `uq_organizations_ogrn` are the
+  source of truth; service pre-check only improves UX. `IntegrityError` is
+  caught, rolled back and mapped to 409.
+- **Status vs. verification (locked):** `Organization.status = ACTIVE` is
+  *necessary but not sufficient* for integration access. Integration (4c+)
+  requires `verification_status ≠ REJECTED` + ACTIVE membership role
+  (`owner|admin`) + key scope. PENDING verification never implies unrestricted
+  production access. `GET/POST /organizations/me/api-keys` and management
+  endpoints are **not** gated by verification (management ≠ production data
+  access).
+- **Identities are separate:** `Account.email`/`phone` are authentication
+  identity; `Organization.email`/`phone` are contact data — never derived from
+  the account.
+- **Ownership vs. membership:** `created_by_account_id` records the creator (for
+  investigation/support/verification/invite); ownership and membership remain
+  separate concepts (4i reuses it for invite/claim by INN).
+- **Audit:** `ORGANIZATION_REGISTERED` = actor_account_id + organization +
+  request (IP/UA via `AuditService.record`); metadata never contains legal data,
+  contact fields or secrets.
+
 ---
 
 ## 5. Tests
 
-- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
-- **API**: `tests/test_organizations_api.py` ✓; `tests/test_integration_api.py`.
+- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a registration: owner membership, created_by, multi-org, `IntegrityError`→409, append-only role), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
+- **API**: `tests/test_organizations_api.py` ✓ (+ 4a: 201 → `/organizations/me` + `/organizations` resolve immediately, 409 dup INN/OGRN, multi-org registration, 422 bad INN, 401 unauthenticated, legacy roles preserved); `tests/test_integration_api.py`.
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
 
@@ -488,14 +652,15 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 2. Phase 2 — Branches. [x]
 3. Phase 3 — Licenses. [x]
 4. Phase 4 — API keys. [x]
-5. Phase 5 — API-key auth. [ ] (next)
-6. Phase 7 — Patient resolver. [ ] (ordered before 6: §4.9 unblocks single upload)
-7. Phase 6 — Single document integration. [ ]
-8. Phase 8 — Notifications. [ ]
-9. Phase 9 — Bulk upload. [ ]
-10. Phase 10 — Organization schemas. [ ]
-11. Phase 11 — Monitoring. [ ]
-12. Phase 12 — Registry verification extension. [ ]
+5. Phase 4a — Organization onboarding (self-registration). [ ] (next)
+6. Phase 4b — Organization context & membership-role authorization. [ ] (prereq: org auth source)
+7. Phase 4c — API-key auth & verification policy. [ ]
+8. Phase 4d — Integration API + patient resolver. [ ] (resolver inside 4d, unlocked before upload)
+9. Phase 4e — Bulk upload. [ ]
+10. Phase 4f — Notifications. [ ]
+11. Phase 4g — Organization schemas. [ ]
+12. Phase 4h — Monitoring. [ ]
+13. Phase 4i — Registry verification + ownership/invite. [ ]
 
 Each phase: implement → update this status → pause for confirmation.
 
@@ -509,6 +674,11 @@ Each phase: implement → update this status → pause for confirmation.
 - Full alembic chain is not SQLite-portable (0002 uses PG `btrim`); migration tests exercise individual revisions in isolation.
 - Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code, 0008 license number, 0009 key_hash).
 - `PATCH ""` clears a field → `NULL`; verification status can only move **to `PENDING`** via the human API.
+- `Organization.status = ACTIVE` is necessary-not-sufficient for integration (§4.15); the global `organization_admin` `AccountRole` is **transitional** from 4a and removed as an org-auth source in 4b.
+- Multi-membership: `get_active_organization_for_account` must be deterministic (earliest `joined_at`) — a `scalar_one_or_none` on 2+ ACTIVE memberships raises `MultipleResultsFound` (500). 4a fixes resolution + adds `list_active_organizations_for_account`; 4b adds explicit current-org selection on writes.
+- Unique DB indexes are the idempotency source of truth for INN/OGRN: always catch `IntegrityError` → rollback → 409 (concurrent registration).
+- INN/OGRN validation normalizes away **all** whitespace (canonical digits stored), not just leading/trailing.
+- `Organization.email`/`phone` are contact data; never auto-link to `Account` identity fields.
 - `uv run` at the workspace root resolves all members incl. ai-worker → `torch` (no mac-x86 wheel); use `uv run --project apps/account-api …`.
 - Follow `docs/development/CONTRIBUTING.md`: `Annotated` service aliases, router `raise_for`, service commits once.
 
@@ -520,13 +690,19 @@ Each phase: implement → update this status → pause for confirmation.
 4. **Notification timing** — process-completed/-failed only; "received" is optional P1 (two-emails risk).
 5. **Org schema format** — JSON Schema, published immutable; not yet consumed by ai-worker.
 6. **API-key scopes** — the 4 of §4.2; no `full`/per-type scopes.
-7. **`organization_api_requests` retention** — 90 days; purge in monitoring phase.
+7. **`organization_api_requests` retention** — 90 days; purge in 4h.
 8. **Org docs quota** — no free-plan cap (server-side submissions).
 9. **Bulk processing** — synchronous per-item in-request; RabbitMQ consumer is P1.
+10. **Registrable legal data** — `inn`/`ogrn` required at `POST /organizations` (4a); `legal_address` optional. Relax later if a use case needs it.
+11. **Verification policy** — integration requires `verification_status ≠ REJECTED`; management endpoints are not verification-gated. §4.15.
+12. **Transitional global role** — 4a appends global `organization_admin` only so existing `/me/*` keep working; 4b migrates to `OrganizationMembership.role` and removes it. Not a security boundary of its own.
+13. **Multi-org per account** — allowed by default (no cap in 4a); a per-account org cap would be an explicit product decision, not a schema consequence.
 
 ### Risks (mitigations in place)
 
 - Concurrent account/patient creation → `email_normalized` UNIQUE + reload pattern; explicit concurrency tests.
+- Concurrent org registration (same INN/OGRN) → DB unique index + `IntegrityError`→409; explicit concurrency test (4a).
+- Multi-membership `MultipleResultsFound` 500 → deterministic membership resolution (4a) + explicit current-org selection on writes (4b).
 - IDOR in integration reads → mandatory org-scope checks returning 404; security tests per resource.
 - Duplicate docs on retry → partial unique `(org, external_id)` + `(org, idempotency_key)`.
 - Org schema/canonical coupling → strict separation (metadata only).
