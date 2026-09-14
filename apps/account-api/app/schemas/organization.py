@@ -1,0 +1,84 @@
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+
+from app.core.config import settings
+from app.core.timezone import to_api_tz
+from app.domain.medical import OrganizationStatus, OrganizationType
+from app.domain.organization import (
+    OrganizationVerificationStatus,
+    inn_checksum_valid,
+    normalize_inn,
+    normalize_ogrn,
+    ogrn_checksum_valid,
+)
+
+
+class OrganizationUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    inn: str | None = Field(default=None, max_length=12)
+    ogrn: str | None = Field(default=None, max_length=13)
+    legal_address: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    website: str | None = Field(default=None, max_length=255)
+
+    @field_validator("inn", mode="before")
+    @classmethod
+    def _normalize_inn(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        value = normalize_inn(str(v))
+        if not value.isdigit() or len(value) not in (10, 12):
+            raise ValueError("INN must be 10 or 12 digits")
+        if settings.integration_validate_inn_checksum and not inn_checksum_valid(value):
+            raise ValueError("INN fails the control-digit check")
+        return value
+
+    @field_validator("ogrn", mode="before")
+    @classmethod
+    def _normalize_ogrn(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        value = normalize_ogrn(str(v))
+        if not value.isdigit() or len(value) != 13:
+            raise ValueError("OGRN must be 13 digits")
+        if not ogrn_checksum_valid(value):
+            raise ValueError("OGRN fails the control-digit check")
+        return value
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "OrganizationUpdate":
+        if not self.model_dump(exclude_unset=True):
+            raise ValueError("at least one field must be set")
+        return self
+
+
+class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    type: OrganizationType
+    status: OrganizationStatus
+    inn: str | None
+    ogrn: str | None
+    legal_address: str | None
+    email: str | None
+    phone: str | None
+    website: str | None
+    verification_status: OrganizationVerificationStatus
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)

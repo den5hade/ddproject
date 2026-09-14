@@ -31,6 +31,7 @@ class AuditAction(str, Enum):
     GRANT_ACCESS = "GRANT_ACCESS"
     REVOKE_ACCESS = "REVOKE_ACCESS"
     VIEW_ANALYTICS = "VIEW_ANALYTICS"
+    ORGANIZATION_UPDATED = "ORGANIZATION_UPDATED"
 
 
 class PatientAccessGrantNotFoundError(Exception):

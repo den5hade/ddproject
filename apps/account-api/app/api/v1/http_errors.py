@@ -13,6 +13,10 @@ from app.domain.medical import (
     PersonNotFoundError,
     UnsupportedFileTypeError,
 )
+from app.domain.organization import (
+    OrganizationLegalDataConflictError,
+    OrganizationNotFoundError,
+)
 from app.services.auth import (
     AccountInactiveError,
     OtpVerificationError,
@@ -45,6 +49,9 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     EncounterNotFoundError: status.HTTP_404_NOT_FOUND,
     # Access
     PatientAccessGrantNotFoundError: status.HTTP_404_NOT_FOUND,
+    # Organizations
+    OrganizationNotFoundError: status.HTTP_404_NOT_FOUND,
+    OrganizationLegalDataConflictError: status.HTTP_409_CONFLICT,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }

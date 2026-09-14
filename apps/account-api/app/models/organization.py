@@ -1,11 +1,12 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
+from app.domain.organization import OrganizationVerificationStatus
 from app.models.utils import utcnow
 
 
@@ -22,6 +23,17 @@ class Organization(Base):
     status: Mapped[OrganizationStatus] = mapped_column(
         Enum(OrganizationStatus, native_enum=False, length=16),
         default=OrganizationStatus.ACTIVE,
+    )
+    inn: Mapped[str | None] = mapped_column(String(12), unique=True, nullable=True)
+    ogrn: Mapped[str | None] = mapped_column(String(13), unique=True, nullable=True)
+    legal_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    verification_status: Mapped[OrganizationVerificationStatus] = mapped_column(
+        Enum(OrganizationVerificationStatus, native_enum=False, length=16),
+        default=OrganizationVerificationStatus.UNVERIFIED,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
