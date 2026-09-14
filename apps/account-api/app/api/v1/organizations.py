@@ -9,12 +9,17 @@ from app.domain.organization import (
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
+    OrganizationLicenseConflictError,
+    OrganizationLicenseNotFoundError,
     OrganizationNotFoundError,
 )
 from app.schemas.organization import (
     BranchCreate,
     BranchResponse,
     BranchUpdate,
+    LicenseCreate,
+    LicenseResponse,
+    LicenseUpdate,
     OrganizationResponse,
     OrganizationUpdate,
 )
@@ -129,6 +134,92 @@ async def deactivate_my_branch(
             request=request,
         )
     except OrganizationBranchNotFoundError as exc:
+        raise_for(exc)
+
+
+@router.get("/me/licenses", response_model=list[LicenseResponse])
+async def list_my_licenses(
+    organization: OrganizationAdmin,
+    service: OrganizationServiceDep,
+) -> list[LicenseResponse]:
+    licenses = await service.list_licenses(organization.id)
+    return [LicenseResponse.model_validate(item) for item in licenses]
+
+
+@router.post("/me/licenses", response_model=LicenseResponse, status_code=201)
+async def create_my_license(
+    payload: LicenseCreate,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationServiceDep,
+    request: Request,
+) -> LicenseResponse:
+    try:
+        license = await service.create_license(
+            organization.id,
+            actor_account_id=account.id,
+            data=payload,
+            request=request,
+        )
+    except OrganizationLicenseConflictError as exc:
+        raise_for(exc)
+    return LicenseResponse.model_validate(license)
+
+
+@router.get("/me/licenses/{license_id}", response_model=LicenseResponse)
+async def get_my_license(
+    license_id: UUID,
+    organization: OrganizationAdmin,
+    service: OrganizationServiceDep,
+) -> LicenseResponse:
+    try:
+        license = await service.get_license(organization.id, license_id)
+    except OrganizationLicenseNotFoundError as exc:
+        raise_for(exc)
+    return LicenseResponse.model_validate(license)
+
+
+@router.patch("/me/licenses/{license_id}", response_model=LicenseResponse)
+async def update_my_license(
+    license_id: UUID,
+    payload: LicenseUpdate,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationServiceDep,
+    request: Request,
+) -> LicenseResponse:
+    try:
+        license = await service.update_license(
+            organization.id,
+            license_id,
+            actor_account_id=account.id,
+            data=payload,
+            request=request,
+        )
+    except (
+        OrganizationLicenseNotFoundError,
+        OrganizationLicenseConflictError,
+    ) as exc:
+        raise_for(exc)
+    return LicenseResponse.model_validate(license)
+
+
+@router.delete("/me/licenses/{license_id}", status_code=204)
+async def deactivate_my_license(
+    license_id: UUID,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationServiceDep,
+    request: Request,
+) -> None:
+    try:
+        await service.deactivate_license(
+            organization.id,
+            license_id,
+            actor_account_id=account.id,
+            request=request,
+        )
+    except OrganizationLicenseNotFoundError as exc:
         raise_for(exc)
 
 

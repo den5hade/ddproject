@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from uuid import uuid4
@@ -13,12 +14,21 @@ from app.domain.organization import (
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
+    OrganizationLicenseConflictError,
+    OrganizationLicenseNotFoundError,
+    OrganizationLicenseStatus,
     OrganizationNotFoundError,
     OrganizationVerificationStatus,
 )
 from app.models.audit_log import AuditLog
-from app.models.organization import Organization, OrganizationBranch
-from app.schemas.organization import BranchCreate, BranchUpdate, OrganizationUpdate
+from app.models.organization import Organization, OrganizationBranch, OrganizationLicense
+from app.schemas.organization import (
+    BranchCreate,
+    BranchUpdate,
+    LicenseCreate,
+    LicenseUpdate,
+    OrganizationUpdate,
+)
 from app.services.organization import OrganizationService
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -36,6 +46,15 @@ def _load_migration_0006():
 def _load_migration_0007():
     path = REPO_ROOT / "migrations/alembic/versions/0007_organization_branches.py"
     spec = spec_from_file_location("migration_0007", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0008():
+    path = REPO_ROOT / "migrations/alembic/versions/0008_organization_licenses.py"
+    spec = spec_from_file_location("migration_0008", path)
     module = module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -407,3 +426,309 @@ def test_migration_0007_upgrade_downgrade_round_trip() -> None:
             )
         }
         assert "organization_branches" not in tables_after
+
+
+async def _license(db_session, org: Organization, **fields) -> OrganizationLicense:
+    license = OrganizationLicense(
+        organization_id=org.id,
+        license_number=fields.pop("license_number", "L-77-00001"),
+        license_type=fields.pop("license_type", "терапия"),
+        **fields,
+    )
+    db_session.add(license)
+    await db_session.commit()
+    return license
+
+
+async def test_create_license(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    license = await service.create_license(
+        org.id,
+        uuid4(),
+        LicenseCreate(
+            license_number="ЛО-77-01-000001",
+            license_type="стоматология",
+            issued_at=date(2026, 1, 10),
+            expires_at=date(2031, 1, 10),
+            scope="амбулаторно-поликлиническая",
+            issuer="Росздравнадзор",
+        ),
+    )
+    assert license.organization_id == org.id
+    assert license.license_number == "ЛО-77-01-000001"
+    assert license.license_type == "стоматология"
+    assert license.status == OrganizationLicenseStatus.ACTIVE
+    assert license.issued_at == date(2026, 1, 10)
+    assert license.issuer == "Росздравнадзор"
+
+
+async def test_create_license_duplicate_number_conflict(db_session) -> None:
+    org = await _org(db_session)
+    await _license(db_session, org, license_number="ЛО-77-01-000001")
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationLicenseConflictError):
+        await service.create_license(
+            org.id, uuid4(), LicenseCreate(license_number="ЛО-77-01-000001", license_type="x")
+        )
+
+
+async def test_create_license_same_number_in_different_org_ok(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    service = OrganizationService(db_session)
+    license_a = await service.create_license(
+        org_a.id, uuid4(), LicenseCreate(license_number="ЛО-77-01-000001", license_type="x")
+    )
+    license_b = await service.create_license(
+        org_b.id, uuid4(), LicenseCreate(license_number="ЛО-77-01-000001", license_type="y")
+    )
+    assert license_a.organization_id == org_a.id
+    assert license_b.organization_id == org_b.id
+
+
+async def test_license_schema_rejects_expires_before_issued(db_session) -> None:
+    with pytest.raises(ValueError):
+        LicenseCreate(
+            license_number="ЛО-77-01-000002",
+            license_type="x",
+            issued_at=date(2031, 1, 10),
+            expires_at=date(2026, 1, 10),
+        )
+
+
+async def test_list_licenses(db_session) -> None:
+    org = await _org(db_session)
+    await _license(db_session, org, license_number="ЛО-77-01-000002")
+    await _license(db_session, org, license_number="ЛО-77-01-000001")
+    service = OrganizationService(db_session)
+    licenses = await service.list_licenses(org.id)
+    assert [license.license_number for license in licenses] == [
+        "ЛО-77-01-000002",
+        "ЛО-77-01-000001",
+    ]
+
+
+async def test_get_license_not_found(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationLicenseNotFoundError):
+        await service.get_license(org.id, uuid4())
+
+
+async def test_get_license_is_org_scoped(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    license = await _license(db_session, org_a)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationLicenseNotFoundError):
+        await service.get_license(org_b.id, license.id)
+
+
+async def test_update_license(db_session) -> None:
+    org = await _org(db_session)
+    license = await _license(db_session, org, scope="уро.логия")
+    service = OrganizationService(db_session)
+    updated = await service.update_license(
+        org.id, license.id, uuid4(), LicenseUpdate(scope="урология", issuer="Росздравнадзор")
+    )
+    assert updated.scope == "урология"
+    assert updated.issuer == "Росздравнадзор"
+    assert updated.license_number == license.license_number
+
+
+async def test_update_license_duplicate_number_conflict(db_session) -> None:
+    org = await _org(db_session)
+    await _license(db_session, org, license_number="ЛО-77-01-000001")
+    license = await _license(db_session, org, license_number="ЛО-77-01-000002")
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationLicenseConflictError):
+        await service.update_license(
+            org.id, license.id, uuid4(), LicenseUpdate(license_number="ЛО-77-01-000001")
+        )
+
+
+async def test_update_license_clears_scope(db_session) -> None:
+    org = await _org(db_session)
+    license = await _license(db_session, org, scope="урология")
+    service = OrganizationService(db_session)
+    updated = await service.update_license(org.id, license.id, uuid4(), LicenseUpdate(scope=""))
+    assert updated.scope is None
+
+
+async def test_update_license_manual_status_change(db_session) -> None:
+    org = await _org(db_session)
+    license = await _license(db_session, org)
+    service = OrganizationService(db_session)
+    updated = await service.update_license(
+        org.id,
+        license.id,
+        uuid4(),
+        LicenseUpdate(status=OrganizationLicenseStatus.SUSPENDED),
+    )
+    assert updated.status == OrganizationLicenseStatus.SUSPENDED
+
+
+async def test_deactivate_license_sets_revoked_and_keeps_history(db_session) -> None:
+    org = await _org(db_session)
+    license = await _license(db_session, org)
+    service = OrganizationService(db_session)
+    await service.deactivate_license(org.id, license.id, uuid4())
+    fetched = await service.get_license(org.id, license.id)
+    assert fetched.status == OrganizationLicenseStatus.REVOKED
+    assert [licence.id for licence in await service.list_licenses(org.id)] == [license.id]
+
+
+async def test_deactivate_license_not_found(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationLicenseNotFoundError):
+        await service.deactivate_license(org.id, uuid4(), uuid4())
+
+
+async def test_overdue_active_license_expires_on_list(db_session) -> None:
+    org = await _org(db_session)
+    await _license(
+        db_session,
+        org,
+        license_number="ЛО-77-01-000001",
+        expires_at=date.today() - timedelta(days=1),
+    )
+    await _license(
+        db_session,
+        org,
+        license_number="ЛО-77-01-000002",
+        expires_at=date.today() + timedelta(days=30),
+    )
+    service = OrganizationService(db_session)
+    licenses = await service.list_licenses(org.id)
+    by_number = {license.license_number: license.status for license in licenses}
+    assert by_number["ЛО-77-01-000001"] == OrganizationLicenseStatus.EXPIRED
+    assert by_number["ЛО-77-01-000002"] == OrganizationLicenseStatus.ACTIVE
+
+
+async def test_overdue_active_license_expires_on_get(db_session) -> None:
+    org = await _org(db_session)
+    license = await _license(
+        db_session, org, expires_at=date.today() - timedelta(days=1)
+    )
+    service = OrganizationService(db_session)
+    fetched = await service.get_license(org.id, license.id)
+    assert fetched.status == OrganizationLicenseStatus.EXPIRED
+
+
+async def test_active_license_without_expiry_is_not_expired(db_session) -> None:
+    org = await _org(db_session)
+    await _license(db_session, org, expires_at=None)
+    service = OrganizationService(db_session)
+    licenses = await service.list_licenses(org.id)
+    assert len(licenses) == 1
+    assert licenses[0].status == OrganizationLicenseStatus.ACTIVE
+
+
+async def test_license_operations_write_audit_log(db_session) -> None:
+    org = await _org(db_session)
+    actor = uuid4()
+    service = OrganizationService(db_session)
+    license = await service.create_license(
+        org.id, actor, LicenseCreate(license_number="ЛО-77-01-000001", license_type="x")
+    )
+    await service.update_license(org.id, license.id, actor, LicenseUpdate(scope="x"))
+    await service.deactivate_license(org.id, license.id, actor)
+    rows = (await db_session.execute(sa.select(AuditLog))).scalars().all()
+    actions = [row.action for row in rows]
+    assert AuditAction.ORGANIZATION_LICENSE_CREATED in actions
+    assert AuditAction.ORGANIZATION_LICENSE_UPDATED in actions
+    assert AuditAction.ORGANIZATION_LICENSE_DEACTIVATED in actions
+
+
+def test_migration_0008_revision_wiring() -> None:
+    migration = _load_migration_0008()
+    assert migration.revision == "0008"
+    assert migration.down_revision == "0007"
+
+
+def test_migration_0008_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0008()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text("INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')")
+        )
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_licenses" in tables
+        columns = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA table_info(organization_licenses)"))
+        }
+        assert {
+            "id",
+            "organization_id",
+            "license_number",
+            "license_type",
+            "status",
+            "issued_at",
+            "expires_at",
+            "scope",
+            "issuer",
+            "created_at",
+            "updated_at",
+        } <= columns
+        indexes = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA index_list(organization_licenses)"))
+        }
+        assert "uq_organization_licenses_org_number" in indexes
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_licenses (id, organization_id, license_number,"
+                " license_type, status, created_at, updated_at)"
+                " VALUES ('l1', '1', 'ЛО-77-01-000001', 'терапия', 'active',"
+                " '2026-01-01', '2026-01-01')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT status FROM organization_licenses WHERE id = 'l1'")
+            ).scalar_one()
+            == "active"
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            conn.execute(
+                sa.text(
+                    "INSERT INTO organization_licenses (id, organization_id, license_number,"
+                    " license_type, status, created_at, updated_at)"
+                    " VALUES ('l2', '1', 'ЛО-77-01-000001', 'терапия', 'active',"
+                    " '2026-01-01', '2026-01-01')"
+                )
+            )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        tables_after = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_licenses" not in tables_after

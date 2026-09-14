@@ -1,12 +1,16 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
-from app.domain.organization import BranchStatus, OrganizationVerificationStatus
+from app.domain.organization import (
+    BranchStatus,
+    OrganizationLicenseStatus,
+    OrganizationVerificationStatus,
+)
 from app.models.utils import utcnow
 
 
@@ -88,6 +92,39 @@ class OrganizationBranch(Base):
     status: Mapped[BranchStatus] = mapped_column(
         Enum(BranchStatus, native_enum=False, length=16), default=BranchStatus.ACTIVE
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class OrganizationLicense(Base):
+    """A license held by an organization (registry-ready, history preserved)."""
+
+    __tablename__ = "organization_licenses"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "license_number",
+            name="uq_organization_licenses_org_number",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    license_number: Mapped[str] = mapped_column(String(64))
+    license_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[OrganizationLicenseStatus] = mapped_column(
+        Enum(OrganizationLicenseStatus, native_enum=False, length=16),
+        default=OrganizationLicenseStatus.ACTIVE,
+        nullable=False,
+    )
+    issued_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expires_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    issuer: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

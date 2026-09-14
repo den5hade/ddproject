@@ -3,7 +3,12 @@ from uuid import UUID, uuid4
 from app.domain.account import RoleCode
 from app.domain.medical import MembershipStatus, OrganizationType
 from app.models.audit_log import AuditLog
-from app.models.organization import Organization, OrganizationBranch, OrganizationMembership
+from app.models.organization import (
+    Organization,
+    OrganizationBranch,
+    OrganizationLicense,
+    OrganizationMembership,
+)
 from app.repositories.rbac import RbacRepository
 from sqlalchemy import select
 
@@ -78,6 +83,23 @@ async def _create_branch(db_factory, organization_id: UUID, code: str, name: str
         session.add(branch)
         await session.commit()
         return branch.id
+
+
+async def _create_license(
+    db_factory,
+    organization_id: UUID,
+    license_number: str,
+    license_type: str = "терапия",
+) -> UUID:
+    async with db_factory() as session:
+        license = OrganizationLicense(
+            organization_id=organization_id,
+            license_number=license_number,
+            license_type=license_type,
+        )
+        session.add(license)
+        await session.commit()
+        return license.id
 
 
 async def test_get_me_requires_auth(app_client, fake_redis):
@@ -405,5 +427,188 @@ async def test_delete_other_org_404(app_client, fake_redis, db_factory):
     await _configure_org_admin(db_factory, b_id, name="Other Clinic")
     resp = await app_client.delete(
         f"/api/v1/organizations/me/branches/{branch_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404
+
+
+async def test_licenses_require_auth(app_client, fake_redis):
+    resp = await app_client.get("/api/v1/organizations/me/licenses")
+    assert resp.status_code == 401
+
+
+async def test_licenses_require_admin(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    resp = await app_client.get("/api/v1/organizations/me/licenses", headers=_auth(token))
+    assert resp.status_code == 403
+
+
+async def test_create_license(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/licenses",
+        headers=_auth(token),
+        json={
+            "license_number": "ЛО-77-01-000001",
+            "license_type": "стоматология",
+            "issued_at": "2026-01-10",
+            "expires_at": "2031-01-10",
+            "scope": "амбулаторно-поликлиническая",
+            "issuer": "Росздравнадзор",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["license_number"] == "ЛО-77-01-000001"
+    assert body["license_type"] == "стоматология"
+    assert body["status"] == "active"
+    assert body["issued_at"] == "2026-01-10"
+    assert body["expires_at"] == "2031-01-10"
+    assert body["scope"] == "амбулаторно-поликлиническая"
+    assert body["issuer"] == "Росздравнадзор"
+
+
+async def test_create_license_expires_before_issued_422(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/licenses",
+        headers=_auth(token),
+        json={
+            "license_number": "ЛО-77-01-000002",
+            "license_type": "x",
+            "issued_at": "2031-01-10",
+            "expires_at": "2026-01-10",
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_duplicate_license_number_409(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    await _create_license(db_factory, org_id, "ЛО-77-01-000001")
+    resp = await app_client.post(
+        "/api/v1/organizations/me/licenses",
+        headers=_auth(token),
+        json={"license_number": "ЛО-77-01-000001", "license_type": "терапия"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_list_licenses_scoped_to_my_org(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    await _create_license(db_factory, org_a, "ЛО-77-01-000001")
+    await _create_license(db_factory, org_a, "ЛО-77-01-000002")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    org_b = await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    await _create_license(db_factory, org_b, "ЛО-77-01-000009")
+
+    resp = await app_client.get("/api/v1/organizations/me/licenses", headers=_auth(token_a))
+    assert resp.status_code == 200
+    numbers = [license["license_number"] for license in resp.json()]
+    assert numbers == ["ЛО-77-01-000001", "ЛО-77-01-000002"]
+
+
+async def test_get_license_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    license_id = await _create_license(db_factory, org_a, "ЛО-77-01-000001")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.get(
+        f"/api/v1/organizations/me/licenses/{license_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404
+
+
+async def test_patch_license(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    license_id = await _create_license(db_factory, org_id, "ЛО-77-01-000001")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/licenses/{license_id}",
+        headers=_auth(token),
+        json={"scope": "урология", "status": "suspended"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scope"] == "урология"
+    assert body["status"] == "suspended"
+    assert body["license_number"] == "ЛО-77-01-000001"
+
+
+async def test_patch_duplicate_license_number_409(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    await _create_license(db_factory, org_id, "ЛО-77-01-000001")
+    license_id = await _create_license(db_factory, org_id, "ЛО-77-01-000002")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/licenses/{license_id}",
+        headers=_auth(token),
+        json={"license_number": "ЛО-77-01-000001"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_patch_license_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    license_id = await _create_license(db_factory, org_a, "ЛО-77-01-000001")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.patch(
+        f"/api/v1/organizations/me/licenses/{license_id}",
+        headers=_auth(token_b),
+        json={"scope": "x"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_delete_license_soft_revokes(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    license_id = await _create_license(db_factory, org_id, "ЛО-77-01-000001")
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/licenses/{license_id}", headers=_auth(token)
+    )
+    assert resp.status_code == 204
+    list_resp = await app_client.get(
+        "/api/v1/organizations/me/licenses", headers=_auth(token)
+    )
+    assert list_resp.status_code == 200
+    bodies = list_resp.json()
+    assert len(bodies) == 1
+    assert bodies[0]["status"] == "revoked"
+    assert bodies[0]["id"] == str(license_id)
+
+
+async def test_delete_license_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    license_id = await _create_license(db_factory, org_a, "ЛО-77-01-000001")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/licenses/{license_id}", headers=_auth(token_b)
     )
     assert resp.status_code == 404

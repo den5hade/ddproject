@@ -157,3 +157,11 @@ class OrganizationBranchNotFoundError(Exception):
 
 class OrganizationBranchConflictError(Exception):
     """A branch with the same code already exists in the organization."""
+
+
+class OrganizationLicenseNotFoundError(Exception):
+    """A license does not exist for the given organization and id."""
+
+
+class OrganizationLicenseConflictError(Exception):
+    """A license with the same license number already exists in the organization."""

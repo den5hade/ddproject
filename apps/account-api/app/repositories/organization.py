@@ -4,7 +4,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.medical import MembershipStatus
-from app.models.organization import Organization, OrganizationBranch, OrganizationMembership
+from app.models.organization import (
+    Organization,
+    OrganizationBranch,
+    OrganizationLicense,
+    OrganizationMembership,
+)
 
 
 class OrganizationRepository:
@@ -52,6 +57,36 @@ class OrganizationRepository:
             select(OrganizationBranch).where(
                 OrganizationBranch.organization_id == organization_id,
                 OrganizationBranch.code == code,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_licenses(self, organization_id: UUID) -> list[OrganizationLicense]:
+        result = await self._session.execute(
+            select(OrganizationLicense)
+            .where(OrganizationLicense.organization_id == organization_id)
+            .order_by(OrganizationLicense.created_at, OrganizationLicense.license_number)
+        )
+        return list(result.scalars().all())
+
+    async def get_license(
+        self, organization_id: UUID, license_id: UUID
+    ) -> OrganizationLicense | None:
+        result = await self._session.execute(
+            select(OrganizationLicense).where(
+                OrganizationLicense.id == license_id,
+                OrganizationLicense.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_license_by_number(
+        self, organization_id: UUID, license_number: str
+    ) -> OrganizationLicense | None:
+        result = await self._session.execute(
+            select(OrganizationLicense).where(
+                OrganizationLicense.organization_id == organization_id,
+                OrganizationLicense.license_number == license_number,
             )
         )
         return result.scalar_one_or_none()

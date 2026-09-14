@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import (
@@ -15,6 +15,7 @@ from app.core.timezone import to_api_tz
 from app.domain.medical import OrganizationStatus, OrganizationType
 from app.domain.organization import (
     BranchStatus,
+    OrganizationLicenseStatus,
     OrganizationVerificationStatus,
     inn_checksum_valid,
     normalize_inn,
@@ -132,6 +133,86 @@ class BranchResponse(BaseModel):
     address: str | None
     phone: str | None
     status: BranchStatus
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
+
+
+class LicenseCreate(BaseModel):
+    license_number: str = Field(min_length=1, max_length=64)
+    license_type: str = Field(min_length=1, max_length=64)
+    status: OrganizationLicenseStatus = OrganizationLicenseStatus.ACTIVE
+    issued_at: date | None = None
+    expires_at: date | None = None
+    scope: str | None = Field(default=None, max_length=255)
+    issuer: str | None = Field(default=None, max_length=255)
+
+    @field_validator("scope", "issuer", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+    @model_validator(mode="after")
+    def _dates_ordered(self) -> "LicenseCreate":
+        if (
+            self.issued_at is not None
+            and self.expires_at is not None
+            and self.expires_at < self.issued_at
+        ):
+            raise ValueError("expires_at must not be before issued_at")
+        return self
+
+
+class LicenseUpdate(BaseModel):
+    license_number: str | None = Field(default=None, min_length=1, max_length=64)
+    license_type: str | None = Field(default=None, min_length=1, max_length=64)
+    status: OrganizationLicenseStatus | None = None
+    issued_at: date | None = None
+    expires_at: date | None = None
+    scope: str | None = Field(default=None, max_length=255)
+    issuer: str | None = Field(default=None, max_length=255)
+
+    @field_validator("scope", "issuer", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "LicenseUpdate":
+        if not self.model_dump(exclude_unset=True):
+            raise ValueError("at least one field must be set")
+        return self
+
+    @model_validator(mode="after")
+    def _dates_ordered(self) -> "LicenseUpdate":
+        if (
+            self.issued_at is not None
+            and self.expires_at is not None
+            and self.expires_at < self.issued_at
+        ):
+            raise ValueError("expires_at must not be before issued_at")
+        return self
+
+
+class LicenseResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    license_number: str
+    license_type: str
+    status: OrganizationLicenseStatus
+    issued_at: date | None
+    expires_at: date | None
+    scope: str | None
+    issuer: str | None
     created_at: datetime
     updated_at: datetime
 

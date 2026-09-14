@@ -7,6 +7,10 @@ client notifications, organization document schemas, API-usage monitoring, and
 the registry-verification extension point. Built on existing infrastructure
 only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/OAI_IMPL_ARCH.md` (arch) + `docs/development/ORGS/OAI_IMPL_SPEC.md` (spec).
 
+**Revision 4** — Phase 3 (Licenses) completed; `0008` marked done;
+`ORGANIZATION_LICENSE_CREATED/UPDATED/DEACTIVATED` audit actions, license
+schemas/endpoints folded into §4; Phase 4 marked next.
+
 **Revision 3** — Phase 2 (Branches) completed; `0007` marked done;
 `ORGANIZATION_BRANCH_*` audit actions and branch schemas/endpoints folded into
 §4.
@@ -60,7 +64,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 |---|---|---|
 | 1 | Organization core | [x] done |
 | 2 | Branches | [x] done |
-| 3 | Licenses | [ ] |
+| 3 | Licenses | [x] done |
 | 4 | API keys | [ ] |
 | 5 | API-key auth | [ ] |
 | 6 | Single document integration | [ ] |
@@ -161,18 +165,66 @@ Implementation Status block below.
   mutated by DELETE (deactivate). Inactive branches stay in list/get results
   (history preserved), ready for `branch_code` use by later phases.
 
+### Phase 3 — Licenses [x]
+
+**Objective.** 1:N licenses with full CRUD under `/organizations/me/licenses`,
+org-scoped (no IDOR), duplicate `license_number` → 409, history preserved
+(DELETE is a soft status change, never a row removal). Registry-ready schema:
+future government-registry verification plugs in without coupling the domain to
+an external provider.
+
+**Changes.** `OrganizationLicense` model (`license_number` String(64),
+`license_type` String(64), `status` (default ACTIVE), `issued_at`/`expires_at`
+Date, `scope`/`issuer` String(255)); migration `0008` (`organization_licenses`,
+`(organization_id, license_number)` unique index, FK CASCADE);
+`LicenseCreate`/`LicenseUpdate`/`LicenseResponse` schemas (`expires_at` after
+`issued_at` enforced, `""` clears `scope`/`issuer`, update needs ≥1 field,
+explicit `status` change allowed incl. reactivation); `OrganizationRepository`
+license queries (all org-scoped); `OrganizationService` license methods with
+duplicate pre-check + audit
+(`ORGANIZATION_LICENSE_CREATED/UPDATED/DEACTIVATED`); expiry transition —
+past-due ACTIVE licenses auto-flip to `EXPIRED` on list/get
+(`_expire_overdue`, commits only when something changed); 5 routes
+(`GET/POST /me/licenses`, `GET/PATCH/DELETE /me/licenses/{id}` — DELETE → 204,
+soft-revoke to `REVOKED`); 404/409 mapping in `http_errors`.
+
+**Verification.** 31 new tests (19 unit + 12 API) + full account-api suite
+**282 pass**; `uvx ruff check apps/account-api` clean. Details in the
+Implementation Status block below.
+
+#### Phase 3 Implementation Status
+
+- Files created: `migrations/alembic/versions/0008_organization_licenses.py`.
+- Files modified: `app/models/organization.py`, `app/models/__init__.py`,
+  `app/domain/organization.py` (license errors), `app/domain/access.py`
+  (license audit actions), `app/schemas/organization.py`,
+  `app/repositories/organization.py`, `app/services/organization.py`,
+  `app/api/v1/organizations.py`, `app/api/v1/http_errors.py`,
+  `tests/test_organizations_api.py`, `tests/unit/test_organization.py`.
+- New tests: 19 unit (service CRUD, org-scoping, dup-number, soft-revoke keeps
+  history, manual status change, schema date ordering, expiry transitions on
+  list/get, no-expiry stays ACTIVE, audit, migration 0008 round-trip incl.
+  duplicate-number `IntegrityError` + downgrade) + 12 API (auth/admin gates,
+  CRUD, 404 cross-org, 409 dup number, invalid dates 422, soft delete 204).
+- Full account-api suite **282 pass** (was 251); `uvx ruff check
+  apps/account-api` clean.
+- `0008` follows the verified unique-**index** pattern (see §7) — model
+  declares `UniqueConstraint(name="uq_organization_licenses_org_number")`
+  matched by index name; a revoked/expired license keeps its number allocated,
+  so duplicate numbers can never be re-created (history preserved).
+- `_expire_overdue` is a lazy read-time transition (list/get only): no
+  scheduled job, and a license without `expires_at` is never expired. It
+  commits only when ≥1 license flips, so read paths stay write-free in the
+  common case.
+- DELETE semantics: status → `REVOKED` (soft). `PATCH` may set `status`
+  explicitly (e.g. SUSPENDED, or reactivate a REVOKED/EXPIRED license).
+
 ---
 
 ## 3. Pending phases
 
 Vertical slices; migration numbers from §4.4. Each phase ends with tests +
 `docs` status update + a pause to confirm with the user.
-
-### Phase 3 — Licenses [ ]
-DB `0008`. `OrganizationLicense` table + license CRUD (status/validity/scope/
-issuer), duplicate `license_number` → 409, history preserved. Tests: CRUD,
-isolation, duplicates, expiry transitions. Deps: Ph1. **Accept:** org holds
-multiple licenses; future-registry-ready schema.
 
 ### Phase 4 — API keys [ ]
 DB `0009`. `OrganizationApiKeyService` + `find_by_hash`. API: list/create/
@@ -242,7 +294,8 @@ first-12 mod 11 mod 10).
 
 `AuditAction` additions (each in its phase): `ORGANIZATION_UPDATED` ✓ (Ph1),
 `ORGANIZATION_BRANCH_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph2),
-`ORGANIZATION_LICENSE_*`, `API_KEY_CREATED`, `API_KEY_REVOKED`,
+`ORGANIZATION_LICENSE_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph3),
+`API_KEY_CREATED`, `API_KEY_REVOKED`,
 `API_KEY_AUTH_FAILED`, `INTEGRATION_DOCUMENT_UPLOADED`,
 `INTEGRATION_BATCH_CREATED` (string values → fits `length=64`).
 
@@ -281,7 +334,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 |---|---|
 | `0006_organization_legal_data.py` ✓ | org legal columns + `verification_status` (server default `'UNVERIFIED'`) + `uq_organizations_inn`/`_ogrn` |
 | `0007_organization_branches.py` ✓ | `organization_branches` + `(organization_id, code)` unique index (see note §7) |
-| `0008_organization_licenses.py` | `organization_licenses` + unique constraint |
+| `0008_organization_licenses.py` ✓ | `organization_licenses` + `(organization_id, license_number)` unique index (see note §7) |
 | `0009_organization_api_keys.py` | `organization_api_keys` + unique `key_hash` |
 | `0010_organization_api_requests.py` | `organization_api_requests` + indexes |
 | `0011_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
@@ -308,7 +361,7 @@ Management (JWT + org_admin + member):
 |---|---|---|
 | `GET/PATCH /organizations/me` ✓ | — / `OrganizationUpdate` → `OrganizationResponse` | Ph1 |
 | `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | ✓ Ph2; dup code 409; DELETE = soft deactivate |
-| `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | dup number 409; soft status change |
+| `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | ✓ Ph3; dup number 409; DELETE = soft revoke; auto `EXPIRED` on list/get |
 | `GET/POST /organizations/me/api-keys` · `DELETE/Rotate /…/{id}` | `ApiKeyCreate` → response (**raw once**) · 204 | list hides raw |
 | `GET /organizations/me/api-usage` | `?from&to` → aggregates | Ph11 |
 | `GET/POST /organizations/me/schemas` · `POST /…/{id}/publish` | schema CRUD + publish | Ph10; published immutable |
@@ -328,7 +381,7 @@ Codes: 401 · 403 · 429 · 404 · 409 · 413 (oversized) · 415 (bad type) · 4
 
 - `OrganizationUpdate` ✓ — optional name/inn/ogrn/legal_address/email/phone/website; INN/OGRN normalized + checksum-checked; legal-data change → `PENDING` (re-verification).
 - Branch ✓: `code ^[A-Za-z0-9_-]{1,32}$`, `name ≤255`, `address`, `phone`; PATCH `""` → `NULL`.
-- License: `license_number ≤64`, `license_type`, `status`, `issued_at`, `expires_at`, `scope`, `issuer`.
+- License ✓: `license_number ≤64`, `license_type`, `status`, `issued_at`, `expires_at`, `scope`, `issuer`; `expires_at` must not precede `issued_at`; PATCH `""` clears `scope`/`issuer`; explicit `status` change allowed.
 - ApiKey: `name`, `scopes` (required, non-empty), `expires_at?`; response includes `raw_key` only on create/rotate.
 - Integration: upload request `patient_email` (Identity-validated), `document_type?`, `external_id?`, `branch_code?`, `title?`; response `document_id`, `status="processing"`, `external_id`, `patient_id`. Bulk: `items ≤ integration_max_batch_size`, `idempotency_key?`. Status reads only (no canonical content for orgs in v1).
 - Notification (client, P1): `type`, `title`, `resource_type/id`, `status`, `read_at`.
@@ -380,8 +433,8 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 
 1. Phase 1 — Organization core. [x]
 2. Phase 2 — Branches. [x]
-3. Phase 3 — Licenses. [ ] (next)
-4. Phase 4 — API keys. [ ]
+3. Phase 3 — Licenses. [x]
+4. Phase 4 — API keys. [ ] (next)
 5. Phase 5 — API-key auth. [ ]
 6. Phase 7 — Patient resolver. [ ] (ordered before 6: §4.9 unblocks single upload)
 7. Phase 6 — Single document integration. [ ]
@@ -401,7 +454,7 @@ Each phase: implement → update this status → pause for confirmation.
 
 - SQLAlchemy stores `str, Enum` members by **name** (`native_enum=False`); migration backfill/defaults must use uppercase (e.g. `'UNVERIFIED'`).
 - Full alembic chain is not SQLite-portable (0002 uses PG `btrim`); migration tests exercise individual revisions in isolation.
-- Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code).
+- Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code, 0008 license number).
 - `PATCH ""` clears a field → `NULL`; verification status can only move **to `PENDING`** via the human API.
 - `uv run` at the workspace root resolves all members incl. ai-worker → `torch` (no mac-x86 wheel); use `uv run --project apps/account-api …`.
 - Follow `docs/development/CONTRIBUTING.md`: `Annotated` service aliases, router `raise_for`, service commits once.

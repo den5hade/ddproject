@@ -10,6 +10,7 @@ from app.models.medical_record import MedicalRecord
 from app.models.organization import (
     Organization,
     OrganizationBranch,
+    OrganizationLicense,
     OrganizationMembership,
 )
 from app.models.patient import Patient
@@ -32,6 +33,7 @@ __all__ = [
     "MedicalRecord",
     "Organization",
     "OrganizationBranch",
+    "OrganizationLicense",
     "OrganizationMembership",
     "Patient",
     "PatientAccessGrant",
