@@ -4,8 +4,13 @@ from fastapi import APIRouter, Request
 
 from app.api.v1.http_errors import raise_for
 from app.dependencies.auth import CurrentAccount
-from app.dependencies.organization import OrganizationAdmin, OrganizationServiceDep
+from app.dependencies.organization import (
+    OrganizationAdmin,
+    OrganizationApiKeyServiceDep,
+    OrganizationServiceDep,
+)
 from app.domain.organization import (
+    OrganizationApiKeyNotFoundError,
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
@@ -14,6 +19,9 @@ from app.domain.organization import (
     OrganizationNotFoundError,
 )
 from app.schemas.organization import (
+    ApiKeyCreate,
+    ApiKeyCreateResponse,
+    ApiKeyResponse,
     BranchCreate,
     BranchResponse,
     BranchUpdate,
@@ -221,6 +229,75 @@ async def deactivate_my_license(
         )
     except OrganizationLicenseNotFoundError as exc:
         raise_for(exc)
+
+
+@router.get("/me/api-keys", response_model=list[ApiKeyResponse])
+async def list_my_api_keys(
+    organization: OrganizationAdmin,
+    service: OrganizationApiKeyServiceDep,
+) -> list[ApiKeyResponse]:
+    keys = await service.list_api_keys(organization.id)
+    return [ApiKeyResponse.model_validate(key) for key in keys]
+
+
+@router.post("/me/api-keys", response_model=ApiKeyCreateResponse, status_code=201)
+async def create_my_api_key(
+    payload: ApiKeyCreate,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationApiKeyServiceDep,
+    request: Request,
+) -> ApiKeyCreateResponse:
+    key, raw_key = await service.create_api_key(
+        organization.id,
+        actor_account_id=account.id,
+        data=payload,
+        request=request,
+    )
+    return ApiKeyCreateResponse.model_validate(
+        {**ApiKeyResponse.model_validate(key).model_dump(), "raw_key": raw_key}
+    )
+
+
+@router.delete("/me/api-keys/{key_id}", status_code=204)
+async def revoke_my_api_key(
+    key_id: UUID,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationApiKeyServiceDep,
+    request: Request,
+) -> None:
+    try:
+        await service.revoke_api_key(
+            organization.id,
+            key_id,
+            actor_account_id=account.id,
+            request=request,
+        )
+    except OrganizationApiKeyNotFoundError as exc:
+        raise_for(exc)
+
+
+@router.post("/me/api-keys/{key_id}/rotate", response_model=ApiKeyCreateResponse)
+async def rotate_my_api_key(
+    key_id: UUID,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationApiKeyServiceDep,
+    request: Request,
+) -> ApiKeyCreateResponse:
+    try:
+        key, raw_key = await service.rotate_api_key(
+            organization.id,
+            key_id,
+            actor_account_id=account.id,
+            request=request,
+        )
+    except OrganizationApiKeyNotFoundError as exc:
+        raise_for(exc)
+    return ApiKeyCreateResponse.model_validate(
+        {**ApiKeyResponse.model_validate(key).model_dump(), "raw_key": raw_key}
+    )
 
 
 __all__ = ["router"]

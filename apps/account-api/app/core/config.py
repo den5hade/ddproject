@@ -14,6 +14,7 @@ _KEY_SETTINGS = (
     "auth_hmac_key",
     "auth_otp_pepper",
     "auth_pin_pepper",
+    "integration_api_hmac_key",
 )
 _EXACT_PLACEHOLDERS = frozenset({"pdf123", "minioadmin", "change-me-in-production"})
 _PLACEHOLDER_PREFIXES = ("change-me", "super-secret-")
@@ -127,6 +128,8 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Organization integration
     # ------------------------------------------------------------------
+    integration_api_hmac_key: str = ""
+    integration_api_key_prefix: str = "ddorg"
     integration_validate_inn_checksum: bool = True
 
     # ------------------------------------------------------------------

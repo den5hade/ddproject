@@ -7,6 +7,10 @@ client notifications, organization document schemas, API-usage monitoring, and
 the registry-verification extension point. Built on existing infrastructure
 only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/OAI_IMPL_ARCH.md` (arch) + `docs/development/ORGS/OAI_IMPL_SPEC.md` (spec).
 
+**Revision 5** — Phase 4 (API keys) completed; `0009` marked done;
+`API_KEY_CREATED/REVOKED` audit actions, api-key schemas/service/endpoints folded
+into §4; Phase 5 marked next.
+
 **Revision 4** — Phase 3 (Licenses) completed; `0008` marked done;
 `ORGANIZATION_LICENSE_CREATED/UPDATED/DEACTIVATED` audit actions, license
 schemas/endpoints folded into §4; Phase 4 marked next.
@@ -65,7 +69,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 1 | Organization core | [x] done |
 | 2 | Branches | [x] done |
 | 3 | Licenses | [x] done |
-| 4 | API keys | [ ] |
+| 4 | API keys | [x] done |
 | 5 | API-key auth | [ ] |
 | 6 | Single document integration | [ ] |
 | 7 | Patient resolver | [ ] |
@@ -219,18 +223,66 @@ Implementation Status block below.
 - DELETE semantics: status → `REVOKED` (soft). `PATCH` may set `status`
   explicitly (e.g. SUSPENDED, or reactivate a REVOKED/EXPIRED license).
 
+### Phase 4 — API keys [x]
+
+**Objective.** Machine-to-machine API keys: list/create/revoke/rotate under
+`/organizations/me/api-keys`; raw key shown exactly once; only the HMAC hash
+persists; rotating revokes the old key.
+
+**Changes.** Config `integration_api_hmac_key` (added to `_KEY_SETTINGS`,
+production ≥32) + `integration_api_key_prefix = "ddorg"`; helpers in new
+`app/domain/api_key.py` (`generate_raw_api_key` → `ddorg_<env>_<secret>` with
+env `liv|tst`, secret = `secrets.token_urlsafe(43)`; `hash_api_key` =
+HMAC-SHA256; `prefix_for_raw_key` = first 12 chars); `OrganizationApiKey` model
++ migration `0009` (`organization_api_keys`, unique `key_hash` index, FK org
+CASCADE + account SET NULL, `permissions` JSON); `ApiKeyCreate` /
+`ApiKeyResponse` / `ApiKeyCreateResponse` (`raw_key` only on create/rotate);
+`OrganizationRepository` api-key queries (all org-scoped) + `find_api_key_by_hash`;
+new `OrganizationApiKeyService` (`create_api_key`/`revoke_api_key`/
+`rotate_api_key`/`find_by_hash`) + `OrganizationApiKeyServiceDep`; audit
+`API_KEY_CREATED`/`API_KEY_REVOKED` (rotate = revoke old + create new); 4 routes
+(`GET/POST /me/api-keys`, `DELETE /me/api-keys/{id}` → 204,
+`POST /me/api-keys/{id}/rotate`); 404 mapping; config tests updated for the new
+key setting.
+
+**Verification.** 23 new tests (14 unit + 9 API) + full account-api suite
+**305 pass**; `uvx ruff check apps/account-api` clean. Details in the
+Implementation Status block below.
+
+#### Phase 4 Implementation Status
+
+- Files created: `app/domain/api_key.py`,
+  `app/services/organization_api_key.py`,
+  `migrations/alembic/versions/0009_organization_api_keys.py`.
+- Files modified: `app/core/config.py` (+ hmac key + prefix + `_KEY_SETTINGS`
+  entry), `app/domain/organization.py` (api-key error), `app/domain/access.py`
+  (api-key audit actions), `app/models/organization.py`, `app/models/__init__.py`,
+  `app/schemas/organization.py`, `app/repositories/organization.py`,
+  `app/dependencies/organization.py` (service dep), `app/api/v1/organizations.py`,
+  `app/api/v1/http_errors.py`, `tests/unit/test_config.py`,
+  `tests/test_organizations_api.py`, `tests/unit/test_organization.py`.
+- New tests: 14 unit (create → hash-only storage + prefix, find_by_hash,
+  list, org-scoping, revoke + idempotent re-revoke, rotate = new ACTIVE + old
+  REVOKED, audit, migration 0009 round-trip incl. unique `key_hash`) + 9 API
+  (auth/admin gates, create raw-once + list hides raw, scopes 422, org-scoped
+  list, revoke 204 + cross-org 404, rotate 200 + cross-org 404).
+- Full account-api suite **305 pass** (was 282); `uvx ruff check
+  apps/account-api` clean.
+- Raw key is never persisted or logged; `key_hash` =
+  HMAC-SHA256(`integration_api_hmac_key`, raw) hex. Empty dev default is fine
+  (warning in dev); production refuses to start (§7).
+- `revoke_api_key` is idempotent (already-revoked → no-op, 204). Rotate keeps
+  `name`/`permissions`/`expires_at`, issues a fresh raw key, ups `revoked_at`
+  on the old.
+- `integration_api_hmac_key` joined `_KEY_SETTINGS`; config unit tests updated
+  (`VALID_SECRETS` + `SENSITIVE_ENV_VARS`).
+
 ---
 
 ## 3. Pending phases
 
 Vertical slices; migration numbers from §4.4. Each phase ends with tests +
 `docs` status update + a pause to confirm with the user.
-
-### Phase 4 — API keys [ ]
-DB `0009`. `OrganizationApiKeyService` + `find_by_hash`. API: list/create/
-revoke/rotate (`/me/api-keys`). Tests: hash-only storage, raw key shown once,
-revoke/rotate, scopes. Deps: Ph1. **Accept:** create key → raw key returned
-once; rotating revokes old.
 
 ### Phase 5 — API-key auth [ ]
 Deps module + `OrganizationApiContext`, scopes, Redis rate limit, `OrganizationApiRequest` writes (`0010`), `request_id` (echoed `X-Request-Id`). Tests: 401/403/429 matrix. Deps: Ph4. **Accept:** a key authenticates, is org-scoped, rate-limited, and audited.
@@ -295,13 +347,13 @@ first-12 mod 11 mod 10).
 `AuditAction` additions (each in its phase): `ORGANIZATION_UPDATED` ✓ (Ph1),
 `ORGANIZATION_BRANCH_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph2),
 `ORGANIZATION_LICENSE_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph3),
-`API_KEY_CREATED`, `API_KEY_REVOKED`,
+`API_KEY_CREATED` / `_REVOKED` ✓ (Ph4),
 `API_KEY_AUTH_FAILED`, `INTEGRATION_DOCUMENT_UPLOADED`,
 `INTEGRATION_BATCH_CREATED` (string values → fits `length=64`).
 
 Config additions: `integration_api_hmac_key` (empty default; goes in
-`_KEY_SETTINGS`, min 32 — production guard), `integration_api_key_prefix =
-"ddorg"`, `integration_rate_limit_per_minute = 120`,
+`_KEY_SETTINGS`, min 32 — production guard) ✓ (Ph4), `integration_api_key_prefix =
+"ddorg"` ✓ (Ph4), `integration_rate_limit_per_minute = 120`,
 `integration_max_batch_size = 100`, `integration_validate_inn_checksum = True`
 ✓ (Ph1), `integration_request_log_sample = 1.0`.
 
@@ -335,7 +387,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | `0006_organization_legal_data.py` ✓ | org legal columns + `verification_status` (server default `'UNVERIFIED'`) + `uq_organizations_inn`/`_ogrn` |
 | `0007_organization_branches.py` ✓ | `organization_branches` + `(organization_id, code)` unique index (see note §7) |
 | `0008_organization_licenses.py` ✓ | `organization_licenses` + `(organization_id, license_number)` unique index (see note §7) |
-| `0009_organization_api_keys.py` | `organization_api_keys` + unique `key_hash` |
+| `0009_organization_api_keys.py` ✓ | `organization_api_keys` + unique `key_hash` index (see note §7) |
 | `0010_organization_api_requests.py` | `organization_api_requests` + indexes |
 | `0011_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
 | `0012_organization_document_schemas.py` | `organization_document_schemas` |
@@ -343,10 +395,11 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 
 ### 4.5 API-key architecture
 
-- **Format:** `ddorg_<env>_<secret>`, env ∈ `liv|tst`, secret = `secrets.token_urlsafe(43)` (256-bit). `prefix` = first ~12 chars for display.
-- **Hashing:** `HMAC_sha256(settings.integration_api_hmac_key, raw_key)` hex; only `key_hash` persisted — raw key never stored/logged (kept as `Authorization: Bearer <key>`).
-- **Creation:** `create(org, name, scopes, expires_at?, created_by)` → `(record, raw_key)`; raw shown **once**. `last_used_at` updated best-effort in the auth dependency.
-- **Status:** `active|revoked|expired`; inactive org ⇒ key unusable regardless.
+- **Format:** `ddorg_<env>_<secret>`, env ∈ `liv|tst`, secret = `secrets.token_urlsafe(43)` (256-bit). `prefix` = first 12 chars for display. ✓ (Ph4, `app/domain/api_key.py`)
+- **Hashing:** `HMAC_sha256(settings.integration_api_hmac_key, raw_key)` hex; only `key_hash` persisted — raw key never stored/logged (kept as `Authorization: Bearer <key>`). ✓
+- **Creation:** `create(org, name, scopes, expires_at?, created_by)` → `(record, raw_key)`; raw shown **once** (create/rotate responses). `last_used_at` updated best-effort in the auth dependency (Ph5). ✓
+- **Status:** `active|revoked|expired`; inactive org ⇒ key unusable regardless. ✓ (Ph5 for the auth wiring)
+- **Revoke/rotate:** revoke is idempotent → 204; rotate issues a new ACTIVE key keeping name/scopes/expiry, old goes `REVOKED` with `revoked_at` set. ✓
 
 ### 4.6 Authentication & authorization
 
@@ -362,7 +415,7 @@ Management (JWT + org_admin + member):
 | `GET/PATCH /organizations/me` ✓ | — / `OrganizationUpdate` → `OrganizationResponse` | Ph1 |
 | `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | ✓ Ph2; dup code 409; DELETE = soft deactivate |
 | `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | ✓ Ph3; dup number 409; DELETE = soft revoke; auto `EXPIRED` on list/get |
-| `GET/POST /organizations/me/api-keys` · `DELETE/Rotate /…/{id}` | `ApiKeyCreate` → response (**raw once**) · 204 | list hides raw |
+| `GET/POST /organizations/me/api-keys` · `DELETE/Rotate /…/{id}` | `ApiKeyCreate` → response (**raw once**) · 204 · `POST …/{id}/rotate` | ✓ Ph4; list hides raw; rotate returns new raw key |
 | `GET /organizations/me/api-usage` | `?from&to` → aggregates | Ph11 |
 | `GET/POST /organizations/me/schemas` · `POST /…/{id}/publish` | schema CRUD + publish | Ph10; published immutable |
 
@@ -382,7 +435,7 @@ Codes: 401 · 403 · 429 · 404 · 409 · 413 (oversized) · 415 (bad type) · 4
 - `OrganizationUpdate` ✓ — optional name/inn/ogrn/legal_address/email/phone/website; INN/OGRN normalized + checksum-checked; legal-data change → `PENDING` (re-verification).
 - Branch ✓: `code ^[A-Za-z0-9_-]{1,32}$`, `name ≤255`, `address`, `phone`; PATCH `""` → `NULL`.
 - License ✓: `license_number ≤64`, `license_type`, `status`, `issued_at`, `expires_at`, `scope`, `issuer`; `expires_at` must not precede `issued_at`; PATCH `""` clears `scope`/`issuer`; explicit `status` change allowed.
-- ApiKey: `name`, `scopes` (required, non-empty), `expires_at?`; response includes `raw_key` only on create/rotate.
+- ApiKey ✓: `name ≤128`, `scopes` (required, non-empty list of the 4 scopes), `expires_at?`; `ApiKeyResponse` hides `key_hash`; `raw_key` present only on `ApiKeyCreateResponse` (create/rotate).
 - Integration: upload request `patient_email` (Identity-validated), `document_type?`, `external_id?`, `branch_code?`, `title?`; response `document_id`, `status="processing"`, `external_id`, `patient_id`. Bulk: `items ≤ integration_max_batch_size`, `idempotency_key?`. Status reads only (no canonical content for orgs in v1).
 - Notification (client, P1): `type`, `title`, `resource_type/id`, `status`, `read_at`.
 
@@ -422,7 +475,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 
 ## 5. Tests
 
-- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006 round-trip), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
+- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
 - **API**: `tests/test_organizations_api.py` ✓; `tests/test_integration_api.py`.
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
@@ -434,8 +487,8 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 1. Phase 1 — Organization core. [x]
 2. Phase 2 — Branches. [x]
 3. Phase 3 — Licenses. [x]
-4. Phase 4 — API keys. [ ] (next)
-5. Phase 5 — API-key auth. [ ]
+4. Phase 4 — API keys. [x]
+5. Phase 5 — API-key auth. [ ] (next)
 6. Phase 7 — Patient resolver. [ ] (ordered before 6: §4.9 unblocks single upload)
 7. Phase 6 — Single document integration. [ ]
 8. Phase 8 — Notifications. [ ]
@@ -454,7 +507,7 @@ Each phase: implement → update this status → pause for confirmation.
 
 - SQLAlchemy stores `str, Enum` members by **name** (`native_enum=False`); migration backfill/defaults must use uppercase (e.g. `'UNVERIFIED'`).
 - Full alembic chain is not SQLite-portable (0002 uses PG `btrim`); migration tests exercise individual revisions in isolation.
-- Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code, 0008 license number).
+- Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code, 0008 license number, 0009 key_hash).
 - `PATCH ""` clears a field → `NULL`; verification status can only move **to `PENDING`** via the human API.
 - `uv run` at the workspace root resolves all members incl. ai-worker → `torch` (no mac-x86 wheel); use `uv run --project apps/account-api …`.
 - Follow `docs/development/CONTRIBUTING.md`: `Annotated` service aliases, router `raise_for`, service commits once.

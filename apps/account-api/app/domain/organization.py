@@ -165,3 +165,7 @@ class OrganizationLicenseNotFoundError(Exception):
 
 class OrganizationLicenseConflictError(Exception):
     """A license with the same license number already exists in the organization."""
+
+
+class OrganizationApiKeyNotFoundError(Exception):
+    """An API key does not exist for the given organization and id."""

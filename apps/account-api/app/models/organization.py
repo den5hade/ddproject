@@ -1,13 +1,14 @@
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
 from app.domain.organization import (
     BranchStatus,
+    OrganizationApiKeyStatus,
     OrganizationLicenseStatus,
     OrganizationVerificationStatus,
 )
@@ -128,4 +129,39 @@ class OrganizationLicense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class OrganizationApiKey(Base):
+    """A machine-to-machine API key for an organization (raw shown once)."""
+
+    __tablename__ = "organization_api_keys"
+    __table_args__ = (
+        UniqueConstraint("key_hash", name="uq_organization_api_keys_key_hash"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    prefix: Mapped[str] = mapped_column(String(16))
+    key_hash: Mapped[str] = mapped_column(String(128))
+    permissions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[OrganizationApiKeyStatus] = mapped_column(
+        Enum(OrganizationApiKeyStatus, native_enum=False, length=16),
+        default=OrganizationApiKeyStatus.ACTIVE,
+    )
+    created_by_account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

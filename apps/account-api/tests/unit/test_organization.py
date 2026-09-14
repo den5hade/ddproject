@@ -8,9 +8,13 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from app.domain.access import AuditAction
+from app.domain.api_key import hash_api_key
 from app.domain.medical import OrganizationType
 from app.domain.organization import (
     BranchStatus,
+    OrganizationApiKeyNotFoundError,
+    OrganizationApiKeyScope,
+    OrganizationApiKeyStatus,
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationLegalDataConflictError,
@@ -21,8 +25,14 @@ from app.domain.organization import (
     OrganizationVerificationStatus,
 )
 from app.models.audit_log import AuditLog
-from app.models.organization import Organization, OrganizationBranch, OrganizationLicense
+from app.models.organization import (
+    Organization,
+    OrganizationApiKey,
+    OrganizationBranch,
+    OrganizationLicense,
+)
 from app.schemas.organization import (
+    ApiKeyCreate,
     BranchCreate,
     BranchUpdate,
     LicenseCreate,
@@ -30,6 +40,7 @@ from app.schemas.organization import (
     OrganizationUpdate,
 )
 from app.services.organization import OrganizationService
+from app.services.organization_api_key import OrganizationApiKeyService
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -55,6 +66,15 @@ def _load_migration_0007():
 def _load_migration_0008():
     path = REPO_ROOT / "migrations/alembic/versions/0008_organization_licenses.py"
     spec = spec_from_file_location("migration_0008", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0009():
+    path = REPO_ROOT / "migrations/alembic/versions/0009_organization_api_keys.py"
+    spec = spec_from_file_location("migration_0009", path)
     module = module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -732,3 +752,247 @@ def test_migration_0008_upgrade_downgrade_round_trip() -> None:
             )
         }
         assert "organization_licenses" not in tables_after
+
+
+async def _api_key(db_session, org: Organization, **fields) -> OrganizationApiKey:
+    key = OrganizationApiKey(
+        organization_id=org.id,
+        name=fields.pop("name", "demo"),
+        prefix=fields.pop("prefix", "ddorg_tst_ab"),
+        key_hash=fields.pop("key_hash", f"hash-{uuid4().hex}"),
+        status=OrganizationApiKeyStatus.ACTIVE,
+        **fields,
+    )
+    db_session.add(key)
+    await db_session.commit()
+    return key
+
+
+async def test_create_api_key_returns_raw_once(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationApiKeyService(db_session)
+    key, raw_key = await service.create_api_key(
+        org.id,
+        uuid4(),
+        ApiKeyCreate(
+            name="doc-upload",
+            scopes=[OrganizationApiKeyScope.DOCUMENTS_UPLOAD],
+        ),
+    )
+    assert raw_key.startswith("ddorg_tst_")
+    assert key.organization_id == org.id
+    assert key.name == "doc-upload"
+    assert key.status == OrganizationApiKeyStatus.ACTIVE
+    assert key.prefix == raw_key[:12]
+    assert key.permissions == ["organization.documents.upload"]
+
+
+async def test_create_api_key_persists_hash_only(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationApiKeyService(db_session)
+    key, raw_key = await service.create_api_key(
+        org.id, uuid4(), ApiKeyCreate(name="key", scopes=[OrganizationApiKeyScope.JOBS_READ])
+    )
+    assert key.key_hash == hash_api_key(raw_key)
+    assert raw_key not in key.key_hash
+    assert len(key.key_hash) == 64
+
+
+async def test_find_api_key_by_hash(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationApiKeyService(db_session)
+    key, raw_key = await service.create_api_key(
+        org.id, uuid4(), ApiKeyCreate(name="key", scopes=[OrganizationApiKeyScope.JOBS_READ])
+    )
+    found = await service.find_by_hash(hash_api_key(raw_key))
+    assert found is not None
+    assert found.id == key.id
+
+
+async def test_find_api_key_by_hash_miss(db_session) -> None:
+    service = OrganizationApiKeyService(db_session)
+    assert await service.find_by_hash("nope") is None
+
+
+async def test_list_api_keys(db_session) -> None:
+    org = await _org(db_session)
+    await _api_key(db_session, org, name="a")
+    await _api_key(db_session, org, name="b")
+    service = OrganizationApiKeyService(db_session)
+    keys = await service.list_api_keys(org.id)
+    assert [key.name for key in keys] == ["a", "b"]
+
+
+async def test_get_api_key_is_org_scoped(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    key = await _api_key(db_session, org_a)
+    service = OrganizationApiKeyService(db_session)
+    with pytest.raises(OrganizationApiKeyNotFoundError):
+        await service.get_api_key(org_b.id, key.id)
+
+
+async def test_revoke_api_key_sets_revoked(db_session) -> None:
+    org = await _org(db_session)
+    key = await _api_key(db_session, org)
+    service = OrganizationApiKeyService(db_session)
+    revoked = await service.revoke_api_key(org.id, key.id, uuid4())
+    assert revoked.status == OrganizationApiKeyStatus.REVOKED
+    assert revoked.revoked_at is not None
+
+
+async def test_revoke_api_key_is_idempotent(db_session) -> None:
+    org = await _org(db_session)
+    key = await _api_key(db_session, org)
+    service = OrganizationApiKeyService(db_session)
+    await service.revoke_api_key(org.id, key.id, uuid4())
+    revoked = await service.revoke_api_key(org.id, key.id, uuid4())
+    assert revoked.revoked_at is not None
+
+
+async def test_revoke_api_key_not_found(db_session) -> None:
+    org = await _org(db_session)
+    service = OrganizationApiKeyService(db_session)
+    with pytest.raises(OrganizationApiKeyNotFoundError):
+        await service.revoke_api_key(org.id, uuid4(), uuid4())
+
+
+async def test_rotate_creates_new_key_and_revokes_old(db_session) -> None:
+    org = await _org(db_session)
+    old = await _api_key(db_session, org, permissions=["organization.jobs.read"])
+    service = OrganizationApiKeyService(db_session)
+    new_key, new_raw = await service.rotate_api_key(org.id, old.id, uuid4())
+    assert new_key.id != old.id
+    assert new_key.status == OrganizationApiKeyStatus.ACTIVE
+    assert new_key.name == old.name
+    assert new_key.permissions == ["organization.jobs.read"]
+    assert new_key.prefix == new_raw[:12]
+    old_fetched = await service.get_api_key(org.id, old.id)
+    assert old_fetched.status == OrganizationApiKeyStatus.REVOKED
+    assert old_fetched.revoked_at is not None
+
+
+async def test_rotate_api_key_is_org_scoped(db_session) -> None:
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    key = await _api_key(db_session, org_a)
+    service = OrganizationApiKeyService(db_session)
+    with pytest.raises(OrganizationApiKeyNotFoundError):
+        await service.rotate_api_key(org_b.id, key.id, uuid4())
+
+
+async def test_api_key_operations_write_audit_log(db_session) -> None:
+    org = await _org(db_session)
+    actor = uuid4()
+    service = OrganizationApiKeyService(db_session)
+    key, _ = await service.create_api_key(
+        org.id, actor, ApiKeyCreate(name="a", scopes=[OrganizationApiKeyScope.JOBS_READ])
+    )
+    await service.revoke_api_key(org.id, key.id, actor)
+    rows = (await db_session.execute(sa.select(AuditLog))).scalars().all()
+    actions = [row.action for row in rows]
+    assert AuditAction.API_KEY_CREATED in actions
+    assert AuditAction.API_KEY_REVOKED in actions
+
+
+def test_migration_0009_revision_wiring() -> None:
+    migration = _load_migration_0009()
+    assert migration.revision == "0009"
+    assert migration.down_revision == "0008"
+
+
+def test_migration_0009_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0009()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE accounts (
+                    id VARCHAR(32) PRIMARY KEY,
+                    email VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text("INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')")
+        )
+        conn.execute(sa.text("INSERT INTO accounts (id, email) VALUES ('a1', 'x@y.z')"))
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_api_keys" in tables
+        columns = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA table_info(organization_api_keys)"))
+        }
+        assert {
+            "id",
+            "organization_id",
+            "name",
+            "prefix",
+            "key_hash",
+            "permissions",
+            "status",
+            "created_by_account_id",
+            "created_at",
+            "expires_at",
+            "revoked_at",
+            "last_used_at",
+        } <= columns
+        indexes = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA index_list(organization_api_keys)"))
+        }
+        assert "uq_organization_api_keys_key_hash" in indexes
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_api_keys (id, organization_id, name, prefix,"
+                " key_hash, status, created_at)"
+                " VALUES ('k1', '1', 'demo', 'ddorg_tst_x', 'h1', 'active', '2026-01-01')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT status FROM organization_api_keys WHERE id = 'k1'")
+            ).scalar_one()
+            == "active"
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            conn.execute(
+                sa.text(
+                    "INSERT INTO organization_api_keys (id, organization_id, name,"
+                    " prefix, key_hash, status, created_at)"
+                    " VALUES ('k2', '1', 'other', 'ddorg_tst_y', 'h1', 'active',"
+                    " '2026-01-01')"
+                )
+            )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        tables_after = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_api_keys" not in tables_after

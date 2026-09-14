@@ -9,6 +9,7 @@ from app.models.extraction import DocumentExtraction
 from app.models.medical_record import MedicalRecord
 from app.models.organization import (
     Organization,
+    OrganizationApiKey,
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
@@ -32,6 +33,7 @@ __all__ = [
     "Encounter",
     "MedicalRecord",
     "Organization",
+    "OrganizationApiKey",
     "OrganizationBranch",
     "OrganizationLicense",
     "OrganizationMembership",

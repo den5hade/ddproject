@@ -15,6 +15,8 @@ from app.core.timezone import to_api_tz
 from app.domain.medical import OrganizationStatus, OrganizationType
 from app.domain.organization import (
     BranchStatus,
+    OrganizationApiKeyScope,
+    OrganizationApiKeyStatus,
     OrganizationLicenseStatus,
     OrganizationVerificationStatus,
     inn_checksum_valid,
@@ -219,3 +221,36 @@ class LicenseResponse(BaseModel):
     @field_serializer("created_at", "updated_at")
     def _tz(self, v: datetime) -> datetime:
         return to_api_tz(v)
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    scopes: list[OrganizationApiKeyScope] = Field(min_length=1)
+    expires_at: datetime | None = None
+
+
+class ApiKeyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    name: str
+    prefix: str
+    status: OrganizationApiKeyStatus
+    permissions: list[str] | None
+    created_by_account_id: UUID | None
+    created_at: datetime
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+
+    @field_serializer("created_at", "expires_at", "revoked_at", "last_used_at")
+    def _tz(self, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        return to_api_tz(v)
+
+
+class ApiKeyCreateResponse(ApiKeyResponse):
+    """Returned once on create/rotate — includes the raw key."""
+    raw_key: str

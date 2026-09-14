@@ -5,6 +5,7 @@ from app.domain.medical import MembershipStatus, OrganizationType
 from app.models.audit_log import AuditLog
 from app.models.organization import (
     Organization,
+    OrganizationApiKey,
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
@@ -100,6 +101,19 @@ async def _create_license(
         session.add(license)
         await session.commit()
         return license.id
+
+
+async def _api_key(db_factory, organization_id: UUID, name: str = "demo") -> UUID:
+    async with db_factory() as session:
+        key = OrganizationApiKey(
+            organization_id=organization_id,
+            name=name,
+            prefix="ddorg_tst_x",
+            key_hash=f"hash-{uuid4().hex}",
+        )
+        session.add(key)
+        await session.commit()
+        return key.id
 
 
 async def test_get_me_requires_auth(app_client, fake_redis):
@@ -610,5 +624,144 @@ async def test_delete_license_other_org_404(app_client, fake_redis, db_factory):
     await _configure_org_admin(db_factory, b_id, name="Other Clinic")
     resp = await app_client.delete(
         f"/api/v1/organizations/me/licenses/{license_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404
+
+
+async def test_api_keys_require_auth(app_client, fake_redis):
+    resp = await app_client.get("/api/v1/organizations/me/api-keys")
+    assert resp.status_code == 401
+
+
+async def test_api_keys_require_admin(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    resp = await app_client.get("/api/v1/organizations/me/api-keys", headers=_auth(token))
+    assert resp.status_code == 403
+
+
+async def test_create_api_key_returns_raw_once(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/api-keys",
+        headers=_auth(token),
+        json={"name": "doc-upload", "scopes": ["organization.documents.upload"]},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "doc-upload"
+    assert body["status"] == "active"
+    assert body["prefix"] == body["raw_key"][:12]
+    assert body["raw_key"].startswith("ddorg_tst_")
+    assert body["permissions"] == ["organization.documents.upload"]
+
+    list_resp = await app_client.get(
+        "/api/v1/organizations/me/api-keys", headers=_auth(token)
+    )
+    assert list_resp.status_code == 200
+    listed = list_resp.json()
+    assert len(listed) == 1
+    assert "raw_key" not in listed[0]
+    assert listed[0]["id"] == body["id"]
+
+
+async def test_create_api_key_requires_scopes_422(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    await _configure_org_admin(db_factory, account_id)
+    resp = await app_client.post(
+        "/api/v1/organizations/me/api-keys",
+        headers=_auth(token),
+        json={"name": "no-scopes", "scopes": []},
+    )
+    assert resp.status_code == 422
+
+
+async def test_list_api_keys_scoped_to_my_org(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    await _api_key(db_factory, org_a, name="a-one")
+    await _api_key(db_factory, org_a, name="a-two")
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    org_b = await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    await _api_key(db_factory, org_b, name="b-one")
+
+    resp = await app_client.get("/api/v1/organizations/me/api-keys", headers=_auth(token_a))
+    assert resp.status_code == 200
+    names = [key["name"] for key in resp.json()]
+    assert names == ["a-one", "a-two"]
+
+
+async def test_revoke_api_key(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    key_id = await _api_key(db_factory, org_id)
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/api-keys/{key_id}", headers=_auth(token)
+    )
+    assert resp.status_code == 204
+    list_resp = await app_client.get(
+        "/api/v1/organizations/me/api-keys", headers=_auth(token)
+    )
+    bodies = list_resp.json()
+    assert len(bodies) == 1
+    assert bodies[0]["status"] == "revoked"
+    assert bodies[0]["revoked_at"] is not None
+
+
+async def test_revoke_api_key_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    key_id = await _api_key(db_factory, org_a)
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.delete(
+        f"/api/v1/organizations/me/api-keys/{key_id}", headers=_auth(token_b)
+    )
+    assert resp.status_code == 404
+
+
+async def test_rotate_api_key(app_client, fake_redis, db_factory):
+    token = await _register(app_client, fake_redis, _identity())
+    account_id = await _account_id(app_client, token)
+    org_id = await _configure_org_admin(db_factory, account_id)
+    old_id = await _api_key(db_factory, org_id, name="rotating")
+    resp = await app_client.post(
+        f"/api/v1/organizations/me/api-keys/{old_id}/rotate", headers=_auth(token)
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] != str(old_id)
+    assert body["name"] == "rotating"
+    assert body["status"] == "active"
+    assert body["raw_key"].startswith("ddorg_tst_")
+
+    list_resp = await app_client.get(
+        "/api/v1/organizations/me/api-keys", headers=_auth(token)
+    )
+    by_id = {key["id"]: key for key in list_resp.json()}
+    assert by_id[str(old_id)]["status"] == "revoked"
+    assert by_id[body["id"]]["status"] == "active"
+
+
+async def test_rotate_api_key_other_org_404(app_client, fake_redis, db_factory):
+    token_a = await _register(app_client, fake_redis, _identity())
+    a_id = await _account_id(app_client, token_a)
+    org_a = await _configure_org_admin(db_factory, a_id)
+    key_id = await _api_key(db_factory, org_a)
+
+    token_b = await _register(app_client, fake_redis, _identity())
+    b_id = await _account_id(app_client, token_b)
+    await _configure_org_admin(db_factory, b_id, name="Other Clinic")
+    resp = await app_client.post(
+        f"/api/v1/organizations/me/api-keys/{key_id}/rotate", headers=_auth(token_b)
     )
     assert resp.status_code == 404

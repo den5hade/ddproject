@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.medical import MembershipStatus
 from app.models.organization import (
     Organization,
+    OrganizationApiKey,
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
@@ -88,6 +89,31 @@ class OrganizationRepository:
                 OrganizationLicense.organization_id == organization_id,
                 OrganizationLicense.license_number == license_number,
             )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_api_keys(self, organization_id: UUID) -> list[OrganizationApiKey]:
+        result = await self._session.execute(
+            select(OrganizationApiKey)
+            .where(OrganizationApiKey.organization_id == organization_id)
+            .order_by(OrganizationApiKey.created_at, OrganizationApiKey.name)
+        )
+        return list(result.scalars().all())
+
+    async def get_api_key(
+        self, organization_id: UUID, key_id: UUID
+    ) -> OrganizationApiKey | None:
+        result = await self._session.execute(
+            select(OrganizationApiKey).where(
+                OrganizationApiKey.id == key_id,
+                OrganizationApiKey.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_api_key_by_hash(self, key_hash: str) -> OrganizationApiKey | None:
+        result = await self._session.execute(
+            select(OrganizationApiKey).where(OrganizationApiKey.key_hash == key_hash)
         )
         return result.scalar_one_or_none()
 

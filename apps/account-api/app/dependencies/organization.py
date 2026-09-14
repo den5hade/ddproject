@@ -12,6 +12,7 @@ from app.models.account import Account
 from app.models.organization import Organization
 from app.repositories.organization import OrganizationRepository
 from app.services.organization import OrganizationService
+from app.services.organization_api_key import OrganizationApiKeyService
 
 
 async def get_organization_service(
@@ -64,10 +65,19 @@ def require_organization_admin() -> Callable[..., Organization]:
     return _resolve_organization_admin_membership
 
 
+async def get_organization_api_key_service(
+    session: AsyncSession = Depends(get_db),
+) -> OrganizationApiKeyService:
+    return OrganizationApiKeyService(session)
+
+
 CurrentOrganization = Annotated[Organization, Depends(get_current_organization)]
 OrganizationAdmin = Annotated[
     Organization, Depends(_resolve_organization_admin_membership)
 ]
 OrganizationServiceDep = Annotated[
     OrganizationService, Depends(get_organization_service)
+]
+OrganizationApiKeyServiceDep = Annotated[
+    OrganizationApiKeyService, Depends(get_organization_api_key_service)
 ]
