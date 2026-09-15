@@ -35,6 +35,19 @@ IDOR; cross-org → 404; `member` reads context but cannot manage). Full suite
 **347 passed**, `ruff` clean. Phase 4c is next — see §6 and the Phase 4b
 Implementation Status block.
 
+**Revision 9** — Phase 4c (API-key auth & verification policy) completed:
+`dependencies/integration.py` answers `Bearer <api-key>` with an
+`OrganizationApiContext` — HMAC hash lookup, revoked/expired → 401, org
+`status ≠ ACTIVE` → 403, verification `REJECTED` → 403, per-key Redis
+minute-window rate limit (`ApiKeyRateLimiter`, default 120/min) → 429, per-key
+`permissions` JSON enforced per endpoint (`require_api_key_permission`), and a
+best-effort `last_used_at` + `API_KEY_AUTH_FAILED` audit. `LoggingMiddleware`
+echoes a client-`X-Request-Id` or generated id and persists non-PII
+`organization_api_requests` rows (`0011`; org/api_key NULL when auth failed) for
+`/integration/*`. Stub `POST /integration/documents` (501) exercises the full
+chain; real ingestion lands in 4d. Full suite **367 passed**, `ruff` clean.
+Phase 4d is next — see §6 and the Phase 4c Implementation Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -476,7 +489,7 @@ explicitly.
   Existing `/me/*` tests updated: memberships now carry `role=OWNER`, no global
   role seeded. Full suite **347 passed** (was 335); `ruff check` clean.
 
-### Phase 4c — API-key auth & verification policy [ ]
+### Phase 4c — API-key auth & verification policy [x]
 
 Deps module + `OrganizationApiContext`, scopes, Redis rate limit,
 `OrganizationApiRequest` writes (`0011`), `request_id` (echoed `X-Request-Id`).
@@ -486,6 +499,26 @@ necessary-not-sufficient — PENDING verification never grants unrestricted
 production access. Tests: 401/403/429 matrix + unverified/rejected org. Deps: 4b.
 **Accept:** a key authenticates, is org-scoped, rate-limited, verification-gated
 and audited.
+
+**Phase 4c Implementation Status** (Revision 9, `[x]`):
+- `app/dependencies/integration.py` — `OrganizationApiContext`,
+  `get_current_organization_from_api_key`, `require_api_key_permission`,
+  `ApiKeyRateLimiterDep`; `GET /integration` single endpoint `POST
+  /integration/documents` stub (501) registers in `app/api/v1/integration.py`.
+- `app/services/rate_limit.py` — per-key minute window on `redis_client`
+  (config `integration_rate_limit_per_minute=120`, overridable in tests).
+- `app/models/organization.py` + `migrations/.../0011_organization_api_requests.py`
+  — `organization_api_requests` (non-PII; org/api_key NULLable for failed auth).
+- `app/middleware/request_logging.py` — `X-Request-Id` echo + best-effort
+  `OrganizationApiRequest` writes via `request.app.state.api_request_db_factory`.
+- `app/core/config.py` — `integration_rate_limit_per_minute`,
+  `integration_request_log_sample`; HTTP error mappings for 401/403 (4c).
+- Tests: `tests/test_organizations_integration_api.py` (401 no/missing/
+  unknown/revoked/expired, 403 inactive/rejected/missing-scope, pre-seeded 429,
+  happy 501 + request logged with echoed id + failed-auth recorded, audit,
+  `last_used_at`); `tests/unit/test_organization.py` (migration 0011
+  round-trip, `ApiKeyRateLimiter` window/ttl/isolation). Full suite **367
+  passed**; `ruff` clean.
 
 ### Phase 4d — Integration API & patient resolver [ ]
 
@@ -777,8 +810,8 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 
 ## 5. Tests
 
-- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
-- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); `tests/test_integration_api.py`.
+- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip; + 4c migration 0011 round-trip + `ApiKeyRateLimiter` window/TTL/isolation), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
+- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); new `tests/test_organizations_integration_api.py` **4c** (401 no/missing/unknown/revoked/expired key, 403 org-inactive / verification-REJECTED / missing scope, pre-seeded 429 window, happy 501 stub + `X-Request-Id` echo + `organization_api_requests` row on success and failed auth, `API_KEY_AUTH_FAILED` audit, `last_used_at`, key org-scoping); `tests/test_integration_api.py`.
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
 
@@ -792,7 +825,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 4. Phase 4 — API keys. [x]
 5. Phase 4a — Organization onboarding (admin). [x] (done)
 6. Phase 4b — Organization context & membership-role authorization. [x] (done)
-7. Phase 4c — API-key auth & verification policy. [ ]
+7. Phase 4c — API-key auth & verification policy. [x] (done)
 8. Phase 4d — Integration API + patient resolver. [ ] (resolver inside 4d, unlocked before upload)
 9. Phase 4e — Bulk upload. [ ]
 10. Phase 4f — Notifications. [ ]

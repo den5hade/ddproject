@@ -131,6 +131,8 @@ class Settings(BaseSettings):
     integration_api_hmac_key: str = ""
     integration_api_key_prefix: str = "ddorg"
     integration_validate_inn_checksum: bool = True
+    integration_rate_limit_per_minute: int = 120
+    integration_request_log_sample: float = 1.0
 
     # ------------------------------------------------------------------
     # AI Feature (cloud.ru model API)

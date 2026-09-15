@@ -10,6 +10,7 @@ from app.models.medical_record import MedicalRecord
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
+    OrganizationApiRequest,
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
@@ -34,6 +35,7 @@ __all__ = [
     "MedicalRecord",
     "Organization",
     "OrganizationApiKey",
+    "OrganizationApiRequest",
     "OrganizationBranch",
     "OrganizationLicense",
     "OrganizationMembership",

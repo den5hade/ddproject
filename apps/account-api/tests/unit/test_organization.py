@@ -91,6 +91,15 @@ def _load_migration_0009():
     return module
 
 
+def _load_migration_0011():
+    path = REPO_ROOT / "migrations/alembic/versions/0011_organization_api_requests.py"
+    spec = spec_from_file_location("migration_0011", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 async def _org(db_session, **fields) -> Organization:
     org = Organization(name="City Clinic", type=OrganizationType.CLINIC, **fields)
     db_session.add(org)
@@ -1006,6 +1015,164 @@ def test_migration_0009_upgrade_downgrade_round_trip() -> None:
             )
         }
         assert "organization_api_keys" not in tables_after
+
+
+def test_migration_0011_revision_wiring() -> None:
+    migration = _load_migration_0011()
+    assert migration.revision == "0011"
+    assert migration.down_revision == "0010"
+
+
+def test_migration_0011_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0011()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organization_api_keys (
+                    id VARCHAR(32) PRIMARY KEY,
+                    organization_id VARCHAR(32) NOT NULL REFERENCES organizations(id),
+                    name VARCHAR(255) NOT NULL,
+                    prefix VARCHAR(16) NOT NULL,
+                    key_hash VARCHAR(128) NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    created_at DATETIME
+                )
+                """
+            )
+        )
+        conn.execute(sa.text("INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')"))
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_api_keys (id, organization_id, name, prefix,"
+                " key_hash, status, created_at)"
+                " VALUES ('k1', '1', 'demo', 'ddorg_tst_x', 'h1', 'active', '2026-01-01')"
+            )
+        )
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        tables = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_api_requests" in tables
+        columns = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA table_info(organization_api_requests)"))
+        }
+        assert {
+            "id",
+            "organization_id",
+            "api_key_id",
+            "request_id",
+            "method",
+            "path",
+            "status_code",
+            "duration_ms",
+            "ip_address",
+            "user_agent",
+            "error_code",
+            "created_at",
+        } <= columns
+        indexes = {
+            row[1]
+            for row in conn.execute(sa.text("PRAGMA index_list(organization_api_requests)"))
+        }
+        assert {
+            "ix_organization_api_requests_organization_id",
+            "ix_organization_api_requests_api_key_id",
+            "ix_organization_api_requests_created_at",
+        } <= indexes
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_api_requests"
+                " (id, organization_id, api_key_id, request_id, method, path,"
+                " status_code, duration_ms, created_at)"
+                " VALUES ('r1', '1', 'k1', 'req-1', 'POST', '/api/v1/integration/documents',"
+                " 501, 3, '2026-01-01 00:00:00')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT request_id FROM organization_api_requests WHERE id = 'r1'")
+            ).scalar_one()
+            == "req-1"
+        )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        tables_after = {
+            row[0]
+            for row in conn.execute(
+                sa.text("SELECT name FROM sqlite_master WHERE type='table'")
+            )
+        }
+        assert "organization_api_requests" not in tables_after
+
+
+def test_rate_limiter_allows_up_to_limit_per_minute(fake_redis) -> None:
+    import asyncio
+
+    from app.services.rate_limit import ApiKeyRateLimiter
+
+    async def scenario() -> None:
+        limiter = ApiKeyRateLimiter(fake_redis, limit_per_minute=3)
+        assert await limiter.allowed("key-1", 1000) is True
+        assert await limiter.allowed("key-1", 1000) is True
+        assert await limiter.allowed("key-1", 1000) is True
+        assert await limiter.allowed("key-1", 1000) is False
+        assert await limiter.allowed("key-1", 1001) is True
+
+    asyncio.run(scenario())
+
+
+def test_rate_limiter_sets_ttl_on_first_hit(fake_redis) -> None:
+    import asyncio
+
+    from app.services.rate_limit import (
+        RATE_LIMIT_KEY_PREFIX,
+        WINDOW_SECONDS,
+        ApiKeyRateLimiter,
+    )
+
+    async def scenario() -> None:
+        limiter = ApiKeyRateLimiter(fake_redis, limit_per_minute=3)
+        await limiter.allowed("key-1", 2000)
+        ttl = await fake_redis.ttl(f"{RATE_LIMIT_KEY_PREFIX}:key-1:2000")
+        assert 1 <= ttl <= WINDOW_SECONDS
+
+    asyncio.run(scenario())
+
+
+def test_rate_limiter_keys_are_per_key_per_minute(fake_redis) -> None:
+    import asyncio
+
+    from app.services.rate_limit import ApiKeyRateLimiter
+
+    async def scenario() -> None:
+        limiter = ApiKeyRateLimiter(fake_redis, limit_per_minute=1)
+        assert await limiter.allowed("key-a", 3000) is True
+        assert await limiter.allowed("key-b", 3000) is True
+        assert await limiter.allowed("key-a", 3000) is False
+        assert await limiter.allowed("key-a", 3001) is True
+
+    asyncio.run(scenario())
 
 
 def _admin_create(

@@ -55,10 +55,12 @@ async def app_client(db_factory, fake_redis):
     from app.core.database import get_db
     from app.dependencies.auth import get_auth_service, get_otp_service
     from app.dependencies.documents import get_document_service
+    from app.dependencies.integration import get_api_key_rate_limiter
     from app.main import app
     from app.services.auth import AuthService
     from app.services.documents import DocumentService
     from app.services.otp import OtpService
+    from app.services.rate_limit import ApiKeyRateLimiter
 
     async def _override_get_db():
         async with db_factory() as session:
@@ -66,6 +68,9 @@ async def app_client(db_factory, fake_redis):
 
     async def _override_get_otp_service() -> OtpService:
         return OtpService(fake_redis)
+
+    async def _override_get_api_key_rate_limiter() -> ApiKeyRateLimiter:
+        return ApiKeyRateLimiter(fake_redis)
 
     async def _override_get_auth_service(session=Depends(get_db)) -> AuthService:
         return AuthService(
@@ -81,11 +86,16 @@ async def app_client(db_factory, fake_redis):
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_otp_service] = _override_get_otp_service
+    app.dependency_overrides[get_api_key_rate_limiter] = (
+        _override_get_api_key_rate_limiter
+    )
     app.dependency_overrides[get_auth_service] = _override_get_auth_service
     app.dependency_overrides[get_document_service] = _override_get_document_service
+    app.state.api_request_db_factory = db_factory
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
     app.dependency_overrides.clear()
+    app.state.api_request_db_factory = None

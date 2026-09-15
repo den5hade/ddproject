@@ -196,3 +196,24 @@ class OrganizationMembershipNotFoundError(Exception):
 
 class OrganizationMembershipConflictError(Exception):
     """The account is already a member (or the organization is not ACTIVE)."""
+
+
+class OrganizationApiKeyAuthenticationError(Exception):
+    """Missing, unknown, revoked or expired API key (Phase 4c auth)."""
+
+
+class OrganizationInactiveError(Exception):
+    """The key's organization is not ACTIVE, so integration access is denied."""
+
+
+class OrganizationVerificationRejectedError(Exception):
+    """The organization's verification was REJECTED; integration is blocked.
+
+    ``Organization.status = ACTIVE`` is necessary but NOT sufficient: the
+    locked verification gate requires ``verification_status != REJECTED``
+    (PENDING verification never grants unrestricted production access).
+    """
+
+
+class OrganizationApiKeyPermissionDeniedError(Exception):
+    """The key does not carry the scope required by the endpoint."""

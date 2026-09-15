@@ -1,8 +1,19 @@
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
@@ -162,6 +173,10 @@ class OrganizationApiKey(Base):
         Enum(OrganizationApiKeyStatus, native_enum=False, length=16),
         default=OrganizationApiKeyStatus.ACTIVE,
     )
+    organization: Mapped[Organization | None] = relationship(
+        lazy="selectin",
+        foreign_keys=[organization_id],
+    )
     created_by_account_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
     )
@@ -174,4 +189,40 @@ class OrganizationApiKey(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class OrganizationApiRequest(Base):
+    """High-volume, non-PII HTTP access log for /integration requests (Ph4c).
+
+    Never stores request bodies, files, canonical JSON, patient emails or any
+    other medical data (spec §24). ``organization_id``/``api_key_id`` are NULL
+    for requests that failed before authentication succeeded.
+    """
+
+    __tablename__ = "organization_api_requests"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    api_key_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("organization_api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    request_id: Mapped[str] = mapped_column(String(64))
+    method: Mapped[str] = mapped_column(String(8))
+    path: Mapped[str] = mapped_column(String(255))
+    status_code: Mapped[int] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
     )

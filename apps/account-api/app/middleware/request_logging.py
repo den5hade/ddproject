@@ -6,12 +6,15 @@ import os
 import sys
 import time
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
+from app.core.database import async_session_factory
+from app.services.organization_api_request import OrganizationApiRequestService
 
 
 def setup_logger(
@@ -94,7 +97,12 @@ logger = setup_logger(
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware to log all HTTP requests and responses to the logger service."""
+    """Middleware to log all HTTP requests and responses to the logger service.
+
+    Also echoes an ``X-Request-Id`` (accepted from the client or generated) and,
+    for ``/api/v1/integration/*`` paths, persists a non-PII
+    ``organization_api_requests`` access-log row best-effort (never raises).
+    """
 
     def __init__(self, app):
         super().__init__(app)
@@ -114,43 +122,55 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             "/favicon.ico",
             "/",  # Root endpoint
         }
+        self.integration_prefix = f"{settings.api_prefix.rstrip('/')}/integration"
 
     async def dispatch(self, request: Request, call_next):
         """Process the request and log it."""
-        if not self.enabled:
-            return await call_next(request)
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        request.state.request_id = request_id
 
-        # Skip logging for excluded paths
-        if request.url.path in self.excluded_paths:
-            return await call_next(request)
+        manage = self.enabled and request.url.path not in self.excluded_paths
 
         start_time = time.time()
-
-        # Capture request data
-        request_data = await self._capture_request_data(request)
+        request_data = await self._capture_request_data(request) if manage else None
 
         # Process the request
         try:
             response = await call_next(request)
         except Exception:
             processing_time = int((time.time() - start_time) * 1000)
-            logger.exception(
-                json.dumps(
-                    {
-                        "method": request_data["method"],
-                        "path": request_data["path"],
-                        "query_params": request_data["query_params"],
-                        "processing_time_ms": processing_time,
-                        "error": "Unhandled request exception",
-                    },
-                    ensure_ascii=False,
-                ),
-                extra={"client": request_data.get("client_ip") or "unknown"},
-            )
+            if manage:
+                logger.exception(
+                    json.dumps(
+                        {
+                            "method": request.method,
+                            "path": request.url.path,
+                            "query_params": (
+                                dict(request.query_params) if request.query_params else None
+                            ),
+                            "processing_time_ms": processing_time,
+                            "error": "Unhandled request exception",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    extra={"client": self._get_client_ip(request) or "unknown"},
+                )
             raise
+
+        # Echo the request id on the response (regardless of logging gate)
+        response.headers["x-request-id"] = request_id
+
+        if not manage:
+            return response
 
         # Calculate processing time
         processing_time = int((time.time() - start_time) * 1000)  # Convert to milliseconds
+
+        # Persist a non-PII access-log row for integration API requests
+        if request.url.path.startswith(self.integration_prefix):
+            await self._record_api_request(
+                request, response, request_id=request_id, duration_ms=processing_time
+            )
 
         # Capture response data
         response_data = await self._capture_response_data(response)
@@ -163,6 +183,63 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         )
 
         return response
+
+    def _api_request_session_factory(self, request: Request):
+        """Use an app-provided session factory (tests/DI) or the global one."""
+        try:
+            factory = getattr(request.app.state, "api_request_db_factory", None)
+            if factory is not None:
+                return factory
+        except Exception:  # pragma: no cover - scope without an app root
+            pass
+        return async_session_factory
+
+    async def _record_api_request(
+        self,
+        request: Request,
+        response: Response,
+        *,
+        request_id: str,
+        duration_ms: int,
+    ) -> None:
+        """Best-effort write of a non-PII organization_api_requests row."""
+        try:
+            context = getattr(request.state, "organization_api_context", None)
+            organization_id = context.organization.id if context is not None else None
+            api_key_id = context.api_key.id if context is not None else None
+            factory = self._api_request_session_factory(request)
+            async with factory() as session:
+                service = OrganizationApiRequestService(session)
+                await service.record(
+                    request_id=request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=response.status_code,
+                    duration_ms=duration_ms,
+                    organization_id=organization_id,
+                    api_key_id=api_key_id,
+                    ip_address=self._get_client_ip(request),
+                    user_agent=request.headers.get("user-agent"),
+                    error_code=self._error_code(response.status_code),
+                )
+        except Exception:
+            logger.warning("integration_api_request_record_failed", exc_info=True)
+
+    @staticmethod
+    def _error_code(status_code: int) -> str | None:
+        if status_code < 400:
+            return None
+        if status_code == 401:
+            return "unauthorized"
+        if status_code == 403:
+            return "forbidden"
+        if status_code == 429:
+            return "rate_limited"
+        if status_code == 501:
+            return None
+        if status_code >= 500:
+            return "server_error"
+        return "client_error"
 
     async def _capture_request_data(self, request: Request) -> dict[str, Any]:
         """Capture request data for logging."""

@@ -14,14 +14,18 @@ from app.domain.medical import (
     UnsupportedFileTypeError,
 )
 from app.domain.organization import (
+    OrganizationApiKeyAuthenticationError,
     OrganizationApiKeyNotFoundError,
+    OrganizationApiKeyPermissionDeniedError,
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
+    OrganizationInactiveError,
     OrganizationLegalDataConflictError,
     OrganizationLicenseConflictError,
     OrganizationLicenseNotFoundError,
     OrganizationMembershipConflictError,
     OrganizationNotFoundError,
+    OrganizationVerificationRejectedError,
 )
 from app.services.auth import (
     AccountInactiveError,
@@ -64,6 +68,11 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     OrganizationLicenseConflictError: status.HTTP_409_CONFLICT,
     OrganizationApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,
     OrganizationMembershipConflictError: status.HTTP_409_CONFLICT,
+    # Integration API (Phase 4c)
+    OrganizationApiKeyAuthenticationError: status.HTTP_401_UNAUTHORIZED,
+    OrganizationInactiveError: status.HTTP_403_FORBIDDEN,
+    OrganizationVerificationRejectedError: status.HTTP_403_FORBIDDEN,
+    OrganizationApiKeyPermissionDeniedError: status.HTTP_403_FORBIDDEN,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }

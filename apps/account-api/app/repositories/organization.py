@@ -2,11 +2,13 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domain.medical import MembershipStatus
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
+    OrganizationApiRequest,
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
@@ -113,9 +115,18 @@ class OrganizationRepository:
 
     async def find_api_key_by_hash(self, key_hash: str) -> OrganizationApiKey | None:
         result = await self._session.execute(
-            select(OrganizationApiKey).where(OrganizationApiKey.key_hash == key_hash)
+            select(OrganizationApiKey)
+            .where(OrganizationApiKey.key_hash == key_hash)
+            .options(selectinload(OrganizationApiKey.organization))
         )
         return result.scalar_one_or_none()
+
+    async def create_api_request(
+        self, request_row: OrganizationApiRequest
+    ) -> OrganizationApiRequest:
+        self._session.add(request_row)
+        await self._session.commit()
+        return request_row
 
     async def list_organizations(self) -> list[Organization]:
         result = await self._session.execute(
