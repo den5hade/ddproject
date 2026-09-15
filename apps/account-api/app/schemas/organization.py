@@ -12,18 +12,109 @@ from pydantic import (
 
 from app.core.config import settings
 from app.core.timezone import to_api_tz
-from app.domain.medical import OrganizationStatus, OrganizationType
+from app.domain.account import IdentityKind
+from app.domain.identity import Identity
+from app.domain.medical import (
+    MembershipStatus,
+    OrganizationStatus,
+    OrganizationType,
+)
 from app.domain.organization import (
     BranchStatus,
     OrganizationApiKeyScope,
     OrganizationApiKeyStatus,
     OrganizationLicenseStatus,
+    OrganizationMembershipRole,
     OrganizationVerificationStatus,
     inn_checksum_valid,
     normalize_inn,
     normalize_ogrn,
     ogrn_checksum_valid,
 )
+
+
+def normalize_inn_digits(v: object) -> str | None:
+    """Shared INN normalizer: canonical digits + checksum (behind config flag)."""
+    if v is None or v == "":
+        return None
+    value = normalize_inn(str(v))
+    if not value.isdigit() or len(value) not in (10, 12):
+        raise ValueError("INN must be 10 or 12 digits")
+    if settings.integration_validate_inn_checksum and not inn_checksum_valid(value):
+        raise ValueError("INN fails the control-digit check")
+    return value
+
+
+def normalize_ogrn_digits(v: object) -> str | None:
+    """Shared OGRN normalizer: canonical digits + checksum."""
+    if v is None or v == "":
+        return None
+    value = normalize_ogrn(str(v))
+    if not value.isdigit() or len(value) != 13:
+        raise ValueError("OGRN must be 13 digits")
+    if not ogrn_checksum_valid(value):
+        raise ValueError("OGRN fails the control-digit check")
+    return value
+
+
+def normalize_member_email(v: object) -> str:
+    """Shared representative-email normalizer: identity-validated, lowercase."""
+    if v is None or v == "":
+        raise ValueError("administrator email is required")
+    parsed = Identity.parse(str(v))
+    if parsed.kind is not IdentityKind.EMAIL:
+        raise ValueError("administrator identity must be an email address")
+    return parsed.canonical
+
+
+class OrganizationCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    type: OrganizationType
+    inn: str = Field(max_length=12)
+    ogrn: str = Field(max_length=13)
+    legal_address: str | None = Field(default=None, max_length=2000)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    website: str | None = Field(default=None, max_length=255)
+
+    @field_validator("inn", mode="before")
+    @classmethod
+    def _normalize_inn(cls, v: object) -> str | None:
+        return normalize_inn_digits(v)
+
+    @field_validator("ogrn", mode="before")
+    @classmethod
+    def _normalize_ogrn(cls, v: object) -> str | None:
+        return normalize_ogrn_digits(v)
+
+
+class OrganizationMemberCreate(BaseModel):
+    email: str
+    role: OrganizationMembershipRole = OrganizationMembershipRole.OWNER
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, v: object) -> str:
+        return normalize_member_email(v)
+
+
+class OrganizationAdminCreate(BaseModel):
+    organization: OrganizationCreate
+    administrator: OrganizationMemberCreate
+
+
+class OrganizationMemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: UUID
+    account_id: UUID
+    role: OrganizationMembershipRole
+    status: MembershipStatus
+    joined_at: datetime
+
+    @field_serializer("joined_at")
+    def _tz(self, v: datetime) -> datetime:
+        return to_api_tz(v)
 
 
 class OrganizationUpdate(BaseModel):
@@ -38,26 +129,12 @@ class OrganizationUpdate(BaseModel):
     @field_validator("inn", mode="before")
     @classmethod
     def _normalize_inn(cls, v: object) -> str | None:
-        if v is None or v == "":
-            return None
-        value = normalize_inn(str(v))
-        if not value.isdigit() or len(value) not in (10, 12):
-            raise ValueError("INN must be 10 or 12 digits")
-        if settings.integration_validate_inn_checksum and not inn_checksum_valid(value):
-            raise ValueError("INN fails the control-digit check")
-        return value
+        return normalize_inn_digits(v)
 
     @field_validator("ogrn", mode="before")
     @classmethod
     def _normalize_ogrn(cls, v: object) -> str | None:
-        if v is None or v == "":
-            return None
-        value = normalize_ogrn(str(v))
-        if not value.isdigit() or len(value) != 13:
-            raise ValueError("OGRN must be 13 digits")
-        if not ogrn_checksum_valid(value):
-            raise ValueError("OGRN fails the control-digit check")
-        return value
+        return normalize_ogrn_digits(v)
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> "OrganizationUpdate":

@@ -117,10 +117,42 @@ class OrganizationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_organizations(self) -> list[Organization]:
+        result = await self._session.execute(
+            select(Organization).order_by(Organization.created_at, Organization.name)
+        )
+        return list(result.scalars().all())
+
+    async def list_memberships(
+        self, organization_id: UUID
+    ) -> list[OrganizationMembership]:
+        result = await self._session.execute(
+            select(OrganizationMembership)
+            .where(OrganizationMembership.organization_id == organization_id)
+            .order_by(OrganizationMembership.joined_at, OrganizationMembership.id)
+        )
+        return list(result.scalars().all())
+
+    async def get_membership(
+        self, organization_id: UUID, account_id: UUID
+    ) -> OrganizationMembership | None:
+        result = await self._session.execute(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.account_id == account_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_active_organization_for_account(
         self, account_id: UUID
     ) -> Organization | None:
-        """Return the account's organization via an ACTIVE membership, if any."""
+        """Return the account's organization via an ACTIVE membership, if any.
+
+        Deterministic for multi-membership accounts: the earliest ``joined_at``
+        membership wins (id tie-break). ``scalars().first()`` never raises on a
+        second membership (Phase 4a hardening).
+        """
         result = await self._session.execute(
             select(Organization)
             .join(
@@ -131,5 +163,24 @@ class OrganizationRepository:
                 OrganizationMembership.account_id == account_id,
                 OrganizationMembership.status == MembershipStatus.ACTIVE,
             )
+            .order_by(OrganizationMembership.joined_at, Organization.id)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
+
+    async def list_active_organizations_for_account(
+        self, account_id: UUID
+    ) -> list[Organization]:
+        """All organizations with an ACTIVE membership for the account."""
+        result = await self._session.execute(
+            select(Organization)
+            .join(
+                OrganizationMembership,
+                OrganizationMembership.organization_id == Organization.id,
+            )
+            .where(
+                OrganizationMembership.account_id == account_id,
+                OrganizationMembership.status == MembershipStatus.ACTIVE,
+            )
+            .order_by(OrganizationMembership.joined_at, Organization.id)
+        )
+        return list(result.scalars().all())

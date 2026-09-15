@@ -20,6 +20,7 @@ from app.domain.organization import (
     OrganizationLegalDataConflictError,
     OrganizationLicenseConflictError,
     OrganizationLicenseNotFoundError,
+    OrganizationMembershipConflictError,
     OrganizationNotFoundError,
 )
 from app.services.auth import (
@@ -62,6 +63,7 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     OrganizationLicenseNotFoundError: status.HTTP_404_NOT_FOUND,
     OrganizationLicenseConflictError: status.HTTP_409_CONFLICT,
     OrganizationApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,
+    OrganizationMembershipConflictError: status.HTTP_409_CONFLICT,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }

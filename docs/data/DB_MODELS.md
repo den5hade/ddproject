@@ -177,10 +177,13 @@ RBAC-флагов **недостаточно** для медданных — д�
 
 `../../apps/account-api/app/models/organization.py` → `Organization`, `OrganizationMembership`
 
-- `organizations`: id, name, type (`OrganizationType`: clinic/hospital/private_practice/laboratory), status;
-- `organization_memberships`: id, organization_id, account_id —
+- `organizations`: id, name, type (`OrganizationType`: clinic/hospital/private_practice/laboratory), status,
+  created_by_account_id, inn, ogrn, legal_address, email, phone, website, verification_status;
+- `organization_memberships`: id, organization_id, account_id, **role**
+  (`OrganizationMembershipRole`: owner/admin/member, default `member`, server default `'MEMBER'`),
   **UNIQUE(organization_id, account_id)**, position, status, joined_at, left_at
   (FK → organizations/accounts, CASCADE).
+  `created_by_account_id` FK → accounts SET NULL.
 
 ---
 

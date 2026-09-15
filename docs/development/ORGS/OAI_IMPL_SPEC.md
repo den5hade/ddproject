@@ -41,10 +41,11 @@ Create a detailed implementation plan for evolving the existing `Organization` d
 * INN;
 * OGRN;
 * legal address;
-* **organization self-registration (onboarding)** — an ACTIVE account creates an
-  organization and becomes its first admin via an **organization-scoped role**
-  (`OrganizationMembership.role`, not a global `AccountRole`); multi-membership
-  allowed;
+* **admin organization onboarding** — a `system_admin` creates an organization
+  and connects a representative by email; the representative is authorized by an
+  **organization-scoped role** (`OrganizationMembership.role`, never a global
+  `AccountRole`); **no public self-registration** — a regular account cannot
+  `POST /organizations`; multi-membership allowed;
 * multiple organization licenses;
 * multiple organization branches with separate addresses;
 * organization API keys;
@@ -173,7 +174,7 @@ Start the document with a table similar to:
 | Area                  | Current state | Required state | Action |
 | --------------------- | ------------- | -------------- | ------ |
 | Organization          | ...           | ...            | modify |
-| Organization onboarding | ...         | self-registration: `POST /organizations`, membership role `owner`, `created_by`, multi-membership | modify + create |
+| Organization onboarding | ...         | admin: `POST /admin/organizations`, `POST /admin/organizations/{id}/members`, membership role `owner|admin`, `created_by`, account reuse by email, no public self-registration | modify + create |
 | Branches              | ...           | ...            | create |
 | Licenses              | ...           | ...            | create |
 | API Keys              | ...           | ...            | create |
@@ -412,11 +413,21 @@ For every endpoint specify:
 
 At minimum cover:
 
+## Organization onboarding (admin)
+
+```text
+POST /api/v1/admin/organizations                       (new org + representative)
+GET  /api/v1/admin/organizations                       (all organizations)
+GET  /api/v1/admin/organizations/{id}                  (organization)
+POST /api/v1/admin/organizations/{id}/members          (attach representative)
+GET  /api/v1/admin/organizations/{id}/members          (list representatives)
+```
+(no public `POST /organizations`; gate: `system_admin`; representative access
+is `OrganizationMembership.role`, no global role granted)
+
 ## Organization management
 
 ```text
-POST /organizations            (self-registration; ACTIVE JWT only)
-GET  /organizations            (list my organizations)
 GET    /organizations/me
 PATCH  /organizations/me
 ```
@@ -521,7 +532,8 @@ Determine:
 * whether uniqueness is database-enforced (yes — unique indexes are the
   idempotency source of truth; service pre-check is UX-only);
 * whether values are optional for existing organizations;
-* when they become required (required at self-registration);
+* when they become required (required at admin onboarding
+  `POST /admin/organizations`);
 * shared validators reused by `OrganizationCreate`, `OrganizationUpdate` and
   future registry verification.
 
@@ -1116,7 +1128,7 @@ Phase 1  — Organization core
 Phase 2  — Branches
 Phase 3  — Licenses
 Phase 4  — API Keys
-Phase 4a — Organization onboarding (self-registration)
+Phase 4a — Organization onboarding (admin)
 Phase 4b — Organization context & membership-role authorization
 Phase 4c — API-key authentication & verification policy
 Phase 4d — Integration API + patient resolver
@@ -1129,12 +1141,17 @@ Phase 4i — Registry verification + ownership/invite
 
 Adjust this order after inspecting the codebase. Key constraints:
 
-- Registration (`POST /organizations`) must NOT require a pre-existing
-  `organization_admin` role; the creator becomes admin **as a result**.
-- One account may hold memberships in several organizations; an existing
-  membership must not block creating another organization.
-- Organization authorization uses `OrganizationMembership.role`, not the global
-  `organization_admin` `AccountRole` (global grant is transitional only).
+- Onboarding (`POST /admin/organizations` / `POST /admin/organizations/{id}/members`)
+  is **system-admin-only**; no public self-registration (`POST /organizations`).
+  No pre-existing role is needed to be connected — the representative becomes
+  `owner`/`admin` **as a result** of the admin provisioning.
+- Account resolution reuses an existing account by normalized email (only creates
+  a new PENDING account when there is no match; never duplicates an email).
+- One account may hold memberships in several organizations; a second membership
+  for the same `(organization_id, account_id)` is rejected (409).
+- Organization authorization uses `OrganizationMembership.role`; onboarding grants
+  **no** global `organization_admin` `AccountRole` (the legacy global check on
+  `/organizations/me/*` migrates to the membership role in 4b).
 - `Organization.status = ACTIVE` is necessary-not-sufficient for integration
   access: verification status (`≠ REJECTED`) gates API-key/integration policy.
 - DB unique indexes are the idempotency source of truth for INN/OGRN
@@ -1192,11 +1209,12 @@ For example:
 2. Add organization branches
 3. Add organization licenses
 4. Add organization API key model
-5. Add organization self-registration (onboarding): POST /organizations,
-   OrganizationMembership.role, created_by_account_id, multi-membership,
-   IntegrityError → 409
+5. Add admin organization onboarding: POST /admin/organizations,
+   POST /admin/organizations/{id}/members, OrganizationMembership.role,
+   created_by_account_id, account reuse by email, no global role,
+   IntegrityError → 409 (no public POST /organizations)
 6. Add organization context & membership-role authorization (migrate
-   /organizations/me/* off the global organization_admin role)
+   /organizations/me/* off the legacy global organization_admin role)
 7. Add API key authentication + verification policy
 8. Add patient resolver
 9. Add organization document source + single integration upload

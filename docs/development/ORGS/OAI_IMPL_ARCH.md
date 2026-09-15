@@ -2584,62 +2584,81 @@ Create API key
 Integration ready
 ```
 
-## 73.1 Phase 4a — Organization self-registration
+## 73.1 Phase 4a — Admin organization onboarding
 
-Пользователь **сам регистрирует** организацию и становится её первым
-администратором:
+Организацию создаёт и подключает **system_admin** во время персонального
+onboarding. Пользователь **не** создаёт организацию самостоятельно — public
+self-registration не реализуется (см. `OAI_ONBOARD_IMPL_PLAN.md` §1/§4):
 
 ```text
-ACTIVE Account (JWT)
+System Admin (JWT, RoleCode.SYSTEM_ADMIN)
        │
-       │ POST /api/v1/organizations
+       │ POST /api/v1/admin/organizations
+       │   {
+       │     "organization":   {name, type, inn, ogrn, legal_address?...},
+       │     "administrator":  {email, role: owner|admin}
+       │   }
        ▼
 Organization
    status = ACTIVE
    verification_status = PENDING
-   created_by_account_id = <account>
+   created_by_account_id = <admin actor>
+       │
+       ▼
+Account resolution: email → reuse existing ИЛИ create new PENDING account
        │
        ▼
 OrganizationMembership
-   role = owner
+   role = owner (по умолчанию) | admin
    status = ACTIVE
-       │
-       ▼
-organization_admin (transitional, phased out in 4b)
 ```
 
-Требования (роль обязанности **до** регистрации не требуется — пользователь
-становится admin **в результате** операции):
+Для существующей организации:
 
-- **Вход:** `name`, `type`, `inn`, `ogrn` (обязательно), `legal_address`,
-  `email`, `phone`, `website` (опционально). INN/OGRN нормализуются до
-  канонических цифр (включая внутренние пробелы) + контрольная сумма.
-- **Дополнительный endpoint:** `GET /api/v1/organizations` — список организаций
-  с ACTIVE membership (multi-organization виден сразу).
-- **Multi-membership:** один аккаунт может принадлежать нескольким
-  организациям. Наличие существующего membership **не запрещает** создание
-  новой организации — это продуктовая политика, а не следствие модели.
+```text
+POST /api/v1/admin/organizations/{organization_id}/members
+   { email, role: owner|admin }
+```
+
+Требования:
+
+- **Доступ:** только `system_admin` (`require_roles(RoleCode.SYSTEM_ADMIN)`);
+  обычный Account получает 403 и не может создать/подключить организацию.
+- **Вход:** `OrganizationCreate` (name/type/inn/ogrn + optional
+  legal_address/email/phone/website) + `OrganizationMemberCreate` (email, role).
+  INN/OGRN нормализуются до канонических цифр (включая внутренние пробелы) +
+  контрольная сумма.
+- **Account resolution:** нормализованный email → существующий `Account`
+  переиспользуется (дубликаты запрещены — `email_normalized` UNIQUE); при
+  отсутствии создаётся новый `Account(status=PENDING)`; регистрация завершается
+  существующим OTP flow. Не создавать второй Account для того же email.
 - **Idempotency:** источник гарантии — уникальные индексы БД
   (`uq_organizations_inn` / `uq_organizations_ogrn`); проверка в service нужна
-  для UX, `IntegrityError` → rollback → 409 (по конкурентному INN/OGRN).
-- **Роль в организации** (`OrganizationMembership.role` = `owner|admin|member`)
-  — вместо глобальной `AccountRole(organization_admin)`. Глобальная роль в 4a
-  выдаётся только transitional (append-only, существующие роли сохраняются),
-  чтобы не ломать уже реализованные `/organizations/me/*`, и убирается в 4b.
-- **`created_by_account_id`** на `Organization` — для расследований, support,
-  verification и будущих invite/claim (4i). Ownership и membership — разные
-  понятия.
+  для UX, `IntegrityError` → rollback → 409 (по конкурентному INN/OGRN). Второй
+  membership для той же `(organization_id, account_id)` → 409
+  (`uq_organization_memberships_org_account`).
+- **Роль в организации** — `OrganizationMembership.role` (`owner|admin|member`);
+  глобальная `AccountRole(organization_admin)` **не** выдаётся. Авторизация
+  представителя = membership role; переход `/organizations/me/*` на эту роль —
+  фаза 4b.
+- **`created_by_account_id`** на `Organization` — создавший system-admin (для
+  расследований/support/verification и будущих invite/claim, 4i). Ownership и
+  membership — разные понятия.
 - **`Organization.email`/`phone`** — контактные данные, никогда не выводятся из
-  `Account.email`/`phone` (authentication identity).
-- **Audit:** `ORGANIZATION_REGISTERED` = actor + organization + request; без
-  INN/OGRN/email/секретов в metadata.
+  identity представителя.
+- **Audit:** `ORGANIZATION_CREATED` + `ORGANIZATION_ADMIN_ADDED` = actor +
+  organization + request; metadata = `{account_id, role}`; без legal data,
+  контактов, email-адресов и секретов.
+- **Notification:** факт подключения фиксируется в audit; доставка invitation
+  email представителю — в фазе 4f (notifications).
 - **Миграция `0010`:** `organizations.created_by_account_id` (FK SET NULL),
   `organization_memberships.role` (default `member`).
 
 ## 73.2 Phase 4b — Organization context & membership-role auth
 
 `/organizations/me/*` переходит с глобальной роли на авторизацию по
-`OrganizationMembership.role ∈ {owner, admin}`:
+`OrganizationMembership.role ∈ {owner, admin}` (onboarding никакие global роли
+не выдаёт):
 
 ```text
 authenticated account
@@ -3097,36 +3116,43 @@ expiration
 
 ---
 
-# 87a. Phase 4a — Organization self-registration (onboarding)
+# 87a. Phase 4a — Admin organization onboarding
 
-См. §73.1. Реализовать:
+См. §73.1. Реализовать (gate: `system_admin`):
 
 ```text
-POST /api/v1/organizations     (ACTIVE JWT; роли не требуется)
-GET  /api/v1/organizations     (список моих организаций)
+POST /api/v1/admin/organizations                                  (создание org + rep)
+GET  /api/v1/admin/organizations                                  (все организации)
+GET  /api/v1/admin/organizations/{id}                             (организация)
+POST /api/v1/admin/organizations/{id}/members                     (подключить rep)
+GET  /api/v1/admin/organizations/{id}/members                     (список реп-ов)
 ```
 
 ```text
-OrganizationCreate (name, type, inn, ogrn + optional)
+OrganizationAdminCreate {organization: OrganizationCreate,
+                         administrator: OrganizationMemberCreate(email, role)}
         ↓
-register_organization
+admin_create_organization
         ↓
-Organization (ACTIVE, verification=PENDING, created_by)
-   + OrganizationMembership (ACTIVE, role=owner)
-   + organization_admin (transitional, append-only)
+Organization (ACTIVE, verification=PENDING, created_by_account_id=<admin actor>)
+   + Account resolution: reuse ИЛИ create PENDING (чер. get_or_create_by_identity)
+   + OrganizationMembership (ACTIVE, role=owner|admin)   [без глобальной роли]
         ↓
-audit ORGANIZATION_REGISTERED
+audit ORGANIZATION_CREATED + ORGANIZATION_ADMIN_ADDED  ({account_id, role})
         ↓
 commit; IntegrityError → 409
 ```
+
+`admin_attach_membership(organization_id, ...)` — то же для существующей
+организации (404 при отсутствии / организация не ACTIVE → 409).
 
 Миграция `0010`: `created_by_account_id` + `organization_memberships.role`.
 
 # 87b. Phase 4b — Organization context & membership-role authorization
 
 См. §73.2. Авторизация `/organizations/me/*` по `OrganizationMembership.role`
-вместо глобальной `organization_admin` `AccountRole`; явный выбор текущей
-организации для multi-membership account; убрать transitional глобальную роль.
+вместо глобальной `organization_admin` `AccountRole` (onboarding глобальные роли
+не выдаёт); явный выбор текущей организации для multi-membership account.
 
 # 88. Phase 4c — API Key authentication & verification policy
 
@@ -3465,7 +3491,7 @@ API Keys
 
 API Key authentication
 
-Organization self-registration (Phase 4a)
+Admin organization onboarding (Phase 4a)
 
 Single document integration
 
@@ -3648,7 +3674,7 @@ inactive organization → reject
 
 missing permission → 403
 
-concurrent registration with same INN → exactly one 201, other 409
+concurrent admin creation with same INN → exactly one 201, other 409
 
 account with two ACTIVE memberships → deterministic org resolution, no 500
 ```
@@ -3831,7 +3857,7 @@ Medical Platform ───┼── Specialist
         ↓
 05. API Keys                     ← реализовано (Phase 4)
         ↓
-06. Organization self-registration  (Phase 4a) ← следующий шаг
+06. Admin organization onboarding  (Phase 4a) ← следующий шаг
         ↓
 07. Organization context & membership-role auth (Phase 4b)
         ↓
@@ -3854,10 +3880,11 @@ Medical Platform ───┼── Specialist
 16. Registry verification + ownership/invite (Phase 4i)
 ```
 
-Примечание: self-registration (4a) и организация контекста/авторизации (4b)
+Примечание: admin onboarding (4a) и организация контекста/авторизации (4b)
 закрывают вход организации в платформу **до** API-key политики (4c) и
 integration API (4d). API-ключи (05) уже реализованы; создание ключей не
-входит в acceptance 4a.
+входит в acceptance 4a. Доставка invitation email представителю —
+в фазе 4f (notifications); вход организаций не блокируется.
 
 Именно такой порядок я считаю оптимальным для текущей стадии проекта: сначала
 закрыть **реальный Organization → Client document delivery workflow**, затем

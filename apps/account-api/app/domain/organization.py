@@ -3,6 +3,12 @@ from enum import Enum
 """
 Organization / integration-domain enums and legal-number helpers.
 
+Phase 4a (admin onboarding) introduces `OrganizationMembershipRole`,
+`organizations.created_by_account_id` and the `organization_memberships.role`
+column; a `system_admin` provisions an organization and connects the
+representative by email. The organization-scoped role authorizes
+`/organizations/me/*` (migration of that check happens in Phase 4b).
+
 Legal-number helpers implement the official Russian control-digit schemes:
 
 - INN: 10 digits (organizations) or 12 digits (individual entrepreneurs),
@@ -17,6 +23,19 @@ class OrganizationVerificationStatus(str, Enum):
     PENDING = "pending"
     VERIFIED = "verified"
     REJECTED = "rejected"
+
+
+class OrganizationMembershipRole(str, Enum):
+    """Organization-scoped role (Phase 4a, ``organization_memberships.role``).
+
+    Authorization for ``/organizations/me/*`` migrates from the legacy global
+    ``RoleCode.ORGANIZATION_ADMIN`` check to this column in Phase 4b; admin
+    onboarding never grants a global role.
+    """
+
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
 
 
 class BranchStatus(str, Enum):
@@ -169,3 +188,11 @@ class OrganizationLicenseConflictError(Exception):
 
 class OrganizationApiKeyNotFoundError(Exception):
     """An API key does not exist for the given organization and id."""
+
+
+class OrganizationMembershipNotFoundError(Exception):
+    """A membership does not exist for the given organization and account."""
+
+
+class OrganizationMembershipConflictError(Exception):
+    """The account is already a member (or the organization is not ACTIVE)."""

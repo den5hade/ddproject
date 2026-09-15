@@ -10,6 +10,7 @@ from app.domain.organization import (
     BranchStatus,
     OrganizationApiKeyStatus,
     OrganizationLicenseStatus,
+    OrganizationMembershipRole,
     OrganizationVerificationStatus,
 )
 from app.models.utils import utcnow
@@ -40,6 +41,9 @@ class Organization(Base):
         default=OrganizationVerificationStatus.UNVERIFIED,
         nullable=False,
     )
+    created_by_account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -64,6 +68,12 @@ class OrganizationMembership(Base):
         Uuid, ForeignKey("accounts.id", ondelete="CASCADE"), index=True
     )
     position: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[OrganizationMembershipRole] = mapped_column(
+        Enum(OrganizationMembershipRole, native_enum=False, length=16),
+        default=OrganizationMembershipRole.MEMBER,
+        server_default="MEMBER",
+        nullable=False,
+    )
     status: Mapped[MembershipStatus] = mapped_column(
         Enum(MembershipStatus, native_enum=False, length=16), default=MembershipStatus.ACTIVE
     )

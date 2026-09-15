@@ -8,8 +8,9 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from app.domain.access import AuditAction
+from app.domain.account import AccountStatus
 from app.domain.api_key import hash_api_key
-from app.domain.medical import OrganizationType
+from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
 from app.domain.organization import (
     BranchStatus,
     OrganizationApiKeyNotFoundError,
@@ -21,22 +22,31 @@ from app.domain.organization import (
     OrganizationLicenseConflictError,
     OrganizationLicenseNotFoundError,
     OrganizationLicenseStatus,
+    OrganizationMembershipConflictError,
+    OrganizationMembershipRole,
     OrganizationNotFoundError,
     OrganizationVerificationStatus,
 )
+from app.models.account import Account
 from app.models.audit_log import AuditLog
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
     OrganizationBranch,
     OrganizationLicense,
+    OrganizationMembership,
 )
+from app.repositories.account import AccountRepository
+from app.repositories.organization import OrganizationRepository
 from app.schemas.organization import (
     ApiKeyCreate,
     BranchCreate,
     BranchUpdate,
     LicenseCreate,
     LicenseUpdate,
+    OrganizationAdminCreate,
+    OrganizationCreate,
+    OrganizationMemberCreate,
     OrganizationUpdate,
 )
 from app.services.organization import OrganizationService
@@ -996,3 +1006,324 @@ def test_migration_0009_upgrade_downgrade_round_trip() -> None:
             )
         }
         assert "organization_api_keys" not in tables_after
+
+
+def _admin_create(
+    *,
+    inn: str = "7707083893",
+    ogrn: str = "1027700132195",
+    email: str | None = None,
+    role: OrganizationMembershipRole = OrganizationMembershipRole.OWNER,
+) -> OrganizationAdminCreate:
+    return OrganizationAdminCreate(
+        organization=OrganizationCreate(
+            name="City Clinic",
+            type=OrganizationType.CLINIC,
+            inn=inn,
+            ogrn=ogrn,
+            legal_address="ул. Ленина, 1",
+        ),
+        administrator=OrganizationMemberCreate(
+            email=email or f"rep_{uuid4().hex[:8]}@example.com",
+            role=role,
+        ),
+    )
+
+
+async def test_admin_create_organization_creates_org_and_owner_membership(
+    db_session,
+) -> None:
+    actor = uuid4()
+    service = OrganizationService(db_session)
+    org = await service.admin_create_organization(actor, _admin_create())
+    assert org.status == OrganizationStatus.ACTIVE
+    assert org.verification_status == OrganizationVerificationStatus.PENDING
+    assert org.created_by_account_id == actor
+    assert org.inn == "7707083893"
+    memberships = await service.list_memberships(org.id)
+    assert len(memberships) == 1
+    assert memberships[0].role == OrganizationMembershipRole.OWNER
+    assert memberships[0].status == MembershipStatus.ACTIVE
+
+
+async def test_admin_create_organization_reuses_existing_account(db_session) -> None:
+    account, created = await AccountRepository(db_session).get_or_create_by_identity(
+        "owner@example.com"
+    )
+    assert created is True
+    service = OrganizationService(db_session)
+    org = await service.admin_create_organization(uuid4(), _admin_create(email="OWNER@example.com"))
+    memberships = await service.list_memberships(org.id)
+    assert memberships[0].account_id == account.id
+    accounts = (await db_session.execute(sa.select(Account))).scalars().all()
+    assert len(accounts) == 1
+
+
+async def test_admin_create_organization_creates_pending_account_for_new_email(
+    db_session,
+) -> None:
+    service = OrganizationService(db_session)
+    org = await service.admin_create_organization(
+        uuid4(), _admin_create(email="fresh_admin@example.com")
+    )
+    accounts = (await db_session.execute(sa.select(Account))).scalars().all()
+    assert len(accounts) == 1
+    assert accounts[0].email_normalized == "fresh_admin@example.com"
+    assert accounts[0].status == AccountStatus.PENDING
+    memberships = await service.list_memberships(org.id)
+    assert memberships[0].account_id == accounts[0].id
+
+
+async def test_admin_create_organization_duplicate_inn_conflict(db_session) -> None:
+    service = OrganizationService(db_session)
+    await service.admin_create_organization(uuid4(), _admin_create())
+    with pytest.raises(OrganizationLegalDataConflictError):
+        await service.admin_create_organization(
+            uuid4(), _admin_create(inn="7707083893", ogrn="1027700132206")
+        )
+
+
+async def test_admin_create_organization_duplicate_ogrn_conflict(db_session) -> None:
+    service = OrganizationService(db_session)
+    await service.admin_create_organization(uuid4(), _admin_create())
+    with pytest.raises(OrganizationLegalDataConflictError):
+        await service.admin_create_organization(
+            uuid4(), _admin_create(inn="500100732259", ogrn="1027700132195")
+        )
+
+
+async def test_admin_attach_membership_adds_second_representative(db_session) -> None:
+    service = OrganizationService(db_session)
+    org = await service.admin_create_organization(uuid4(), _admin_create())
+    member = await service.admin_attach_membership(
+        uuid4(),
+        org.id,
+        OrganizationMemberCreate(
+            email=f"admin_{uuid4().hex[:8]}@example.com",
+            role=OrganizationMembershipRole.ADMIN,
+        ),
+    )
+    assert member.role == OrganizationMembershipRole.ADMIN
+    assert member.status == MembershipStatus.ACTIVE
+    assert len(await service.list_memberships(org.id)) == 2
+
+
+async def test_admin_attach_membership_duplicate_pair_conflict(db_session) -> None:
+    email = f"rep_{uuid4().hex[:8]}@example.com"
+    service = OrganizationService(db_session)
+    org = await service.admin_create_organization(uuid4(), _admin_create(email=email))
+    with pytest.raises(OrganizationMembershipConflictError):
+        await service.admin_attach_membership(
+            uuid4(), org.id, OrganizationMemberCreate(email=email)
+        )
+
+
+async def test_admin_attach_membership_missing_org(db_session) -> None:
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationNotFoundError):
+        await service.admin_attach_membership(
+            uuid4(),
+            uuid4(),
+            OrganizationMemberCreate(
+                email=f"rep_{uuid4().hex[:8]}@example.com"
+            ),
+        )
+
+
+async def test_admin_attach_membership_inactive_org_conflict(db_session) -> None:
+    org = await _org(db_session, status=OrganizationStatus.INACTIVE)
+    service = OrganizationService(db_session)
+    with pytest.raises(OrganizationMembershipConflictError):
+        await service.admin_attach_membership(
+            uuid4(),
+            org.id,
+            OrganizationMemberCreate(
+                email=f"rep_{uuid4().hex[:8]}@example.com"
+            ),
+        )
+
+
+async def test_admin_attach_membership_same_email_across_orgs_ok(db_session) -> None:
+    email = f"rep_{uuid4().hex[:8]}@example.com"
+    service = OrganizationService(db_session)
+    org_a = await service.admin_create_organization(uuid4(), _admin_create(email=email))
+    org_b = await service.admin_create_organization(
+        uuid4(), _admin_create(inn="500100732259", ogrn="1027700132206", email=email)
+    )
+    memberships = await service.list_memberships(org_a.id)
+    assert len(memberships) == 1
+    assert memberships[0].account_id == (await service.list_memberships(org_b.id))[0].account_id
+
+
+async def test_admin_create_organization_writes_audit_log(db_session) -> None:
+    actor = uuid4()
+    service = OrganizationService(db_session)
+    await service.admin_create_organization(actor, _admin_create())
+    rows = (
+        await db_session.execute(
+            sa.select(AuditLog).order_by(AuditLog.created_at)
+        )
+    ).scalars().all()
+    actions = [row.action for row in rows]
+    assert AuditAction.ORGANIZATION_CREATED in actions
+    assert AuditAction.ORGANIZATION_ADMIN_ADDED in actions
+    created_row = next(
+        row for row in rows if row.action is AuditAction.ORGANIZATION_CREATED
+    )
+    added_row = next(
+        row for row in rows if row.action is AuditAction.ORGANIZATION_ADMIN_ADDED
+    )
+    assert created_row.actor_account_id == actor
+    assert created_row.metadata_ is None
+    assert added_row.metadata_ is not None
+    assert "email" not in added_row.metadata_
+    assert added_row.metadata_["role"] in {"owner", "admin"}
+    assert "account_id" in added_row.metadata_
+
+
+async def test_membership_resolution_is_deterministic_for_multi_membership(
+    db_session,
+) -> None:
+    account = Account()
+    db_session.add(account)
+    await db_session.flush()
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    db_session.add_all(
+        [
+            OrganizationMembership(
+                organization_id=org_a.id,
+                account_id=account.id,
+                status=MembershipStatus.ACTIVE,
+                role=OrganizationMembershipRole.MEMBER,
+            ),
+            OrganizationMembership(
+                organization_id=org_b.id,
+                account_id=account.id,
+                status=MembershipStatus.ACTIVE,
+                role=OrganizationMembershipRole.MEMBER,
+            ),
+        ]
+    )
+    await db_session.commit()
+    repo = OrganizationRepository(db_session)
+    resolved = await repo.get_active_organization_for_account(account.id)
+    assert resolved is not None
+    assert resolved.id in {org_a.id, org_b.id}
+    resolved_again = await repo.get_active_organization_for_account(account.id)
+    assert resolved_again.id == resolved.id
+    listed = await repo.list_active_organizations_for_account(account.id)
+    assert {org.id for org in listed} == {org_a.id, org_b.id}
+
+
+def _load_migration_0010():
+    path = REPO_ROOT / "migrations/alembic/versions/0010_organization_onboarding.py"
+    spec = spec_from_file_location("migration_0010", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_0010_revision_wiring() -> None:
+    migration = _load_migration_0010()
+    assert migration.revision == "0010"
+    assert migration.down_revision == "0009"
+
+
+def test_migration_0010_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0010()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE accounts (
+                    id VARCHAR(32) PRIMARY KEY
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organization_memberships (
+                    id VARCHAR(32) PRIMARY KEY,
+                    organization_id VARCHAR(32) NOT NULL,
+                    account_id VARCHAR(32) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text("INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')")
+        )
+        conn.execute(sa.text("INSERT INTO accounts (id) VALUES ('a1')"))
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_memberships (id, organization_id, account_id)"
+                " VALUES ('m1', '1', 'a1')"
+            )
+        )
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        org_columns = {
+            row[1] for row in conn.execute(sa.text("PRAGMA table_info(organizations)"))
+        }
+        assert "created_by_account_id" in org_columns
+        org_indexes = {
+            row[1] for row in conn.execute(sa.text("PRAGMA index_list(organizations)"))
+        }
+        assert "ix_organizations_created_by_account_id" in org_indexes
+        membership_columns = {
+            row[1]
+            for row in conn.execute(
+                sa.text("PRAGMA table_info(organization_memberships)")
+            )
+        }
+        assert "role" in membership_columns
+        role = conn.execute(
+            sa.text(
+                "SELECT role FROM organization_memberships WHERE id = 'm1'"
+            )
+        ).scalar_one()
+        assert role == "MEMBER"
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_memberships (id, organization_id, account_id, role)"
+                " VALUES ('m2', '1', 'a1', 'OWNER')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT role FROM organization_memberships WHERE id = 'm2'")
+            ).scalar_one()
+            == "OWNER"
+        )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        org_columns_after = {
+            row[1] for row in conn.execute(sa.text("PRAGMA table_info(organizations)"))
+        }
+        assert "created_by_account_id" not in org_columns_after
+        membership_columns_after = {
+            row[1]
+            for row in conn.execute(
+                sa.text("PRAGMA table_info(organization_memberships)")
+            )
+        }
+        assert "role" not in membership_columns_after
