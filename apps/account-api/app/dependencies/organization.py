@@ -1,18 +1,44 @@
-from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_account
-from app.dependencies.rbac import require_roles
-from app.domain.account import RoleCode
+from app.domain.organization import OrganizationMembershipRole
 from app.models.account import Account
-from app.models.organization import Organization
+from app.models.organization import Organization, OrganizationMembership
 from app.repositories.organization import OrganizationRepository
 from app.services.organization import OrganizationService
 from app.services.organization_api_key import OrganizationApiKeyService
+
+_MANAGER_ROLES = frozenset(
+    {OrganizationMembershipRole.OWNER, OrganizationMembershipRole.ADMIN}
+)
+
+
+def _is_manager(membership: OrganizationMembership) -> bool:
+    return membership.role in _MANAGER_ROLES
+
+
+@dataclass(frozen=True)
+class OrganizationContext:
+    """An account's ACTIVE membership + the resolved organization.
+
+    Phase 4b: org authorization migrates from the legacy global
+    ``organization_admin`` ``AccountRole`` to the resolved membership role
+    (``owner|admin`` manage ``/organizations/me/*``).
+    """
+
+    account: Account
+    organization: Organization
+    membership: OrganizationMembership
+
+    @property
+    def actor_account_id(self) -> UUID:
+        return self.account.id
 
 
 async def get_organization_service(
@@ -21,48 +47,142 @@ async def get_organization_service(
     return OrganizationService(session)
 
 
-async def get_current_organization(
+async def _resolve_current_context(
+    account: Account,
+    session: AsyncSession,
+    x_organization_id: str | None,
+) -> OrganizationContext:
+    """Resolve the account's current-organization context.
+
+    Only ACTIVE memberships qualify. With a single membership the selection is
+    implicit; with several the caller must select one explicitly via the
+    ``X-Organization-Id`` header (Phase 4b — no implicit "first membership" on
+    write endpoints).
+    """
+    repo = OrganizationRepository(session)
+    memberships = await repo.list_active_memberships_for_account(account.id)
+    if not memberships:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active organization membership",
+        )
+    if len(memberships) == 1:
+        membership = memberships[0]
+    else:
+        if x_organization_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ambiguous organization context; provide X-Organization-Id",
+            )
+        try:
+            requested = UUID(x_organization_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid X-Organization-Id",
+            ) from exc
+        membership = next(
+            (m for m in memberships if m.organization_id == requested), None
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="organization not found"
+            )
+    organization = await repo.get_by_id(membership.organization_id)
+    assert organization is not None
+    return OrganizationContext(
+        account=account, organization=organization, membership=membership
+    )
+
+
+async def get_my_organization(
+    account: Account = Depends(get_current_account),
+    session: AsyncSession = Depends(get_db),
+    x_organization_id: str | None = Header(default=None),
+) -> Organization:
+    """Current org for management endpoints (``/organizations/me/*``).
+
+    Requires an ACTIVE membership with role ``owner|admin``; ``member`` gets
+    403 (role downgrade closes management access).
+    """
+    context = await _resolve_current_context(account, session, x_organization_id)
+    if not _is_manager(context.membership):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="insufficient organization membership role",
+        )
+    return context.organization
+
+
+async def get_my_organizations(
+    account: Account = Depends(get_current_account),
+    session: AsyncSession = Depends(get_db),
+) -> list[Organization]:
+    """All organizations the account holds an ACTIVE membership in."""
+    organizations = await OrganizationRepository(
+        session
+    ).list_active_organizations_for_account(account.id)
+    if not organizations:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no active organization membership",
+        )
+    return organizations
+
+
+async def _resolve_scoped_context(
+    account: Account,
+    session: AsyncSession,
+    organization_id: UUID,
+) -> OrganizationContext | None:
+    """The account's ACTIVE membership + org for an explicit organization id."""
+    repo = OrganizationRepository(session)
+    membership = await repo.get_active_membership(organization_id, account.id)
+    if membership is None:
+        return None
+    organization = await repo.get_by_id(organization_id)
+    if organization is None:
+        return None
+    return OrganizationContext(
+        account=account, organization=organization, membership=membership
+    )
+
+
+async def get_scoped_organization(
+    organization_id: UUID,
     account: Account = Depends(get_current_account),
     session: AsyncSession = Depends(get_db),
 ) -> Organization:
-    """Resolve the account's organization via an ACTIVE membership."""
-    organization = await OrganizationRepository(
-        session
-    ).get_active_organization_for_account(account.id)
-    if organization is None:
+    """An organization the account holds an ACTIVE membership in (read path).
+
+    Unknown or foreign organizations are indistinguishable: 404 (no IDOR
+    existence leak).
+    """
+    context = await _resolve_scoped_context(account, session, organization_id)
+    if context is None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="no active organization membership",
+            status_code=status.HTTP_404_NOT_FOUND, detail="organization not found"
         )
-    return organization
+    return context.organization
 
 
-_require_org_admin_role = require_roles(RoleCode.ORGANIZATION_ADMIN)
-
-
-async def _resolve_organization_admin_membership(
-    account: Account = Depends(_require_org_admin_role),
+async def get_scoped_organization_manager(
+    organization_id: UUID,
+    account: Account = Depends(get_current_account),
     session: AsyncSession = Depends(get_db),
 ) -> Organization:
-    """Org resolution shared by the `OrganizationAdmin` dependency.
-
-    Reuses the existing RBAC role check and resolves the organization through
-    the account's ACTIVE membership (no active membership -> 403).
-    """
-    organization = await OrganizationRepository(
-        session
-    ).get_active_organization_for_account(account.id)
-    if organization is None:
+    """Owner|admin scoped org context (e.g. org membership reads)."""
+    context = await _resolve_scoped_context(account, session, organization_id)
+    if context is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="organization not found"
+        )
+    if not _is_manager(context.membership):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="no active organization membership",
+            detail="insufficient organization membership role",
         )
-    return organization
-
-
-def require_organization_admin() -> Callable[..., Organization]:
-    """Return a dependency requiring the org_admin role + active membership."""
-    return _resolve_organization_admin_membership
+    return context.organization
 
 
 async def get_organization_api_key_service(
@@ -71,9 +191,11 @@ async def get_organization_api_key_service(
     return OrganizationApiKeyService(session)
 
 
-CurrentOrganization = Annotated[Organization, Depends(get_current_organization)]
-OrganizationAdmin = Annotated[
-    Organization, Depends(_resolve_organization_admin_membership)
+OrganizationAdmin = Annotated[Organization, Depends(get_my_organization)]
+MyOrganizations = Annotated[list[Organization], Depends(get_my_organizations)]
+MyOrganization = Annotated[Organization, Depends(get_scoped_organization)]
+OrganizationManager = Annotated[
+    Organization, Depends(get_scoped_organization_manager)
 ]
 OrganizationServiceDep = Annotated[
     OrganizationService, Depends(get_organization_service)

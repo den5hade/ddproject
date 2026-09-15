@@ -60,6 +60,14 @@ class OrganizationService:
     async def list_organizations(self) -> list[Organization]:
         return await self._organizations.list_organizations()
 
+    async def list_organizations_for_account(
+        self, account_id: UUID
+    ) -> list[Organization]:
+        """Organizations the account holds an ACTIVE membership in (Phase 4b)."""
+        return await self._organizations.list_active_organizations_for_account(
+            account_id
+        )
+
     async def admin_create_organization(
         self,
         actor_account_id: UUID,

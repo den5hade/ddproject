@@ -1216,6 +1216,67 @@ async def test_membership_resolution_is_deterministic_for_multi_membership(
     assert {org.id for org in listed} == {org_a.id, org_b.id}
 
 
+async def test_service_lists_only_active_memberships_for_account(db_session) -> None:
+    account = Account()
+    db_session.add(account)
+    await db_session.flush()
+    org_a = await _org(db_session)
+    org_b = await _org(db_session)
+    db_session.add_all(
+        [
+            OrganizationMembership(
+                organization_id=org_a.id,
+                account_id=account.id,
+                status=MembershipStatus.ACTIVE,
+                role=OrganizationMembershipRole.OWNER,
+            ),
+            OrganizationMembership(
+                organization_id=org_b.id,
+                account_id=account.id,
+                status=MembershipStatus.LEFT,
+                role=OrganizationMembershipRole.MEMBER,
+            ),
+        ]
+    )
+    await db_session.commit()
+    service = OrganizationService(db_session)
+    listed = await service.list_organizations_for_account(account.id)
+    assert [org.id for org in listed] == [org_a.id]
+
+
+async def test_repo_active_membership_lookup_and_listing(db_session) -> None:
+    active_account = Account()
+    left_account = Account()
+    db_session.add_all([active_account, left_account])
+    await db_session.flush()
+    org = await _org(db_session)
+    db_session.add_all(
+        [
+            OrganizationMembership(
+                organization_id=org.id,
+                account_id=active_account.id,
+                status=MembershipStatus.ACTIVE,
+                role=OrganizationMembershipRole.ADMIN,
+            ),
+            OrganizationMembership(
+                organization_id=org.id,
+                account_id=left_account.id,
+                status=MembershipStatus.LEFT,
+                role=OrganizationMembershipRole.MEMBER,
+            ),
+        ]
+    )
+    await db_session.commit()
+    repo = OrganizationRepository(db_session)
+    active = await repo.get_active_membership(org.id, active_account.id)
+    assert active is not None
+    assert active.role == OrganizationMembershipRole.ADMIN
+    left = await repo.get_active_membership(org.id, left_account.id)
+    assert left is None
+    listed = await repo.list_active_memberships_for_account(active_account.id)
+    assert [m.id for m in listed] == [active.id]
+
+
 def _load_migration_0010():
     path = REPO_ROOT / "migrations/alembic/versions/0010_organization_onboarding.py"
     spec = spec_from_file_location("migration_0010", path)

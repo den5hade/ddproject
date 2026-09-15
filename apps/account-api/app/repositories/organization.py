@@ -144,6 +144,33 @@ class OrganizationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_active_membership(
+        self, organization_id: UUID, account_id: UUID
+    ) -> OrganizationMembership | None:
+        """The account's ACTIVE membership in the organization, if any."""
+        result = await self._session.execute(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == organization_id,
+                OrganizationMembership.account_id == account_id,
+                OrganizationMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_active_memberships_for_account(
+        self, account_id: UUID
+    ) -> list[OrganizationMembership]:
+        """All ACTIVE memberships for the account (Phase 4b org-context base)."""
+        result = await self._session.execute(
+            select(OrganizationMembership)
+            .where(
+                OrganizationMembership.account_id == account_id,
+                OrganizationMembership.status == MembershipStatus.ACTIVE,
+            )
+            .order_by(OrganizationMembership.joined_at, OrganizationMembership.id)
+        )
+        return list(result.scalars().all())
+
     async def get_active_organization_for_account(
         self, account_id: UUID
     ) -> Organization | None:

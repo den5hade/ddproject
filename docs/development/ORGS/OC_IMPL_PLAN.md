@@ -23,6 +23,18 @@ is unchanged (`created_by_account_id` + `role`); `0006–0009` history unchanged
 **Implemented + verified** (Phase 4a `[x]`): full suite 335 passed, `ruff`
 clean; Phase 4b is next — see §6 and the Phase 4a Implementation Status block.
 
+**Revision 8** — Phase 4b (organization context & membership-role
+authorization) completed: `/organizations/me/*` authorizes via the resolved
+`OrganizationMembership.role ∈ {owner, admin}` — the legacy global
+`organization_admin` `AccountRole` check is dropped (onboarding never granted
+it); multi-membership current-org selection is explicit via the
+`X-Organization-Id` header (ambiguous → 400, unknown → 404) instead of an
+implicit "first membership"; new reads `GET /organizations`,
+`GET /organizations/{id}`, `GET /organizations/{id}/members` (org-scoped, no
+IDOR; cross-org → 404; `member` reads context but cannot manage). Full suite
+**347 passed**, `ruff` clean. Phase 4c is next — see §6 and the Phase 4b
+Implementation Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -90,7 +102,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 3 | Licenses | [x] done |
 | 4 | API keys | [x] done |
 | 4a | Organization onboarding (admin) | [x] |
-| 4b | Organization context & membership-role authorization | [ ] |
+| 4b | Organization context & membership-role authorization | [x] |
 | 4c | API-key auth & verification policy | [ ] |
 | 4d | Integration API & patient resolver | [ ] |
 | 4e | Bulk upload | [ ] |
@@ -416,7 +428,7 @@ metadata; a non-system-admin account can never create/claim an org.
   **335 passed**; `ruff check` clean (app + new migration; pre-existing
   findings in `0003`/`0005` untouched).
 
-### Phase 4b — Organization context & membership-role authorization [ ]
+### Phase 4b — Organization context & membership-role authorization [x]
 
 **Objective.** Replace the global `organization_admin` `AccountRole` as the
 org-authorization source for `/organizations/me/*` with a check on
@@ -432,6 +444,37 @@ multi-org account manages each org without ambiguity, role downgrade `owner→me
 loses access, isolation kept. Deps: 4a. **Accept:** org management works without
 any global `organization_admin` role; ambiguous multi-org access is resolved
 explicitly.
+
+#### Phase 4b Implementation Status
+
+- Deps (`app/dependencies/organization.py`) — new `OrganizationContext`
+  dataclass (account + organization + ACTIVE membership); `get_my_organization`
+  (management current-org: ACTIVE membership + `owner|admin`, `member` → 403
+  "insufficient organization membership role"); explicit current-org selection:
+  single ACTIVE membership implicit, several → `X-Organization-Id` header
+  (missing/ambiguous → 400, unknown → 404). `get_my_organizations` (list);
+  `get_scoped_organization` (any member, foreign/unknown → 404);
+  `get_scoped_organization_manager` (`owner|admin` for member-reads). The legacy
+  global `organization_admin` `AccountRole` check is **dropped** — onboarding
+  never granted it; `OrganizationAdmin` keeps its name but now resolves the
+  membership role.
+- Repo (`app/repositories/organization.py`) — `get_active_membership` (ACTIVE
+  filter) + `list_active_memberships_for_account` (org-context base). Service —
+  `list_organizations_for_account` (`GET /organizations`).
+- Router (`app/api/v1/organizations.py`) — new `GET /organizations` (my orgs),
+  `GET /organizations/{id}` (my org read, 404 foreign), `GET
+  /organizations/{id}/members` (my org's members, `owner|admin` gate). `/me/*`
+  unchanged in shape — still resolved current-org, now role-gated by
+  membership instead of the global role.
+- Tests: `tests/test_organizations_context_api.py` (new; list-my-orgs, no
+  membership 403, scoped get 200/404, member reads-context-not-manages,
+  owner lists members, foreign members 404, ambiguous 400 → explicit header
+  200, unknown header 404, write endpoint explicit-org scoping, single
+  membership implicit, owner→member downgrade closes manage but keeps read)
+  + `tests/unit/test_organization.py` (service lists ACTIVE-only, repo
+  `get_active_membership` ACTIVE/LEFT, `list_active_memberships_for_account`).
+  Existing `/me/*` tests updated: memberships now carry `role=OWNER`, no global
+  role seeded. Full suite **347 passed** (was 335); `ruff check` clean.
 
 ### Phase 4c — API-key auth & verification policy [ ]
 
@@ -532,9 +575,9 @@ whitespace so only canonical digits persist.
 `OrganizationMembershipRole` (Phase 4a): `owner|admin|member` — the
 **organization-scoped** role (column on `organization_memberships`). Owner = the
 first representative a system admin connected for the org. Authorization for
-`/organizations/me/*` migrates from the legacy global `organization_admin`
-`AccountRole` check to this column in Phase 4b (onboarding itself grants **no**
-global role).
+`/organizations/me/*` uses this column since 4b (`owner|admin` manage; the
+legacy global `organization_admin` `AccountRole` check is dropped — onboarding
+grants **no** global role).
 
 `AuditAction` additions (each in its phase): `ORGANIZATION_UPDATED` ✓ (Ph1),
 `ORGANIZATION_BRANCH_CREATED` / `_UPDATED` / `_DEACTIVATED` ✓ (Ph2),
@@ -604,13 +647,17 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
   Representative authorization = `OrganizationMembership.role` (`owner` default);
   the global `organization_admin` `AccountRole` is **never** granted by onboarding.
 - Management (`/organizations/me/*`): JWT `get_current_account` →
-  `require_roles(RoleCode.ORGANIZATION_ADMIN)` (legacy global check) →
-  `get_current_organization` (ACTIVE membership) → 403
-  `"no active organization membership"`. Phase 4b migrates the role check to the
-  resolved `OrganizationMembership.role ∈ {owner, admin}` and drops the
-  global-role check. Multi-membership: membership resolution is deterministic
-  (earliest `joined_at`) until 4b makes current-org selection explicit. Every
-  sub-resource scoped by `organization.id` (no IDOR).
+  `get_my_organization` (ACTIVE membership) → 403
+  `"no active organization membership"` / `"insufficient organization role"`.
+  Authorized by the resolved `OrganizationMembership.role ∈ {owner, admin}`
+  (4b — the legacy global `ORGANIZATION_ADMIN` `AccountRole` check is dropped;
+  onboarding never granted it). Multi-membership: current-org selection is
+  **explicit** — a single ACTIVE membership is implicit; several require
+  `X-Organization-Id` (ambiguous → 400 `"ambiguous organization context"`,
+  unknown → 404). Every sub-resource scoped by `organization.id` (no IDOR).
+  Context reads (4b): `GET /organizations` (all my orgs),
+  `GET /organizations/{id}` (my org, foreign → 404),
+  `GET /organizations/{id}/members` (`owner|admin`).
 - Integration (`/integration/*`): `Bearer` → hash → `find_by_hash` → 401
   (none/revoked/expired) → org status ≠ ACTIVE → 403 → **verification gate**:
   `verification_status = REJECTED` → 403 (4c) → `OrganizationApiContext(
@@ -620,13 +667,13 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 
 ### 4.7 Endpoints
 
-Management (JWT + member; role = global `organization_admin` until 4b, then
-`OrganizationMembership.role`):
+Management (JWT + member; role = `OrganizationMembership.role`, `owner|admin`
+manage, `member` reads context only — 4b):
 
 | Method/Path | Request → Response | Notes |
 |---|---|---|
 | `POST /admin/organizations` · `GET /admin/organizations` · `POST/GET /admin/organizations/{id}/members` · `GET /admin/organizations/{id}` | `OrganizationAdminCreate` → `OrganizationResponse` 201 · list · attach/list members · get | **4a (next)**; `system_admin` gate; membership role (no global role); **no public `POST /organizations`** |
-| `GET /organizations` · `GET /organizations/{id}` · `GET /organizations/{id}/members` | list my orgs · org context reads | **4b**; membership-role protected |
+| `GET /organizations` · `GET /organizations/{id}` · `GET /organizations/{id}/members` | list my orgs · org context reads | **✓ 4b**; membership-role protected (members read context; members list owner|admin) |
 | `GET/PATCH /organizations/me` ✓ | — / `OrganizationUpdate` → `OrganizationResponse` | Ph1 |
 | `GET/POST /organizations/me/branches` · `PATCH/DELETE /…/{id}` | `BranchCreate/Update` → `BranchResponse` · 204 | ✓ Ph2; dup code 409; DELETE = soft deactivate |
 | `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | ✓ Ph3; dup number 409; DELETE = soft revoke; auto `EXPIRED` on list/get |
@@ -731,7 +778,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 ## 5. Tests
 
 - **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
-- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); `tests/test_integration_api.py`.
+- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); `tests/test_integration_api.py`.
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
 
@@ -744,7 +791,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 3. Phase 3 — Licenses. [x]
 4. Phase 4 — API keys. [x]
 5. Phase 4a — Organization onboarding (admin). [x] (done)
-6. Phase 4b — Organization context & membership-role authorization. [ ] (prereq: org auth source)
+6. Phase 4b — Organization context & membership-role authorization. [x] (done)
 7. Phase 4c — API-key auth & verification policy. [ ]
 8. Phase 4d — Integration API + patient resolver. [ ] (resolver inside 4d, unlocked before upload)
 9. Phase 4e — Bulk upload. [ ]
@@ -765,8 +812,8 @@ Each phase: implement → update this status → pause for confirmation.
 - Full alembic chain is not SQLite-portable (0002 uses PG `btrim`); migration tests exercise individual revisions in isolation.
 - Unique *constraints* cannot be `ALTER`ed on SQLite (`NotImplementedError`) — implement them as **unique indexes** (`op.create_index(..., unique=True)`) named like the model constraint (pattern: 0006 inn/ogrn, 0007 branch code, 0008 license number, 0009 key_hash).
 - `PATCH ""` clears a field → `NULL`; verification status can only move **to `PENDING`** via the human API.
-- `Organization.status = ACTIVE` is necessary-not-sufficient for integration (§4.15); the legacy global `organization_admin` `AccountRole` check on `/organizations/me/*` migrates to the resolved `OrganizationMembership.role` in 4b — onboarding grants **no** global role.
-- Multi-membership: `get_active_organization_for_account` must be deterministic (earliest `joined_at`) — a `scalar_one_or_none` on 2+ ACTIVE memberships raises `MultipleResultsFound` (500). 4a fixes resolution + adds `list_active_organizations_for_account`; 4b adds explicit current-org selection on writes.
+- `Organization.status = ACTIVE` is necessary-not-sufficient for integration (§4.15); `/organizations/me/*` is authorized by the resolved `OrganizationMembership.role ∈ {owner, admin}` (4b — no global `organization_admin` `AccountRole`; onboarding grants **no** global role).
+- Multi-membership: `get_active_organization_for_account` is deterministic (earliest `joined_at`) for legacy reads; 4a fixes resolution + adds `list_active_organizations_for_account`; 4b makes **current-org selection explicit** on `/organizations/me/*` writes — single ACTIVE membership is implicit, several require `X-Organization-Id` (ambiguous → 400, unknown → 404); context reads (`GET /organizations`, `GET /organizations/{id}`) stay membership-scoped.
 - Unique DB indexes are the idempotency source of truth for INN/OGRN: always catch `IntegrityError` → rollback → 409 (concurrent admin onboarding).
 - INN/OGRN validation normalizes away **all** whitespace (canonical digits stored), not just leading/trailing.
 - `Organization.email`/`phone` are contact data; never auto-link to `Account` identity fields.
@@ -790,8 +837,8 @@ Each phase: implement → update this status → pause for confirmation.
 11. **Verification policy** — integration requires `verification_status ≠ REJECTED`; management endpoints are not verification-gated. §4.15.
 12. **Global role** — onboarding grants **no** global `organization_admin`
     `AccountRole` (representative authorization = `OrganizationMembership.role`);
-    the legacy global-role check on `/organizations/me/*` migrates to
-    membership-role auth in 4b. Not a security boundary of its own.
+    the legacy global-role check on `/organizations/me/*` is **resolved**:
+    migrated to membership-role auth in 4b (done). Not a security boundary of its own.
 13. **Multi-org per account** — allowed by default (no cap in 4a); a per-account org cap would be an explicit product decision, not a schema consequence.
 
 ### Risks (mitigations in place)

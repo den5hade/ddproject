@@ -2,6 +2,7 @@ from uuid import UUID, uuid4
 
 from app.domain.account import RoleCode
 from app.domain.medical import MembershipStatus, OrganizationType
+from app.domain.organization import OrganizationMembershipRole
 from app.models.audit_log import AuditLog
 from app.models.organization import (
     Organization,
@@ -53,9 +54,9 @@ async def _configure_org_admin(
     name: str = "City Clinic",
     inn: str | None = None,
     ogrn: str | None = None,
+    role: OrganizationMembershipRole = OrganizationMembershipRole.OWNER,
 ) -> UUID:
     async with db_factory() as session:
-        await _seed_admin(session, account_id)
         org = Organization(name=name, type=OrganizationType.CLINIC, inn=inn, ogrn=ogrn)
         session.add(org)
         await session.flush()
@@ -63,17 +64,12 @@ async def _configure_org_admin(
             OrganizationMembership(
                 organization_id=org.id,
                 account_id=account_id,
+                role=role,
                 status=MembershipStatus.ACTIVE,
             )
         )
         await session.commit()
         return org.id
-
-
-async def _seed_admin(session, account_id: UUID) -> None:
-    rbac = RbacRepository(session)
-    await rbac.seed_defaults()
-    await rbac.assign_roles(account_id, [RoleCode.ORGANIZATION_ADMIN.value])
 
 
 async def _create_branch(db_factory, organization_id: UUID, code: str, name: str) -> UUID:

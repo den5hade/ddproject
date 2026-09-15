@@ -5,8 +5,11 @@ from fastapi import APIRouter, Request
 from app.api.v1.http_errors import raise_for
 from app.dependencies.auth import CurrentAccount
 from app.dependencies.organization import (
+    MyOrganization,
+    MyOrganizations,
     OrganizationAdmin,
     OrganizationApiKeyServiceDep,
+    OrganizationManager,
     OrganizationServiceDep,
 )
 from app.domain.organization import (
@@ -28,6 +31,7 @@ from app.schemas.organization import (
     LicenseCreate,
     LicenseResponse,
     LicenseUpdate,
+    OrganizationMemberResponse,
     OrganizationResponse,
     OrganizationUpdate,
 )
@@ -298,6 +302,32 @@ async def rotate_my_api_key(
     return ApiKeyCreateResponse.model_validate(
         {**ApiKeyResponse.model_validate(key).model_dump(), "raw_key": raw_key}
     )
+
+
+@router.get("", response_model=list[OrganizationResponse])
+async def list_my_organizations(
+    organizations: MyOrganizations,
+) -> list[OrganizationResponse]:
+    """Phase 4b: org-context read — every org with an ACTIVE membership."""
+    return [OrganizationResponse.model_validate(org) for org in organizations]
+
+
+@router.get("/{organization_id}", response_model=OrganizationResponse)
+async def get_my_organization_by_id(
+    organization: MyOrganization,
+) -> OrganizationResponse:
+    """Phase 4b: org-context read — an org the account belongs to (404 otherwise)."""
+    return OrganizationResponse.model_validate(organization)
+
+
+@router.get("/{organization_id}/members", response_model=list[OrganizationMemberResponse])
+async def list_my_organization_members(
+    organization: OrganizationManager,
+    service: OrganizationServiceDep,
+) -> list[OrganizationMemberResponse]:
+    """Phase 4b: members of MY org (owner|admin); 404 foreign, 403 member role."""
+    memberships = await service.list_memberships(organization.id)
+    return [OrganizationMemberResponse.model_validate(m) for m in memberships]
 
 
 __all__ = ["router"]
