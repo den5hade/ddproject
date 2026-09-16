@@ -48,6 +48,22 @@ echoes a client-`X-Request-Id` or generated id and persists non-PII
 chain; real ingestion lands in 4d. Full suite **367 passed**, `ruff` clean.
 Phase 4d is next — see §6 and the Phase 4c Implementation Status block.
 
+**Revision 10** — Phase 4d (integration API & patient resolver) completed:
+real `POST /integration/documents` (201 new / 200 idempotent replay by
+`external_id` or `Idempotency-Key`, 409 on conflicting keys) and
+`GET /integration/documents/{id}` (org-scoped, read scope, cross-org → 404);
+`OrganizationPatientResolver` unlocks the upload (email-only identity; reuses
+`get_or_create_by_identity` + `ensure_patient_for_account`, PENDING account
+default, IntegrityError→rollback→reload race recovery); migration
+`0012_organization_document_source.py` (documents `organization_id` /
+`organization_branch_id`/`external_id`/`idempotency_key`/`provided_document_type`
++ partial unique indexes) + `DocumentService.create_organization_document`
+(quota-skipped, `uploaded_by_account_id = NULL`, PENDING, pipeline event) +
+`OrganizationDocumentSubmitted` contract event (best-effort publish) +
+`INTEGRATION_DOCUMENT_UPLOADED` audit; renumbered pending migrations — batches
+`0013`, schemas `0014`, notifications `0015`. Full suite **402 passed**, `ruff`
+clean. Phase 4e is next — see §6 and the Phase 4d Implementation Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -116,8 +132,8 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4 | API keys | [x] done |
 | 4a | Organization onboarding (admin) | [x] |
 | 4b | Organization context & membership-role authorization | [x] |
-| 4c | API-key auth & verification policy | [ ] |
-| 4d | Integration API & patient resolver | [ ] |
+| 4c | API-key auth & verification policy | [x] |
+| 4d | Integration API & patient resolver | [x] |
 | 4e | Bulk upload | [ ] |
 | 4f | Notifications | [ ] |
 | 4g | Organization schemas | [ ] |
@@ -520,19 +536,62 @@ and audited.
   round-trip, `ApiKeyRateLimiter` window/ttl/isolation). Full suite **367
   passed**; `ruff` clean.
 
-### Phase 4d — Integration API & patient resolver [ ]
+### Phase 4d — Integration API & patient resolver [x]
 
 `OrganizationPatientResolver` (§4.9) + `POST /integration/documents`,
-`GET /integration/documents/{id}`; extend `DocumentService` (`0014` document
+`GET /integration/documents/{id}`; extend `DocumentService` (`0012` document
 columns incl. `organization_id`/`organization_branch_id`/`external_id`/
 `idempotency_key`/`provided_document_type`); event `OrganizationDocumentSubmitted`.
 Tests: upload → status, doc-type conflict (422), `external_id` idempotency,
-MIME/size, resolver concurrency. Deps: 4c + resolver. **Accept:** org uploads a
+MIME/size, resolver race recovery. Deps: 4c + resolver. **Accept:** org uploads a
 doc end-to-end through the existing pipeline.
+
+**Phase 4d Implementation Status** (Revision 10, `[x]`):
+- Migration `0012_organization_document_source.py` — documents `organization_id`
+  / `organization_branch_id` / `external_id` / `idempotency_key` /
+  `provided_document_type` + partial unique indexes
+  (`uq_documents_organization_external_id`, `uq_documents_organization_idempotency_key`;
+  `WHERE organization_id IS NOT NULL`).
+- `app/models/document.py` + `app/repositories/document.py` — source columns,
+  `get_organization_document`, `find_by_organization_external_id`,
+  `find_by_organization_idempotency_key`.
+- `app/services/patient_resolver.py` — `OrganizationPatientResolver.resolve_by_email`
+  (email-only identity; `get_or_create_by_identity` → PENDING account default;
+  IntegrityError→rollback→reload race recovery); `ResolvedPatient` dataclass.
+- `app/services/organization_document.py` — `OrganizationDocumentService`
+  (idempotency by `external_id` then `Idempotency-Key`, branch resolution,
+  org-event best-effort publish, `INTEGRATION_DOCUMENT_UPLOADED` audit);
+  `OrganizationDocumentSubmitResult(document, patient_id, replayed)`.
+- `app/services/documents.py` — `DocumentService.create_organization_document`
+  (skip quota, `uploaded_by_account_id=None`, status PENDING, pipeline event,
+  single commit) + `publish_organization_submitted`.
+- `app/schemas/integration.py` — `IntegrationDocumentSubmit` (email-only
+  patient_email, `DocumentType` default OTHER), `IntegrationDocumentResponse`
+  (literal `"processing"`), `IntegrationDocumentStatusResponse`.
+- `app/api/v1/integration.py` — real `POST /integration/documents` (201 new /
+  200 replay, explicit `Form()` fields + `UploadFile` because model-in-Form
+  conflicts with UploadFile in FastAPI 0.141) and `GET …/{document_id}`
+  (org-scoped read); `raise_for` maps `InvalidPatientIdentityError` (422),
+  `OrganizationBranchNotFoundError` (404), `OrganizationDocumentIdempotencyConflictError`
+  (409), `FileTooLargeError` (413), `UnsupportedFileTypeError` (415).
+- `packages/contracts/contracts/events/organization_document_submitted.py` —
+  `OrganizationDocumentSubmitted` (pydantic `BaseModel`; routing key passed at
+  publish time); exported; 2 round-trip tests.
+- `app/dependencies/integration.py` — `OrganizationDocumentServiceDep`
+  (composes `Depends(get_document_service)`).
+- Tests: `tests/unit/test_patient_resolver.py` (8 cases incl. race monkeypatch);
+  `tests/unit/test_integration_documents.py` (11: source columns, quota skip,
+  pipeline event, submit+audit+event, replays, conflict, branches, phone reject,
+  org-scoped GET); `tests/test_integration_documents_api.py` (201 shape,
+  `X-Request-Id`, 422 doc-type/phone/missing-email, 415 MIME, 413 oversized,
+  404 branch, idempotent replay, GET scoping, same-email dedup);
+  `tests/test_organizations_integration_api.py` (4c happy-path upgraded from 501
+  stub to real 201). Migration round-trips in `tests/unit/test_organization.py`.
+  Full suite **402 passed**; `ruff` clean.
 
 ### Phase 4e — Bulk upload [ ]
 
-DB `0012`; `OrganizationBulkUploadService`; API `POST /integration/documents/bulk`,
+DB `0013`; `OrganizationBulkUploadService`; API `POST /integration/documents/bulk`,
 `GET /integration/batches/{id}(/items)`; batch events; per-item **own**
 transactions; partial failures; idempotency `(org, external_id)`. Tests: batch
 state machine, per-item failures, duplicates, no giant transaction. Deps: 4d.
@@ -541,7 +600,7 @@ idempotent.
 
 ### Phase 4f — Notifications [ ]
 
-DB `notifications` (in `0014`); `NotificationService`; extend `notification-worker`
+DB `notifications` (in `0015`); `NotificationService`; extend `notification-worker`
 (provider `send_message`, consume `notification.requested`); hook after analysis
 completed/failed for org-sourced docs. Tests: row created, email has no medical
 data, worker delivery. Deps: 4d. **Accept:** client receives "document
@@ -549,7 +608,7 @@ processed/failed" email with org name + secure link, no medical data.
 
 ### Phase 4g — Organization schemas [ ]
 
-DB `0013`; `OrganizationSchemaService`; API schemas CRUD + publish (immutable).
+DB `0014`; `OrganizationSchemaService`; API schemas CRUD + publish (immutable).
 Tests: versioning, publish-immutability, JSON-Schema validation. Deps: 4b.
 **Accept:** org drafts/publishes versioned schemas without touching the canonical
 model.
@@ -651,7 +710,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 `Account`, `Patient`, `Person`, `MedicalRecord`, `AuditLog`,
 `PatientAccessGrant` (already carries `organization_id`).
 
-### 4.4 Migrations (9 on top of `0005`; each downgrade-safe, independently reviewable)
+### 4.4 Migrations (10 on top of `0005`; each downgrade-safe, independently reviewable)
 
 | Migration | Contents |
 |---|---|
@@ -660,10 +719,11 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | `0008_organization_licenses.py` ✓ | `organization_licenses` + `(organization_id, license_number)` unique index (see note §7) |
 | `0009_organization_api_keys.py` ✓ | `organization_api_keys` + unique `key_hash` index (see note §7) |
 | `0010_organization_onboarding.py` ✓ | `organizations.created_by_account_id` (FK SET NULL, ix) + `organization_memberships.role` (server default `'MEMBER'`) |
-| `0011_organization_api_requests.py` | `organization_api_requests` + indexes |
-| `0012_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
-| `0013_organization_document_schemas.py` | `organization_document_schemas` |
-| `0014_notifications.py` + document source | `notifications`; `documents` source columns + partial unique indexes |
+| `0011_organization_api_requests.py` ✓ | `organization_api_requests` + indexes |
+| `0012_organization_document_source.py` ✓ | `documents` source columns + partial unique indexes (org-scoped `external_id`/`idempotency_key`) |
+| `0013_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
+| `0014_organization_document_schemas.py` | `organization_document_schemas` |
+| `0015_notifications.py` | `notifications` |
 
 ### 4.5 API-key architecture
 
@@ -810,8 +870,8 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 
 ## 5. Tests
 
-- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip; + 4c migration 0011 round-trip + `ApiKeyRateLimiter` window/TTL/isolation), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py`, `test_bulk_upload.py`, `test_schema.py`.
-- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); new `tests/test_organizations_integration_api.py` **4c** (401 no/missing/unknown/revoked/expired key, 403 org-inactive / verification-REJECTED / missing scope, pre-seeded 429 window, happy 501 stub + `X-Request-Id` echo + `organization_api_requests` row on success and failed auth, `API_KEY_AUTH_FAILED` audit, `last_used_at`, key org-scoping); `tests/test_integration_api.py`.
+- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip; + 4c migration 0011 round-trip + `ApiKeyRateLimiter` window/TTL/isolation; + 4d migration 0012 round-trip), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py` ✓ (8 resolver cases incl. race recovery), `test_integration_documents.py` ✓ (11: source columns, quota skip, pipeline event, submit+audit+event, replays, branches, phone reject, org-scoped GET), `test_bulk_upload.py`, `test_schema.py`.
+- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); new `tests/test_organizations_integration_api.py` **4c** (401 no/missing/unknown/revoked/expired key, 403 org-inactive / verification-REJECTED / missing scope, pre-seeded 429 window, happy 201 + `X-Request-Id` echo + `organization_api_requests` row on success and failed auth, `API_KEY_AUTH_FAILED` audit, `last_used_at`, key org-scoping); new `tests/test_integration_documents_api.py` **4d** (201 shape + audit/account/patient side effects, `X-Request-Id` echo, 422 invalid doc-type/phone/missing email, 415 MIME mismatch, 413 oversized, 404 unknown branch, 409 conflicting keys, idempotent replay by `external_id` and `Idempotency-Key` (201→200), GET org-scoped status 200/403/404, same-email dedup); `tests/test_integration_api.py`.
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
 
@@ -826,7 +886,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 5. Phase 4a — Organization onboarding (admin). [x] (done)
 6. Phase 4b — Organization context & membership-role authorization. [x] (done)
 7. Phase 4c — API-key auth & verification policy. [x] (done)
-8. Phase 4d — Integration API + patient resolver. [ ] (resolver inside 4d, unlocked before upload)
+8. Phase 4d — Integration API + patient resolver. [x] (done)
 9. Phase 4e — Bulk upload. [ ]
 10. Phase 4f — Notifications. [ ]
 11. Phase 4g — Organization schemas. [ ]

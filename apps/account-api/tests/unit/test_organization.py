@@ -1126,6 +1126,137 @@ def test_migration_0011_upgrade_downgrade_round_trip() -> None:
         assert "organization_api_requests" not in tables_after
 
 
+def _load_migration_0012():
+    path = REPO_ROOT / "migrations/alembic/versions/0012_organization_document_source.py"
+    spec = spec_from_file_location("migration_0012", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_0012_revision_wiring() -> None:
+    migration = _load_migration_0012()
+    assert migration.revision == "0012"
+    assert migration.down_revision == "0011"
+
+
+def test_migration_0012_upgrade_downgrade_round_trip() -> None:
+    migration = _load_migration_0012()
+    engine = sa.create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organizations (
+                    id VARCHAR(32) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE organization_branches (
+                    id VARCHAR(32) PRIMARY KEY,
+                    organization_id VARCHAR(32) NOT NULL,
+                    code VARCHAR(32) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            sa.text(
+                """
+                CREATE TABLE documents (
+                    id VARCHAR(32) PRIMARY KEY,
+                    medical_record_id VARCHAR(32) NOT NULL,
+                    status VARCHAR(16) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(sa.text("INSERT INTO organizations (id, name) VALUES ('1', 'City Clinic')"))
+        conn.execute(
+            sa.text(
+                "INSERT INTO organization_branches (id, organization_id, code)"
+                " VALUES ('b1', '1', 'main')"
+            )
+        )
+
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            migration.upgrade()
+        columns = {row[1] for row in conn.execute(sa.text("PRAGMA table_info(documents)"))}
+        assert {
+            "organization_id",
+            "organization_branch_id",
+            "external_id",
+            "idempotency_key",
+            "provided_document_type",
+        } <= columns
+        indexes = {
+            row[1] for row in conn.execute(sa.text("PRAGMA index_list(documents)"))
+        }
+        assert {
+            "ix_documents_organization_id",
+            "ix_documents_organization_branch_id",
+            "uq_documents_organization_external_id",
+            "uq_documents_organization_idempotency_key",
+        } <= indexes
+        conn.execute(
+            sa.text(
+                "INSERT INTO documents"
+                " (id, medical_record_id, status, organization_id, organization_branch_id,"
+                " external_id, idempotency_key, provided_document_type)"
+                " VALUES ('d1', 'm1', 'UPLOADED', '1', 'b1', 'ext-1', 'req-1', 'lab-report')"
+            )
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT external_id FROM documents WHERE id = 'd1'")
+            ).scalar_one()
+            == "ext-1"
+        )
+        with pytest.raises(sa.exc.IntegrityError):
+            conn.execute(
+                sa.text(
+                    "INSERT INTO documents"
+                    " (id, medical_record_id, status, organization_id, external_id)"
+                    " VALUES ('d2', 'm1', 'UPLOADED', '1', 'ext-1')"
+                )
+            )
+        conn.rollback()
+        conn.execute(
+            sa.text(
+                "INSERT INTO documents (id, medical_record_id, status)"
+                " VALUES ('d3', 'm1', 'UPLOADED')"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO documents (id, medical_record_id, status)"
+                " VALUES ('d4', 'm1', 'UPLOADED')"
+            )
+        )
+
+        with Operations.context(ctx):
+            migration.downgrade()
+        columns_after = {
+            row[1] for row in conn.execute(sa.text("PRAGMA table_info(documents)"))
+        }
+        assert "organization_id" not in columns_after
+        assert "external_id" not in columns_after
+        assert "provided_document_type" not in columns_after
+        indexes_after = {
+            row[1] for row in conn.execute(sa.text("PRAGMA index_list(documents)"))
+        }
+        assert "uq_documents_organization_external_id" not in indexes_after
+        assert "ix_documents_organization_id" not in indexes_after
+
+
 def test_rate_limiter_allows_up_to_limit_per_minute(fake_redis) -> None:
     import asyncio
 

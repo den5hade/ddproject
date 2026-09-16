@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.dependencies.documents import get_document_service
 from app.domain.access import AuditAction
 from app.domain.api_key import hash_api_key
 from app.domain.medical import OrganizationStatus
@@ -21,6 +22,8 @@ from app.domain.organization import (
 from app.models.organization import Organization, OrganizationApiKey
 from app.repositories.organization import OrganizationRepository
 from app.services.audit import AuditService
+from app.services.documents import DocumentService
+from app.services.organization_document import OrganizationDocumentService
 from app.services.rate_limit import ApiKeyRateLimiter
 
 integration_bearer_scheme = HTTPBearer(auto_error=False)
@@ -170,4 +173,16 @@ def require_api_key_permission(
 
 ApiKeyContext = Annotated[
     OrganizationApiContext, Depends(get_current_organization_from_api_key)
+]
+
+
+async def get_organization_document_service(
+    session: AsyncSession = Depends(get_db),
+    document_service: DocumentService = Depends(get_document_service),
+) -> OrganizationDocumentService:
+    return OrganizationDocumentService(session=session, document_service=document_service)
+
+
+OrganizationDocumentServiceDep = Annotated[
+    OrganizationDocumentService, Depends(get_organization_document_service)
 ]

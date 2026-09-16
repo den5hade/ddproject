@@ -7,6 +7,7 @@ from contracts.events.document_processing_failed import DocumentProcessingFailed
 from contracts.events.document_stored import DocumentStored
 from contracts.events.document_upload_requested import DocumentUploadRequested
 from contracts.events.document_uploaded import DocumentUploaded
+from contracts.events.organization_document_submitted import OrganizationDocumentSubmitted
 
 __all__ = [
     "AuthOtpRequested",
@@ -18,4 +19,5 @@ __all__ = [
     "DocumentStored",
     "DocumentUploadRequested",
     "DocumentUploaded",
+    "OrganizationDocumentSubmitted",
 ]

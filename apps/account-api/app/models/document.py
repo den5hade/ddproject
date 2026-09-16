@@ -6,10 +6,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +24,24 @@ class Document(Base):
     """A medical document (artifact) attached to a medical record (DB_MODELS.md #14)."""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index(
+            "uq_documents_organization_external_id",
+            "organization_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL"),
+            sqlite_where=text("organization_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_documents_organization_idempotency_key",
+            "organization_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL"),
+            sqlite_where=text("organization_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     medical_record_id: Mapped[UUID] = mapped_column(
@@ -44,6 +64,18 @@ class Document(Base):
     document_date: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    organization_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    organization_branch_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("organization_branches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provided_document_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     uploaded_by_account_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
     )

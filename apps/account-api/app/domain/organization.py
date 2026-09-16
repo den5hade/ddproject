@@ -217,3 +217,19 @@ class OrganizationVerificationRejectedError(Exception):
 
 class OrganizationApiKeyPermissionDeniedError(Exception):
     """The key does not carry the scope required by the endpoint."""
+
+
+class InvalidPatientIdentityError(Exception):
+    """The integration payload references a patient identity that cannot be resolved.
+
+    The integration API only accepts an email identity (``patient_email``);
+    other identity kinds or a missing identity fail with this error (422).
+    """
+
+
+class OrganizationDocumentIdempotencyConflictError(Exception):
+    """An idempotency key / external_id maps to a different document (409).
+
+    Raised when the caller resubmits with the same idempotency key or
+    ``external_id`` but a payload that differs from the original submission.
+    """

@@ -25,6 +25,7 @@ from app.domain.medical import (
     DocumentNotFoundError,
     DocumentQuotaExceededError,
     DocumentStatus,
+    DocumentType,
     EncounterNotFoundError,
     ExtractionStatus,
     FileTooLargeError,
@@ -209,6 +210,109 @@ class DocumentService:
             size,
         )
         return document
+
+    async def create_organization_document(
+        self,
+        *,
+        organization_id: UUID,
+        organization_branch_id: UUID | None,
+        patient_id: UUID,
+        medical_record_id: UUID,
+        document_type: DocumentType,
+        provided_document_type: str | None,
+        external_id: str | None,
+        idempotency_key: str | None,
+        title: str | None,
+        upload: UploadFile,
+    ) -> Document:
+        """Create an org-submitted document without quota/identity owner checks.
+
+        The organization caller is unauthenticated as an account (``uploaded_by
+        _account_id`` stays NULL); the integration flow owns idempotency and the
+        patient identity, so the ``FREE_DOCUMENT_LIMIT`` quota does not apply.
+        """
+        filename = os.path.basename(upload.filename or "")
+        if not filename:
+            raise UnsupportedFileTypeError("missing original filename")
+        mime = self._detect_mime(upload.content_type, filename)
+        temp_path, size = await self._stage_upload(upload, mime)
+
+        try:
+            document = await self._documents.create(
+                medical_record_id=medical_record_id,
+                encounter_id=None,
+                document_type=document_type,
+                title=title or os.path.splitext(filename)[0],
+                original_filename=filename,
+                mime_type=mime,
+                size_bytes=size,
+                storage_key="",
+                status=DocumentStatus.PENDING,
+                uploaded_by_account_id=None,
+                organization_id=organization_id,
+                organization_branch_id=organization_branch_id,
+                external_id=external_id,
+                idempotency_key=idempotency_key,
+                provided_document_type=provided_document_type,
+            )
+            version = await self._versions.create(
+                document_id=document.id,
+                version=1,
+                s3_key="",
+                mime_type=mime,
+                size_bytes=size,
+                created_by_account_id=None,
+            )
+            await self._jobs.create(
+                document_id=document.id,
+                document_version_id=version.id,
+                job_type=ProcessingJobType.PDF_CONVERSION,
+            )
+            published = await self._publish(
+                "document.upload.requested",
+                DocumentUploadRequested(
+                    event_id=uuid4(),
+                    document_id=document.id,
+                    document_version_id=version.id,
+                    patient_id=patient_id,
+                    tenant_id=self._storage.tenant_id(),
+                    medical_record_id=medical_record_id,
+                    temp_path=temp_path,
+                    original_filename=filename,
+                    mime_type=mime,
+                    size_bytes=size,
+                    document_type=document_type.value,
+                ),
+            )
+            if not published:
+                _safe_remove(temp_path)
+            await self._session.commit()
+        except Exception:
+            _safe_remove(temp_path)
+            raise
+        logger.info(
+            "organization_document_created document_id=%s organization_id=%s size=%s",
+            document.id,
+            organization_id,
+            size,
+        )
+        return document
+
+    async def publish_organization_submitted(self, event) -> bool:
+        """Best-effort publication of the organization-domain submit event.
+
+        Unlike the pipeline events this is a side-channel notification: a
+        broker failure must not fail the accepted upload request.
+        """
+        if self._publisher is None:
+            logger.warning(
+                "event_dropped routing_key=organization.document.submitted "
+                "document_id=%s (broker unavailable)",
+                event.document_id,
+            )
+            return False
+        await self._publisher.publish("organization.document.submitted", event)
+        return True
 
     async def add_version(
         self,

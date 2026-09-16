@@ -29,6 +29,11 @@ class DocumentRepository:
         storage_key: str,
         status: DocumentStatus,
         uploaded_by_account_id: UUID | None,
+        organization_id: UUID | None = None,
+        organization_branch_id: UUID | None = None,
+        external_id: str | None = None,
+        idempotency_key: str | None = None,
+        provided_document_type: str | None = None,
     ) -> Document:
         document = Document(
             medical_record_id=medical_record_id,
@@ -41,6 +46,11 @@ class DocumentRepository:
             storage_key=storage_key,
             status=status,
             uploaded_by_account_id=uploaded_by_account_id,
+            organization_id=organization_id,
+            organization_branch_id=organization_branch_id,
+            external_id=external_id,
+            idempotency_key=idempotency_key,
+            provided_document_type=provided_document_type,
         )
         self._session.add(document)
         await self._session.flush()
@@ -48,6 +58,39 @@ class DocumentRepository:
 
     async def get(self, document_id: UUID) -> Document | None:
         return await self._session.get(Document, document_id)
+
+    async def get_organization_document(
+        self, organization_id: UUID, document_id: UUID
+    ) -> Document | None:
+        result = await self._session.execute(
+            select(Document).where(
+                Document.id == document_id,
+                Document.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_by_organization_external_id(
+        self, organization_id: UUID, external_id: str
+    ) -> Document | None:
+        result = await self._session.execute(
+            select(Document).where(
+                Document.organization_id == organization_id,
+                Document.external_id == external_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_by_organization_idempotency_key(
+        self, organization_id: UUID, idempotency_key: str
+    ) -> Document | None:
+        result = await self._session.execute(
+            select(Document).where(
+                Document.organization_id == organization_id,
+                Document.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_by_medical_record(self, medical_record_id: UUID) -> list[Document]:
         result = await self._session.execute(

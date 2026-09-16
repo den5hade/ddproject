@@ -8,6 +8,7 @@ from contracts.events import (
     DocumentStored,
     DocumentUploaded,
     DocumentUploadRequested,
+    OrganizationDocumentSubmitted,
 )
 
 
@@ -148,3 +149,31 @@ def test_document_analysis_requested_round_trip():
     assert parsed == event
     assert parsed.output_storage_key.endswith("marker.md")
     assert parsed.mime_type == "text/markdown"
+
+
+def test_organization_document_submitted_round_trip():
+    event = OrganizationDocumentSubmitted(
+        event_id=uuid4(),
+        organization_id=uuid4(),
+        document_id=uuid4(),
+        patient_id=uuid4(),
+        external_id="ext-42",
+        document_type="lab_result",
+    )
+    parsed = OrganizationDocumentSubmitted.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.event_version == 1
+    assert parsed.external_id == "ext-42"
+    assert parsed.document_type == "lab_result"
+
+
+def test_organization_document_submitted_optional_fields_default():
+    event = OrganizationDocumentSubmitted(
+        event_id=uuid4(),
+        organization_id=uuid4(),
+        document_id=uuid4(),
+        patient_id=uuid4(),
+    )
+    assert event.external_id is None
+    assert event.document_type is None
+    assert event.event_version == 1

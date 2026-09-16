@@ -27,6 +27,18 @@ def _raw_key() -> str:
     return f"ddorg_tst_{uuid4().hex}"
 
 
+_PDF = b"%PDF-1.7\n" + b"x" * 512
+
+
+def _pdf_upload(email: str = "anna@clinic.example", **overrides) -> dict:
+    data = {"patient_email": email}
+    data.update(overrides.get("data", {}))
+    return {
+        "files": {"upload": ("scan.pdf", _PDF, "application/pdf")},
+        "data": data,
+    }
+
+
 async def _org_and_key(
     db_factory,
     *,
@@ -138,8 +150,9 @@ async def test_integration_unverified_and_pending_orgs_pass(
         resp = await app_client.post(
             "/api/v1/integration/documents",
             headers={"Authorization": f"Bearer {raw}"},
+            **_pdf_upload(email=f"{uuid4().hex}@clinic.example"),
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 201
 
 
 async def test_integration_missing_scope_403(app_client, db_factory):
@@ -165,7 +178,7 @@ async def test_integration_rate_limit_429(app_client, db_factory, fake_redis):
     assert resp.status_code == 429
 
 
-async def test_integration_happy_path_501_and_request_logged(
+async def test_integration_happy_path_201_and_request_logged(
     app_client, db_factory
 ):
     _, key_id, raw = await _org_and_key(db_factory)
@@ -175,8 +188,9 @@ async def test_integration_happy_path_501_and_request_logged(
             "Authorization": f"Bearer {raw}",
             "X-Request-Id": "req-1234",
         },
+        **_pdf_upload(),
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 201
     assert resp.headers.get("x-request-id") == "req-1234"
 
     async with db_factory() as session:
@@ -191,7 +205,7 @@ async def test_integration_happy_path_501_and_request_logged(
     assert row.api_key_id == key_id
     assert row.method == "POST"
     assert row.path == "/api/v1/integration/documents"
-    assert row.status_code == 501
+    assert row.status_code == 201
     assert row.error_code is None
     assert row.duration_ms >= 0
 
@@ -220,8 +234,9 @@ async def test_integration_x_request_id_generated_when_absent(
     resp = await app_client.post(
         "/api/v1/integration/documents",
         headers={"Authorization": f"Bearer {raw}"},
+        **_pdf_upload(email=f"{uuid4().hex}@clinic.example"),
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 201
     assert resp.headers.get("x-request-id")
 
 
@@ -247,6 +262,7 @@ async def test_integration_last_used_at_updated(app_client, db_factory):
     await app_client.post(
         "/api/v1/integration/documents",
         headers={"Authorization": f"Bearer {raw}"},
+        **_pdf_upload(email=f"{uuid4().hex}@clinic.example"),
     )
     async with db_factory() as session:
         result = await session.execute(
@@ -264,8 +280,9 @@ async def test_integration_key_scoped_to_org(app_client, db_factory):
     resp = await app_client.post(
         "/api/v1/integration/documents",
         headers={"Authorization": f"Bearer {raw_a}"},
+        **_pdf_upload(email=f"{uuid4().hex}@clinic.example"),
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 201
 
     async with db_factory() as session:
         result = await session.execute(
