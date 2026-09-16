@@ -7,17 +7,26 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.domain.medical import MembershipStatus, OrganizationStatus, OrganizationType
+from app.domain.medical import (
+    DocumentType,
+    MembershipStatus,
+    OrganizationStatus,
+    OrganizationType,
+)
 from app.domain.organization import (
+    BatchItemStatus,
+    BatchStatus,
     BranchStatus,
     OrganizationApiKeyStatus,
     OrganizationLicenseStatus,
@@ -226,3 +235,108 @@ class OrganizationApiRequest(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
+
+
+class OrganizationUploadBatch(Base):
+    """A bulk document upload submitted by an organization (Phase 4e).
+
+    The batch header is committed before any item is processed; each item is
+    then handled in its own transaction, so partial failures never roll back
+    the batch. ``idempotency_key`` de-duplicates client retries at the batch
+    level: the partial unique index (``idempotency_key IS NOT NULL``) mirrors
+    migration 0013, so multiple NULL-key batches per organization stay legal.
+    """
+
+    __tablename__ = "organization_upload_batches"
+    __table_args__ = (
+        Index(
+            "uq_organization_upload_batches_org_idem",
+            "organization_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+            sqlite_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    api_key_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("organization_api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[BatchStatus] = mapped_column(
+        Enum(BatchStatus, native_enum=False, length=16),
+        default=BatchStatus.ACCEPTED,
+        server_default="ACCEPTED",
+        nullable=False,
+    )
+    total_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    accepted_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    items: Mapped[list["OrganizationUploadBatchItem"]] = relationship(
+        back_populates="batch",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="OrganizationUploadBatchItem.item_index",
+    )
+
+
+class OrganizationUploadBatchItem(Base):
+    """A single item of an ``OrganizationUploadBatch`` (Phase 4e).
+
+    Holds the caller-provided metadata (patient_email, document_type,
+    external_id, branch_code, title) and the per-item outcome: ``status``
+    (PENDING -> ACCEPTED with ``document_id`` set, or REJECTED with
+    ``error_code``/``error_message``). The model intentionally carries no
+    file bytes -- the upload file is streamed straight into the existing
+    document pipeline per item.
+    """
+
+    __tablename__ = "organization_upload_batch_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_id", "item_index", name="uq_organization_upload_batch_items_batch_index"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organization_upload_batches.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    item_index: Mapped[int] = mapped_column(Integer)
+    patient_email: Mapped[str] = mapped_column(String(255))
+    document_type: Mapped[DocumentType] = mapped_column(
+        Enum(DocumentType, native_enum=False, length=32),
+        default=DocumentType.OTHER,
+        server_default="OTHER",
+        nullable=False,
+    )
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    branch_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[BatchItemStatus] = mapped_column(
+        Enum(BatchItemStatus, native_enum=False, length=16),
+        default=BatchItemStatus.PENDING,
+        server_default="PENDING",
+        nullable=False,
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    batch: Mapped[OrganizationUploadBatch] = relationship(back_populates="items")

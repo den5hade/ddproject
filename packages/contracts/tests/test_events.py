@@ -8,6 +8,8 @@ from contracts.events import (
     DocumentStored,
     DocumentUploaded,
     DocumentUploadRequested,
+    OrganizationBatchCompleted,
+    OrganizationBatchCreated,
     OrganizationDocumentSubmitted,
 )
 
@@ -177,3 +179,33 @@ def test_organization_document_submitted_optional_fields_default():
     assert event.external_id is None
     assert event.document_type is None
     assert event.event_version == 1
+
+
+def test_organization_batch_created_round_trip():
+    event = OrganizationBatchCreated(
+        event_id=uuid4(),
+        organization_id=uuid4(),
+        batch_id=uuid4(),
+        total_count=3,
+    )
+    parsed = OrganizationBatchCreated.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.event_version == 1
+    assert parsed.total_count == 3
+
+
+def test_organization_batch_completed_round_trip():
+    event = OrganizationBatchCompleted(
+        event_id=uuid4(),
+        organization_id=uuid4(),
+        batch_id=uuid4(),
+        status="partial",
+        total_count=3,
+        accepted_count=2,
+        failed_count=1,
+    )
+    parsed = OrganizationBatchCompleted.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.status == "partial"
+    assert parsed.accepted_count == 2
+    assert parsed.failed_count == 1

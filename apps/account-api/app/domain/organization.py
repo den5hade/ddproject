@@ -233,3 +233,20 @@ class OrganizationDocumentIdempotencyConflictError(Exception):
     Raised when the caller resubmits with the same idempotency key or
     ``external_id`` but a payload that differs from the original submission.
     """
+
+
+class OrganizationBatchNotFoundError(Exception):
+    """An upload batch does not exist for the organization and id (404)."""
+
+
+class OrganizationBatchConflictError(Exception):
+    """A batch idempotency conflict (409).
+
+    Reserved for strict batch-level idempotency: a caller resubmits the same
+    ``idempotency_key`` with a *different* payload. v1 returns the existing
+    batch (200 idempotent replay) instead of raising.
+    """
+
+
+class OrganizationBatchSizeLimitExceededError(Exception):
+    """The bulk request exceeds ``integration_max_batch_size`` items (422)."""

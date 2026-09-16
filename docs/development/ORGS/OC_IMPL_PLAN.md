@@ -64,6 +64,25 @@ default, IntegrityError→rollback→reload race recovery); migration
 `0013`, schemas `0014`, notifications `0015`. Full suite **402 passed**, `ruff`
 clean. Phase 4e is next — see §6 and the Phase 4d Implementation Status block.
 
+**Revision 11** — Phase 4e (bulk upload) completed: migration
+`0013_organization_upload_batches.py` (batch header + per-item ledger, partial
+unique index `uq_organization_upload_batches_org_idem` for `(org, idempotency_key)`
+batch idempotency, unique `uq_organization_upload_batch_items_batch_index`);
+`OrganizationUploadBatch`/`OrganizationUploadBatchItem` models;
+`OrganizationBulkUploadService` with per-item **own** transactions (arch §67–68) —
+resolve patient → `create_organization_document` (dup `external_id` → item
+REJECTED, rest of the batch continues) → item ACCEPTED + audit, then `_finalize`
+rolls up `COMPLETED|PARTIAL|FAILED`; `POST /integration/documents/bulk` (202 new
+/ 200 replay by `Idempotency-Key`, `metadata` JSON array `Form` + `files:
+list[UploadFile]`, count mismatch / over `integration_max_batch_size` → 422) +
+`GET /integration/batches/{id}` and `/items` (read scope, cross-org → 404);
+`OrganizationBatchCreated`/`OrganizationBatchCompleted` events
+(`organization.batch.created`/`.completed`) + per-item
+`organization.document.submitted`; `populate_existing` on `get_batch` so a cached
+identity-map header never shadows the finalize counters in the POST response.
+Account-api suite **426 passed**, `ruff` clean on Phase 4e paths. Phase 4f is
+next — see §6 and the Phase 4e Implementation Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -134,7 +153,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4b | Organization context & membership-role authorization | [x] |
 | 4c | API-key auth & verification policy | [x] |
 | 4d | Integration API & patient resolver | [x] |
-| 4e | Bulk upload | [ ] |
+| 4e | Bulk upload | [x] |
 | 4f | Notifications | [ ] |
 | 4g | Organization schemas | [ ] |
 | 4h | Monitoring | [ ] |
@@ -589,7 +608,7 @@ doc end-to-end through the existing pipeline.
   stub to real 201). Migration round-trips in `tests/unit/test_organization.py`.
   Full suite **402 passed**; `ruff` clean.
 
-### Phase 4e — Bulk upload [ ]
+### Phase 4e — Bulk upload [x]
 
 DB `0013`; `OrganizationBulkUploadService`; API `POST /integration/documents/bulk`,
 `GET /integration/batches/{id}(/items)`; batch events; per-item **own**
@@ -597,6 +616,58 @@ transactions; partial failures; idempotency `(org, external_id)`. Tests: batch
 state machine, per-item failures, duplicates, no giant transaction. Deps: 4d.
 **Accept:** 100-doc batch, partial failures tracked per item, resubmission
 idempotent.
+
+**Phase 4e Implementation Status** (Revision 11, `[x]`):
+- Migration `0013_organization_upload_batches.py` — `organization_upload_batches`
+  (header: `organization_id`, `api_key_id`, `idempotency_key`, `status` ACCEPTED,
+  counters, `created_at`/`completed_at`) + `organization_upload_batch_items`
+  (per-item metadata + outcome: `patient_email`, `document_type`, `external_id`,
+  `branch_code`, `title`, `status`, `error_code`/`error_message`); partial unique
+  index `uq_organization_upload_batches_org_idem` (`idempotency_key IS NOT NULL`)
+  + unique `uq_organization_upload_batch_items_batch_index`; CASCADE/SET NULL
+  FKs, downgrade-safe; wiring + round-trip verified.
+- `app/models/organization.py` — `OrganizationUploadBatch` +
+  `OrganizationUploadBatchItem` (UUID PKs, enums as VARCHAR
+  `native_enum=False`, `items` selectin relationship ordered by `item_index`).
+- `app/domain/organization.py` — `OrganizationBatchNotFoundError` (404),
+  `OrganizationBatchSizeLimitExceededError` (422 against
+  `integration_max_batch_size`), `OrganizationBatchConflictError` (reserved 409).
+- `app/repositories/organization.py` — `find_batch_by_idempotency_key`,
+  `get_batch` (org-scoped items read with `populate_existing` so a cached
+  identity-map header never shadows the finalize commit in the POST response),
+  `list_batch_items` (ordered by `item_index`).
+- `app/services/organization_bulk_upload.py` — `OrganizationBulkUploadService`
+  (`submit_batch`/`create_batch`/`get_batch`/`get_batch_items`); per-item
+  sessions from `request.app.state.api_request_db_factory` (fallback
+  `async_session_factory`); per-item error codes
+  `duplicate_external_id | patient_resolution_failed | branch_not_found |
+  file_too_large | unsupported_file_type | internal_error` (message ≤ 512);
+  `_finalize` → `COMPLETED|PARTIAL|FAILED` + `OrganizationBatchCompleted`.
+- `app/api/v1/integration.py` — real `POST /integration/documents/bulk` (202 new
+  / 200 replay by `Idempotency-Key`; `metadata` JSON array `Form` + `files:
+  list[UploadFile]`; len(files) ≠ len(items) → 422, malformed JSON → 422, over
+  `integration_max_batch_size` → 422) and `GET /integration/batches/{id}` +
+  `…/items` (read scope, cross-org → 404); `raise_for` maps batch 404/422.
+- `app/dependencies/integration.py` — `get_organization_bulk_upload_service` +
+  `OrganizationBulkUploadServiceDep` (composes `Depends(get_db)`, `await
+  get_publisher()`, `StorageService.from_settings()`).
+- `app/schemas/integration.py` — `BulkUploadItemMetadata` (mirrors
+  `IntegrationDocumentSubmit`), `BulkUploadRequest` (`items` ≥1), bulk response
+  schemas; `app/core/config.py` — `integration_max_batch_size` (default 100);
+  `AuditAction.INTEGRATION_BATCH_CREATED`.
+- `packages/contracts/contracts/events/organization_batch_created.py` +
+  `organization_batch_completed.py` — `OrganizationBatchCreated` /
+  `OrganizationBatchCompleted` (routing keys `organization.batch.created` /
+  `organization.batch.completed`; per-item `organization.document.submitted`
+  reuses `OrganizationDocumentSubmitted`); exported + 2 round-trip tests.
+- Tests: `tests/unit/test_bulk_upload.py` (10: create header/items, over-limit,
+  all-accept COMPLETED + events, idempotent replay without re-processing,
+  partial failure, dup `external_id`, unknown branch FAILED, org-scoped reads,
+  migration 0013 wiring + round-trip);
+  `tests/test_bulk_upload_api.py` (14: 202 shape + side effects, `X-Request-Id`,
+  replay → 200, scope 403, auth, count-mismatch / bad-JSON / empty / over-limit
+  422, partial failure items, GET batch + items 200, cross-org 404,
+  `document_type` round-trip). Account-api suite **426 passed**; `ruff` clean.
 
 ### Phase 4f — Notifications [ ]
 
@@ -887,7 +958,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 6. Phase 4b — Organization context & membership-role authorization. [x] (done)
 7. Phase 4c — API-key auth & verification policy. [x] (done)
 8. Phase 4d — Integration API + patient resolver. [x] (done)
-9. Phase 4e — Bulk upload. [ ]
+9. Phase 4e — Bulk upload. [x] (done)
 10. Phase 4f — Notifications. [ ]
 11. Phase 4g — Organization schemas. [ ]
 12. Phase 4h — Monitoring. [ ]

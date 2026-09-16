@@ -12,6 +12,8 @@ from app.models.organization import (
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
+    OrganizationUploadBatch,
+    OrganizationUploadBatchItem,
 )
 
 
@@ -220,5 +222,49 @@ class OrganizationRepository:
                 OrganizationMembership.status == MembershipStatus.ACTIVE,
             )
             .order_by(OrganizationMembership.joined_at, Organization.id)
+        )
+        return list(result.scalars().all())
+
+    async def find_batch_by_idempotency_key(
+        self, organization_id: UUID, idempotency_key: str
+    ) -> OrganizationUploadBatch | None:
+        """The batch for ``(organization_id, idempotency_key)``, if any."""
+        result = await self._session.execute(
+            select(OrganizationUploadBatch).where(
+                OrganizationUploadBatch.organization_id == organization_id,
+                OrganizationUploadBatch.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_batch(
+        self, organization_id: UUID, batch_id: UUID
+    ) -> OrganizationUploadBatch | None:
+        """Org-scoped batch with its items (no IDOR: foreign -> None).
+
+        ``populate_existing`` forces a refresh even when the batch is already in
+        the session identity map: the batch and its items are finalized by a
+        *different* transaction (the per-item/finalize sessions), so a cached
+        header must never shadow the committed counters in the caller response.
+        """
+        result = await self._session.execute(
+            select(OrganizationUploadBatch)
+            .options(selectinload(OrganizationUploadBatch.items))
+            .execution_options(populate_existing=True)
+            .where(
+                OrganizationUploadBatch.id == batch_id,
+                OrganizationUploadBatch.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_batch_items(
+        self, batch_id: UUID
+    ) -> list[OrganizationUploadBatchItem]:
+        """Items of a batch ordered by ``item_index`` (caller gated by org)."""
+        result = await self._session.execute(
+            select(OrganizationUploadBatchItem)
+            .where(OrganizationUploadBatchItem.batch_id == batch_id)
+            .order_by(OrganizationUploadBatchItem.item_index)
         )
         return list(result.scalars().all())

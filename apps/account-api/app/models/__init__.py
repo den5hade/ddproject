@@ -14,6 +14,8 @@ from app.models.organization import (
     OrganizationBranch,
     OrganizationLicense,
     OrganizationMembership,
+    OrganizationUploadBatch,
+    OrganizationUploadBatchItem,
 )
 from app.models.patient import Patient
 from app.models.person import Person
@@ -39,6 +41,8 @@ __all__ = [
     "OrganizationBranch",
     "OrganizationLicense",
     "OrganizationMembership",
+    "OrganizationUploadBatch",
+    "OrganizationUploadBatchItem",
     "Patient",
     "PatientAccessGrant",
     "Permission",

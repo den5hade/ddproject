@@ -133,6 +133,7 @@ class Settings(BaseSettings):
     integration_validate_inn_checksum: bool = True
     integration_rate_limit_per_minute: int = 120
     integration_request_log_sample: float = 1.0
+    integration_max_batch_size: int = 100
 
     # ------------------------------------------------------------------
     # AI Feature (cloud.ru model API)

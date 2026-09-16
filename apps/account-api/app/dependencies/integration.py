@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.bus import get_publisher
 from app.core.database import get_db
 from app.dependencies.documents import get_document_service
 from app.domain.access import AuditAction
@@ -23,8 +24,10 @@ from app.models.organization import Organization, OrganizationApiKey
 from app.repositories.organization import OrganizationRepository
 from app.services.audit import AuditService
 from app.services.documents import DocumentService
+from app.services.organization_bulk_upload import OrganizationBulkUploadService
 from app.services.organization_document import OrganizationDocumentService
 from app.services.rate_limit import ApiKeyRateLimiter
+from app.services.storage import StorageService
 
 integration_bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -185,4 +188,20 @@ async def get_organization_document_service(
 
 OrganizationDocumentServiceDep = Annotated[
     OrganizationDocumentService, Depends(get_organization_document_service)
+]
+
+
+async def get_organization_bulk_upload_service(
+    session: AsyncSession = Depends(get_db),
+) -> OrganizationBulkUploadService:
+    publisher = await get_publisher()
+    return OrganizationBulkUploadService(
+        session=session,
+        publisher=publisher,
+        storage=StorageService.from_settings(),
+    )
+
+
+OrganizationBulkUploadServiceDep = Annotated[
+    OrganizationBulkUploadService, Depends(get_organization_bulk_upload_service)
 ]

@@ -18,6 +18,8 @@ from app.domain.organization import (
     OrganizationApiKeyAuthenticationError,
     OrganizationApiKeyNotFoundError,
     OrganizationApiKeyPermissionDeniedError,
+    OrganizationBatchNotFoundError,
+    OrganizationBatchSizeLimitExceededError,
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationDocumentIdempotencyConflictError,
@@ -78,6 +80,9 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     # Integration API (Phase 4d)
     InvalidPatientIdentityError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     OrganizationDocumentIdempotencyConflictError: status.HTTP_409_CONFLICT,
+    # Integration API (Phase 4e)
+    OrganizationBatchNotFoundError: status.HTTP_404_NOT_FOUND,
+    OrganizationBatchSizeLimitExceededError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }
