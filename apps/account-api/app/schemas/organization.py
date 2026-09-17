@@ -428,3 +428,50 @@ class OrganizationDocumentSchemaResponse(BaseModel):
         if v is None:
             return None
         return to_api_tz(v)
+
+
+class OrganizationApiUsageDay(BaseModel):
+    """Per-day aggregates for an organization (Phase 4h monitoring).
+
+    Counts and rates only — this response intentionally carries **no PII**
+    (no patient emails, request paths, IPs or user agents) so it is safe to
+    serve to the organization's management users.
+    """
+
+    date: date
+    requests: int
+    successes: int
+    errors: int
+    success_rate: float
+    error_rate: float
+    documents: int
+    documents_failed: int
+    batches: int
+    batch_items_failed: int
+
+
+class OrganizationApiUsageResponse(BaseModel):
+    """Aggregated API usage over an inclusive ``from``/``to`` day range.
+
+    ``days`` is a sparse per-day series (only days with at least one recorded
+    event); ``total_*``/``avg_*`` roll the series up. ``from``/``to`` are the
+    JSON keys (``from`` is a Python keyword, hence the field names below).
+
+    .. note:: day boundaries are UTC (v1 semantics).
+    """
+
+    model_config = ConfigDict()
+
+    from_date: date = Field(serialization_alias="from")
+    to_date: date = Field(serialization_alias="to")
+    organization_id: UUID
+    days: list[OrganizationApiUsageDay]
+    total_requests: int
+    total_successes: int
+    total_errors: int
+    overall_success_rate: float
+    overall_error_rate: float
+    total_documents: int
+    total_documents_failed: int
+    total_batches: int
+    total_batch_items_failed: int

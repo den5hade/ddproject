@@ -211,6 +211,13 @@ class OrganizationApiRequest(Base):
     """
 
     __tablename__ = "organization_api_requests"
+    __table_args__ = (
+        Index(
+            "ix_organization_api_requests_org_created",
+            "organization_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     organization_id: Mapped[UUID | None] = mapped_column(

@@ -271,3 +271,11 @@ class OrganizationDocumentSchemaImmutableError(Exception):
     Drafts may be edited freely; once ``status = PUBLISHED`` the row is frozen
     — re-editing must be done through a new version.
     """
+
+
+class OrganizationUsageRangeError(Exception):
+    """An api-usage time range is invalid (422).
+
+    Raised when ``from`` is after ``to`` or the requested span exceeds
+    ``integration_usage_max_range_days`` (Phase 4h monitoring).
+    """

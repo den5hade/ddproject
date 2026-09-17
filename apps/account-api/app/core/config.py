@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     integration_rate_limit_per_minute: int = 120
     integration_request_log_sample: float = 1.0
     integration_max_batch_size: int = 100
+    integration_api_request_retention_days: int = 90
+    integration_api_request_purge_hours: int = 24
+    integration_usage_max_range_days: int = 90
 
     # ------------------------------------------------------------------
     # Notifications (Phase 4f)

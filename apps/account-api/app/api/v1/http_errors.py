@@ -32,6 +32,7 @@ from app.domain.organization import (
     OrganizationLicenseNotFoundError,
     OrganizationMembershipConflictError,
     OrganizationNotFoundError,
+    OrganizationUsageRangeError,
     OrganizationVerificationRejectedError,
 )
 from app.services.auth import (
@@ -90,6 +91,8 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     OrganizationDocumentSchemaNotFoundError: status.HTTP_404_NOT_FOUND,
     OrganizationDocumentSchemaConflictError: status.HTTP_409_CONFLICT,
     OrganizationDocumentSchemaImmutableError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    # Organization monitoring (Phase 4h)
+    OrganizationUsageRangeError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }

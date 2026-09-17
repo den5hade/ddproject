@@ -126,6 +126,35 @@ multi-membership `X-Organization-Id`). Full suite **469 passed**, `ruff` clean
 on Phase 4g paths. Phase 4h is next — see §6 and the Phase 4g Implementation
 Status block.
 
+**Revision 14** — Phase 4h (monitoring) completed:
+`GET /organizations/me/api-usage` (owner|admin via the 4b membership-role dep;
+inclusive UTC `from`/`to` day range with `serialization_alias="from"/"to"`,
+default trailing 30 days, span capped by `integration_usage_max_range_days`
+(default 90) — out-of-range/reversed -> 422 via `OrganizationUsageRangeError`);
+sparse per-day series merging `organization_api_requests` volume
+(counts/dates only, **never PII**) with org-sourced document uploads, `FAILED`
+documents, and bulk batches (+ per-batch item failures), each day carrying
+requests/successes/errors + success/error rates, plus `total_*` roll-ups;
+retention purge of `organization_api_requests` (open decision 7: 90 days,
+`integration_api_request_purge_hours` cadence) as a best-effort lifespan task
+`run_api_request_purge` deleting in bounded batches of 1000 —
+`OrganizationApiRequestService.purge_expired`; migration
+`0016_organization_api_request_usage_index.py` (chained from `"0014"`) adding the
+composite index `ix_organization_api_requests_org_created`
+(`organization_id, created_at`) that covers the daily aggregation + purge window;
+day bucketing is **Python-side** (`created_at.date()`) — SQLite `CAST(ts AS DATE)`
+is NUMERIC-affinity text (no truncation) and PG has no `date()`, so no portable
+SQL day expression exists; volume is org-scoped and bounded by the 90-day window.
+Tests: `tests/unit/test_api_usage.py` (12: default window, range validation,
+per-day aggregation + rates, inclusive UTC bounds, sparse document/batch-only
+day, org isolation, `purge_expired` boundary + bounded loop, task cadence,
+migration 0016 wiring + round-trip) + `tests/test_organizations_monitoring_api.py`
+(9: 401, member 403, empty series shape, aggregation shape + stats and no-PII
+keys, range filtering, reversed/over-limit 422, org scoping,
+multi-membership `X-Organization-Id`). Full suite **490 passed** (was 469),
+`ruff` clean on Phase 4h paths (only pre-existing UP042 enum findings remain,
+untouched). Phase 4h is done — see §6.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -199,7 +228,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4e | Bulk upload | [x] |
 | 4f | Notifications | [x] |
 | 4g | Organization schemas | [x] |
-| 4h | Monitoring | [ ] |
+| 4h | Monitoring | [x] |
 | 4i | Registry verification + ownership/invite | [ ] |
 
 ---
@@ -826,12 +855,56 @@ model.
   (13). Account-api suite **469 passed** (was 440); `ruff` clean on Phase 4g
   paths.
 
-### Phase 4h — Monitoring [ ]
+
+### Phase 4h — Monitoring [x]
 
 `GET /organizations/me/api-usage` aggregates; `OrganizationApiRequest` volume;
 metrics/log notes; retention purge (§7 open decision 7). Tests: aggregation
 filters by org, no PII columns. Deps: 4c. **Accept:** org sees requests/day,
 success/error, docs, batches, failures.
+
+#### Phase 4h Implementation Status
+
+- Migration `0016_organization_api_request_usage_index.py` — composite index
+  `ix_organization_api_requests_org_created` (`organization_id, created_at`) on
+  `organization_api_requests`, covering both the daily aggregation
+  (`organization_id` + time window) and the retention purge (`created_at <
+  cutoff`); `down_revision = "0014"` (head; chain `0013 → 0015 → 0014 → 0016`);
+  downgrade-safe + wiring/round-trip verified. Model `__table_args__` mirrors the
+  index name.
+- Config (`app/core/config.py`) — `integration_api_request_retention_days`
+  (default 90, open decision 7), `integration_api_request_purge_hours` (24),
+  `integration_usage_max_range_days` (90, response span cap).
+- `app/domain/organization.py` — `OrganizationUsageRangeError` (422: reversed
+  range or span over the cap). Mapped in `http_errors.py`.
+- Service `app/services/organization_monitoring.py` — `OrganizationMonitoringService`
+  (`get_usage(org, from_date?, to_date?)`): defaults to the trailing 30 days
+  ending today, UTC day boundaries, validates range; merges
+  `aggregate_api_requests_by_day` (total/successes/errors per day),
+  `aggregate_org_documents_by_day` (+ `…_failed_by_day`, `status == FAILED`),
+  `aggregate_batches_by_day` (batch count + per-batch item failures) into a
+  **sparse** per-day series sorted by date, then rolls up `total_*` +
+  overall rates. Counts and dates only — **never PII** (no emails, paths, IPs,
+  user agents, request ids), per §4.14.
+- Repo `app/repositories/organization.py` — per-day aggregation methods + 
+  `purge_api_requests_older_than(cutoff, limit)`. Day bucketing is Python-side
+  (`created_at.date()`) for dialect portability (see Revision 14 note).
+- Retention `app/tasks/api_request_purge.py` + `app/services/organization_api_request.py`
+  — `OrganizationApiRequestService.purge_expired(cutoff)` deletes in bounded
+  batches of `_PURGE_BATCH_SIZE = 1000` with a commit per pass; the lifespan task
+  `run_api_request_purge` runs `purge_once()` on
+  `max(1, purge_hours) * 3600`s, best-effort (failure logged, loop continues).
+- Router `app/api/v1/organizations.py` — `GET /organizations/me/api-usage`
+  (`response_model=OrganizationApiUsageResponse`; owner|admin gate; `from`/`to`
+  query aliases via `Annotated[date | None, Query(alias=…)]`).
+- Schemas `app/schemas/organization.py` — `OrganizationApiUsageDay` +
+  `OrganizationApiUsageResponse` (`from_date`/`to_date` fields with
+  `serialization_alias="from"/"to"` — `from` is a Python keyword).
+- Tests: `tests/unit/test_api_usage.py` (12) + `tests/test_organizations_monitoring_api.py`
+  (9). Account-api suite **490 passed** (was 469); `ruff` clean on the Phase 4h
+  paths (the only remaining findings on those files are pre-existing `UP042`
+  StrEnum suggestions on untouched enum classes).
+
 
 ### Phase 4i — Registry verification + ownership/invite [ ]
 
@@ -1105,9 +1178,9 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 7. Phase 4c — API-key auth & verification policy. [x] (done)
 8. Phase 4d — Integration API + patient resolver. [x] (done)
 9. Phase 4e — Bulk upload. [x] (done)
-10. Phase 4f — Notifications. [ ]
+10. Phase 4f — Notifications. [x] (done)
 11. Phase 4g — Organization schemas. [x]
-12. Phase 4h — Monitoring. [ ]
+12. Phase 4h — Monitoring. [x]
 13. Phase 4i — Registry verification + ownership/invite. [ ]
 
 Each phase: implement → update this status → pause for confirmation.

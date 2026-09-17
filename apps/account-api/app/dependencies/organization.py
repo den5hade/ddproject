@@ -13,6 +13,7 @@ from app.models.organization import Organization, OrganizationMembership
 from app.repositories.organization import OrganizationRepository
 from app.services.organization import OrganizationService
 from app.services.organization_api_key import OrganizationApiKeyService
+from app.services.organization_monitoring import OrganizationMonitoringService
 from app.services.organization_schema import OrganizationSchemaService
 
 _MANAGER_ROLES = frozenset(
@@ -198,6 +199,12 @@ async def get_organization_schema_service(
     return OrganizationSchemaService(session)
 
 
+async def get_organization_monitoring_service(
+    session: AsyncSession = Depends(get_db),
+) -> OrganizationMonitoringService:
+    return OrganizationMonitoringService(session)
+
+
 OrganizationAdmin = Annotated[Organization, Depends(get_my_organization)]
 MyOrganizations = Annotated[list[Organization], Depends(get_my_organizations)]
 MyOrganization = Annotated[Organization, Depends(get_scoped_organization)]
@@ -212,4 +219,7 @@ OrganizationApiKeyServiceDep = Annotated[
 ]
 OrganizationSchemaServiceDep = Annotated[
     OrganizationSchemaService, Depends(get_organization_schema_service)
+]
+OrganizationMonitoringServiceDep = Annotated[
+    OrganizationMonitoringService, Depends(get_organization_monitoring_service)
 ]

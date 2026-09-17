@@ -1,6 +1,8 @@
+from datetime import date
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from app.api.v1.http_errors import raise_for
 from app.dependencies.auth import CurrentAccount
@@ -10,6 +12,7 @@ from app.dependencies.organization import (
     OrganizationAdmin,
     OrganizationApiKeyServiceDep,
     OrganizationManager,
+    OrganizationMonitoringServiceDep,
     OrganizationSchemaServiceDep,
     OrganizationServiceDep,
 )
@@ -24,6 +27,7 @@ from app.domain.organization import (
     OrganizationLicenseConflictError,
     OrganizationLicenseNotFoundError,
     OrganizationNotFoundError,
+    OrganizationUsageRangeError,
 )
 from app.schemas.organization import (
     ApiKeyCreate,
@@ -35,6 +39,7 @@ from app.schemas.organization import (
     LicenseCreate,
     LicenseResponse,
     LicenseUpdate,
+    OrganizationApiUsageResponse,
     OrganizationDocumentSchemaCreate,
     OrganizationDocumentSchemaResponse,
     OrganizationDocumentSchemaUpdate,
@@ -403,6 +408,25 @@ async def publish_my_schema(
     ) as exc:
         raise_for(exc)
     return OrganizationDocumentSchemaResponse.model_validate(schema)
+
+
+@router.get(
+    "/me/api-usage",
+    response_model=OrganizationApiUsageResponse,
+)
+async def get_my_organization_api_usage(
+    organization: OrganizationAdmin,
+    service: OrganizationMonitoringServiceDep,
+    from_: Annotated[date | None, Query(alias="from")] = None,
+    to: Annotated[date | None, Query(alias="to")] = None,
+) -> OrganizationApiUsageResponse:
+    """Phase 4h: org-scoped API-usage aggregates (counts/dates only, no PII)."""
+    try:
+        return await service.get_usage(
+            organization.id, from_date=from_, to_date=to
+        )
+    except OrganizationUsageRangeError as exc:
+        raise_for(exc)
 
 
 @router.get("", response_model=list[OrganizationResponse])

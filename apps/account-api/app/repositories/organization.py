@@ -1,11 +1,13 @@
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.domain.medical import MembershipStatus
+from app.domain.medical import DocumentStatus, MembershipStatus
 from app.domain.organization import OrganizationDocumentSchemaStatus
+from app.models.document import Document
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
@@ -340,3 +342,131 @@ class OrganizationRepository:
         )
         latest = result.scalar_one()
         return (latest + 1) if latest is not None else 1
+
+    # ------------------------------------------------------------------
+    # Phase 4h — API-usage aggregation (org-scoped, non-PII) + retention
+    # ------------------------------------------------------------------
+
+    # Day bucketing happens in Python (``created_at.date()``) instead of SQL:
+    # SQLite turns ``CAST(ts AS DATE)`` into NUMERIC-affinity text (no truncation)
+    # and PG has no ``date()`` function, so no dialect-portable day expression
+    # exists. Volume is org-scoped and bounded by the 90-day window, so loading
+    # just the timestamp/status columns is cheap for a monitoring endpoint.
+
+    async def aggregate_api_requests_by_day(
+        self,
+        organization_id: UUID,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> list[tuple[date, int, int, int]]:
+        """Per-day (day, total, successes, errors) for the org's access-log rows."""
+        result = await self._session.execute(
+            select(
+                OrganizationApiRequest.created_at,
+                OrganizationApiRequest.status_code,
+            ).where(
+                OrganizationApiRequest.organization_id == organization_id,
+                OrganizationApiRequest.created_at >= from_dt,
+                OrganizationApiRequest.created_at < to_dt,
+            )
+        )
+        buckets: dict[date, list[int]] = {}
+        for created_at, status_code in result.all():
+            bucket = buckets.setdefault(created_at.date(), [0, 0, 0])
+            bucket[0] += 1
+            bucket[1 if status_code < 400 else 2] += 1
+        return [
+            (day, counts[0], counts[1], counts[2])
+            for day, counts in sorted(buckets.items())
+        ]
+
+    async def aggregate_org_documents_by_day(
+        self,
+        organization_id: UUID,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> list[tuple[date, int]]:
+        """Per-day org-sourced document uploads ``(day, count)``."""
+        result = await self._session.execute(
+            select(Document.created_at).where(
+                Document.organization_id == organization_id,
+                Document.created_at >= from_dt,
+                Document.created_at < to_dt,
+            )
+        )
+        counts: dict[date, int] = {}
+        for (created_at,) in result.all():
+            day = created_at.date()
+            counts[day] = counts.get(day, 0) + 1
+        return sorted(counts.items())
+
+    async def aggregate_org_documents_failed_by_day(
+        self,
+        organization_id: UUID,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> list[tuple[date, int]]:
+        """Per-day org-sourced ``FAILED`` documents ``(day, count)``."""
+        result = await self._session.execute(
+            select(Document.created_at).where(
+                Document.organization_id == organization_id,
+                Document.created_at >= from_dt,
+                Document.created_at < to_dt,
+                Document.status == DocumentStatus.FAILED,
+            )
+        )
+        counts: dict[date, int] = {}
+        for (created_at,) in result.all():
+            day = created_at.date()
+            counts[day] = counts.get(day, 0) + 1
+        return sorted(counts.items())
+
+    async def aggregate_batches_by_day(
+        self,
+        organization_id: UUID,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> list[tuple[date, int, int]]:
+        """Per-day batches with the summed per-batch item failures
+        ``(day, batch_count, failed_items)``."""
+        result = await self._session.execute(
+            select(
+                OrganizationUploadBatch.created_at,
+                OrganizationUploadBatch.failed_count,
+            ).where(
+                OrganizationUploadBatch.organization_id == organization_id,
+                OrganizationUploadBatch.created_at >= from_dt,
+                OrganizationUploadBatch.created_at < to_dt,
+            )
+        )
+        buckets: dict[date, list[int]] = {}
+        for created_at, failed_count in result.all():
+            bucket = buckets.setdefault(created_at.date(), [0, 0])
+            bucket[0] += 1
+            bucket[1] += failed_count or 0
+        return [
+            (day, counts[0], counts[1]) for day, counts in sorted(buckets.items())
+        ]
+
+    async def purge_api_requests_older_than(
+        self, cutoff: datetime, limit: int
+    ) -> int:
+        """Delete up to *limit* access-log rows older than *cutoff*.
+
+        Bounded deletes keep the retention purge from issuing one giant
+        statement/lock (open decision 7); returns the number of rows deleted.
+        """
+        result = await self._session.execute(
+            select(OrganizationApiRequest.id)
+            .where(OrganizationApiRequest.created_at < cutoff)
+            .order_by(OrganizationApiRequest.created_at)
+            .limit(limit)
+        )
+        ids = [row[0] for row in result.all()]
+        if not ids:
+            return 0
+        await self._session.execute(
+            delete(OrganizationApiRequest).where(OrganizationApiRequest.id.in_(ids))
+        )
+        await self._session.commit()
+        return len(ids)
