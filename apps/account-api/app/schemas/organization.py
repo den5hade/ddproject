@@ -15,6 +15,7 @@ from app.core.timezone import to_api_tz
 from app.domain.account import IdentityKind
 from app.domain.identity import Identity
 from app.domain.medical import (
+    DocumentType,
     MembershipStatus,
     OrganizationStatus,
     OrganizationType,
@@ -23,6 +24,7 @@ from app.domain.organization import (
     BranchStatus,
     OrganizationApiKeyScope,
     OrganizationApiKeyStatus,
+    OrganizationDocumentSchemaStatus,
     OrganizationLicenseStatus,
     OrganizationMembershipRole,
     OrganizationVerificationStatus,
@@ -331,3 +333,98 @@ class ApiKeyResponse(BaseModel):
 class ApiKeyCreateResponse(ApiKeyResponse):
     """Returned once on create/rotate — includes the raw key."""
     raw_key: str
+
+
+def validate_schema_definition(v: object) -> dict:
+    """Structural validation for an org JSON-Schema definition.
+
+    A metadata-registry guard, not a full JSON-Schema validator: the payload
+    must be a JSON object and, where present, its ``type``/``properties``
+    shapes must be well-formed. This keeps the org schema a registry entry
+    (never coupled to the platform canonical model); full conformance is
+    deferred with LLM consumption.
+    """
+    if not isinstance(v, dict):
+        raise ValueError("schema_definition must be a JSON object")
+    if "type" in v and not isinstance(v["type"], str):
+        raise ValueError("schema_definition.type must be a string")
+    properties = v.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise ValueError("schema_definition.properties must be an object")
+        for key, sub in properties.items():
+            if not isinstance(key, str) or not isinstance(sub, dict):
+                raise ValueError(
+                    "schema_definition.properties entries must be objects keyed by "
+                    "field name"
+                )
+    return v
+
+
+class OrganizationDocumentSchemaCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    document_type: DocumentType = DocumentType.OTHER
+    schema_definition: dict
+
+    @field_validator("schema_definition", mode="before")
+    @classmethod
+    def _validate_definition(cls, v: object) -> dict:
+        return validate_schema_definition(v)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+
+class OrganizationDocumentSchemaUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
+    document_type: DocumentType | None = None
+    schema_definition: dict | None = None
+
+    @field_validator("schema_definition", mode="before")
+    @classmethod
+    def _validate_definition(cls, v: object) -> dict | None:
+        if v is None:
+            return None
+        return validate_schema_definition(v)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        return str(v)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "OrganizationDocumentSchemaUpdate":
+        if not self.model_dump(exclude_unset=True):
+            raise ValueError("at least one field must be set")
+        return self
+
+
+class OrganizationDocumentSchemaResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    organization_id: UUID
+    name: str
+    description: str | None
+    document_type: DocumentType
+    schema_definition: dict
+    version: int
+    status: OrganizationDocumentSchemaStatus
+    created_by_account_id: UUID | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("published_at", "created_at", "updated_at")
+    def _tz(self, v: datetime | None) -> datetime | None:
+        if v is None:
+            return None
+        return to_api_tz(v)

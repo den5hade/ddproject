@@ -29,6 +29,7 @@ from app.domain.organization import (
     BatchStatus,
     BranchStatus,
     OrganizationApiKeyStatus,
+    OrganizationDocumentSchemaStatus,
     OrganizationLicenseStatus,
     OrganizationMembershipRole,
     OrganizationVerificationStatus,
@@ -340,3 +341,64 @@ class OrganizationUploadBatchItem(Base):
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     batch: Mapped[OrganizationUploadBatch] = relationship(back_populates="items")
+
+
+class OrganizationDocumentSchema(Base):
+    """A versioned JSON-Schema draft/published definition for an organization.
+
+    A metadata registry that describes the structure of an organization's own
+    document submissions (Phase 4g). ``version`` is monotonic per
+    ``(organization_id, name)``; a row moves ``DRAFT -> PUBLISHED`` on publish
+    and is then immutable — re-editing happens through a new version.
+    ``schema_definition`` is a plain JSON object (JSON-Schema-ish) and never
+    replaces or couples to the platform canonical schema. ``document_type`` is
+    the platform ``DocumentType`` enum.
+    """
+
+    __tablename__ = "organization_document_schemas"
+    __table_args__ = (
+        Index(
+            "uq_organization_document_schemas_org_name_ver",
+            "organization_id",
+            "name",
+            "version",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_type: Mapped[DocumentType] = mapped_column(
+        Enum(DocumentType, native_enum=False, length=32),
+        default=DocumentType.OTHER,
+        server_default="OTHER",
+        nullable=False,
+    )
+    schema_definition: Mapped[dict] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    status: Mapped[OrganizationDocumentSchemaStatus] = mapped_column(
+        Enum(OrganizationDocumentSchemaStatus, native_enum=False, length=16),
+        default=OrganizationDocumentSchemaStatus.DRAFT,
+        server_default="DRAFT",
+        nullable=False,
+    )
+    organization: Mapped[Organization | None] = relationship(
+        lazy="selectin",
+        foreign_keys=[organization_id],
+    )
+    created_by_account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

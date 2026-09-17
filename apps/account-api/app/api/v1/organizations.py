@@ -10,12 +10,16 @@ from app.dependencies.organization import (
     OrganizationAdmin,
     OrganizationApiKeyServiceDep,
     OrganizationManager,
+    OrganizationSchemaServiceDep,
     OrganizationServiceDep,
 )
 from app.domain.organization import (
     OrganizationApiKeyNotFoundError,
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
+    OrganizationDocumentSchemaConflictError,
+    OrganizationDocumentSchemaImmutableError,
+    OrganizationDocumentSchemaNotFoundError,
     OrganizationLegalDataConflictError,
     OrganizationLicenseConflictError,
     OrganizationLicenseNotFoundError,
@@ -31,6 +35,9 @@ from app.schemas.organization import (
     LicenseCreate,
     LicenseResponse,
     LicenseUpdate,
+    OrganizationDocumentSchemaCreate,
+    OrganizationDocumentSchemaResponse,
+    OrganizationDocumentSchemaUpdate,
     OrganizationMemberResponse,
     OrganizationResponse,
     OrganizationUpdate,
@@ -302,6 +309,100 @@ async def rotate_my_api_key(
     return ApiKeyCreateResponse.model_validate(
         {**ApiKeyResponse.model_validate(key).model_dump(), "raw_key": raw_key}
     )
+
+
+@router.get(
+    "/me/schemas",
+    response_model=list[OrganizationDocumentSchemaResponse],
+)
+async def list_my_schemas(
+    organization: OrganizationAdmin,
+    service: OrganizationSchemaServiceDep,
+) -> list[OrganizationDocumentSchemaResponse]:
+    """Phase 4g: list the org's versioned document schemas."""
+    schemas = await service.list_schemas(organization.id)
+    return [
+        OrganizationDocumentSchemaResponse.model_validate(schema) for schema in schemas
+    ]
+
+
+@router.post(
+    "/me/schemas",
+    response_model=OrganizationDocumentSchemaResponse,
+    status_code=201,
+)
+async def create_my_schema(
+    payload: OrganizationDocumentSchemaCreate,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationSchemaServiceDep,
+    request: Request,
+) -> OrganizationDocumentSchemaResponse:
+    try:
+        schema = await service.create_schema(
+            organization.id,
+            actor_account_id=account.id,
+            data=payload,
+            request=request,
+        )
+    except OrganizationDocumentSchemaConflictError as exc:
+        raise_for(exc)
+    return OrganizationDocumentSchemaResponse.model_validate(schema)
+
+
+@router.patch(
+    "/me/schemas/{schema_id}",
+    response_model=OrganizationDocumentSchemaResponse,
+)
+async def update_my_schema(
+    schema_id: UUID,
+    payload: OrganizationDocumentSchemaUpdate,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationSchemaServiceDep,
+    request: Request,
+) -> OrganizationDocumentSchemaResponse:
+    try:
+        schema = await service.update_schema(
+            organization.id,
+            schema_id,
+            actor_account_id=account.id,
+            data=payload,
+            request=request,
+        )
+    except (
+        OrganizationDocumentSchemaNotFoundError,
+        OrganizationDocumentSchemaConflictError,
+        OrganizationDocumentSchemaImmutableError,
+    ) as exc:
+        raise_for(exc)
+    return OrganizationDocumentSchemaResponse.model_validate(schema)
+
+
+@router.post(
+    "/me/schemas/{schema_id}/publish",
+    response_model=OrganizationDocumentSchemaResponse,
+)
+async def publish_my_schema(
+    schema_id: UUID,
+    account: CurrentAccount,
+    organization: OrganizationAdmin,
+    service: OrganizationSchemaServiceDep,
+    request: Request,
+) -> OrganizationDocumentSchemaResponse:
+    try:
+        schema = await service.publish_schema(
+            organization.id,
+            schema_id,
+            actor_account_id=account.id,
+            request=request,
+        )
+    except (
+        OrganizationDocumentSchemaNotFoundError,
+        OrganizationDocumentSchemaConflictError,
+    ) as exc:
+        raise_for(exc)
+    return OrganizationDocumentSchemaResponse.model_validate(schema)
 
 
 @router.get("", response_model=list[OrganizationResponse])

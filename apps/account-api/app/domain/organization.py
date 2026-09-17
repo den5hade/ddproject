@@ -250,3 +250,24 @@ class OrganizationBatchConflictError(Exception):
 
 class OrganizationBatchSizeLimitExceededError(Exception):
     """The bulk request exceeds ``integration_max_batch_size`` items (422)."""
+
+
+class OrganizationDocumentSchemaNotFoundError(Exception):
+    """A document schema does not exist for the organization and id (404)."""
+
+
+class OrganizationDocumentSchemaConflictError(Exception):
+    """A draft with the same name already exists, or the schema is already
+    published (409).
+
+    One draft per ``(organization, name)`` at a time; a published schema cannot
+    be published again.
+    """
+
+
+class OrganizationDocumentSchemaImmutableError(Exception):
+    """A published document schema is immutable (422).
+
+    Drafts may be edited freely; once ``status = PUBLISHED`` the row is frozen
+    — re-editing must be done through a new version.
+    """

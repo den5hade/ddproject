@@ -1,15 +1,17 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.domain.medical import MembershipStatus
+from app.domain.organization import OrganizationDocumentSchemaStatus
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
     OrganizationApiRequest,
     OrganizationBranch,
+    OrganizationDocumentSchema,
     OrganizationLicense,
     OrganizationMembership,
     OrganizationUploadBatch,
@@ -268,3 +270,73 @@ class OrganizationRepository:
             .order_by(OrganizationUploadBatchItem.item_index)
         )
         return list(result.scalars().all())
+
+    async def list_schemas(
+        self, organization_id: UUID
+    ) -> list[OrganizationDocumentSchema]:
+        """All document schemas for the org, ordered by name then version."""
+        result = await self._session.execute(
+            select(OrganizationDocumentSchema)
+            .where(OrganizationDocumentSchema.organization_id == organization_id)
+            .order_by(
+                OrganizationDocumentSchema.name,
+                OrganizationDocumentSchema.version,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def get_schema(
+        self, organization_id: UUID, schema_id: UUID
+    ) -> OrganizationDocumentSchema | None:
+        """The org-scoped schema by id (foreign org -> None)."""
+        result = await self._session.execute(
+            select(OrganizationDocumentSchema).where(
+                OrganizationDocumentSchema.id == schema_id,
+                OrganizationDocumentSchema.organization_id == organization_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_draft_by_name(
+        self, organization_id: UUID, name: str
+    ) -> OrganizationDocumentSchema | None:
+        """The open DRAFT for ``(organization, name)``, if any.
+
+        Service policy: at most one draft per schema name.
+        """
+        result = await self._session.execute(
+            select(OrganizationDocumentSchema).where(
+                OrganizationDocumentSchema.organization_id == organization_id,
+                OrganizationDocumentSchema.name == name,
+                OrganizationDocumentSchema.status
+                == OrganizationDocumentSchemaStatus.DRAFT,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_schemas_by_name(
+        self, organization_id: UUID, name: str
+    ) -> list[OrganizationDocumentSchema]:
+        """All versions of the named schema for the org (rename-collision check)."""
+        result = await self._session.execute(
+            select(OrganizationDocumentSchema)
+            .where(
+                OrganizationDocumentSchema.organization_id == organization_id,
+                OrganizationDocumentSchema.name == name,
+            )
+            .order_by(OrganizationDocumentSchema.version)
+        )
+        return list(result.scalars().all())
+
+    async def find_next_version(
+        self, organization_id: UUID, name: str
+    ) -> int:
+        """The next monotonic version for ``(organization, name)`` (1 first)."""
+        result = await self._session.execute(
+            select(func.max(OrganizationDocumentSchema.version)).where(
+                OrganizationDocumentSchema.organization_id == organization_id,
+                OrganizationDocumentSchema.name == name,
+            )
+        )
+        latest = result.scalar_one()
+        return (latest + 1) if latest is not None else 1

@@ -102,6 +102,30 @@ the 4g `0014` will set `down_revision = "0015"` when it lands. Full suite
 **440 passed**, `ruff` clean on Phase 4f paths. Phase 4g is next — see §6 and the
 Phase 4f Implementation Status block.
 
+**Revision 13** — Phase 4g (organization schemas) completed:
+`OrganizationDocumentSchema` model + migration `0014_organization_document_schemas.py`
+(chained from `"0015"`; monotonic versions per `(org, name)` enforced by the
+`uq_organization_document_schemas_org_name_ver` unique **index**, §7 pattern);
+`OrganizationSchemaService` (draft create with `find_next_version` version
+assignment, draft edit, publish freezes the row immutable; one draft per
+`(org, name)` at a time); `OrganizationDocumentSchemaCreate/Update/Response`
+schemas with a `validate_schema_definition` structural guard (dict object +
+`type`/`properties` shape — a **metadata registry**, not a full JSON-Schema
+engine; LLM consumption is deferred per Open Decision 5); org-scoped repo reads
+no IDOR; 4 routes `GET/POST /organizations/me/schemas`,
+`PATCH /…/{schema_id}`, `POST /…/{schema_id}/publish` (owner|admin via the 4b
+membership-role dep; 404 cross-org / 404 missing, 409 duplicate draft +
+re-publish, 422 invalid definition + published-immutability);
+`ORGANIZATION_SCHEMA_CREATED/UPDATED/PUBLISHED` audits;
+`tests/unit/test_schema.py` (16: create/publish/version-increment, draft &
+rename conflicts, immutability, org scoping, list order, audits, definition
+validation, migration 0014 wiring + round-trip incl. unique index) +
+`tests/test_organizations_schemas_api.py` (13: 401/403 member gate, 201 shape,
+409 dup/re-publish, 422 invalid + immutable, list order, cross-org 404,
+multi-membership `X-Organization-Id`). Full suite **469 passed**, `ruff` clean
+on Phase 4g paths. Phase 4h is next — see §6 and the Phase 4g Implementation
+Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -174,7 +198,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4d | Integration API & patient resolver | [x] |
 | 4e | Bulk upload | [x] |
 | 4f | Notifications | [x] |
-| 4g | Organization schemas | [ ] |
+| 4g | Organization schemas | [x] |
 | 4h | Monitoring | [ ] |
 | 4i | Registry verification + ownership/invite | [ ] |
 
@@ -754,12 +778,53 @@ processed/failed" email with org name + secure link, no medical data.
   drop). Account-api suite **440 passed**; notification-worker 11 passed;
   `ruff` clean.
 
-### Phase 4g — Organization schemas [ ]
+### Phase 4g — Organization schemas [x]
 
 DB `0014`; `OrganizationSchemaService`; API schemas CRUD + publish (immutable).
 Tests: versioning, publish-immutability, JSON-Schema validation. Deps: 4b.
 **Accept:** org drafts/publishes versioned schemas without touching the canonical
 model.
+
+#### Phase 4g Implementation Status
+
+- Migration `0014_organization_document_schemas.py` — `organization_document_schemas`
+  (`organization_id` FK CASCADE ix, `name` String(128), `description` Text,
+  `document_type` VARCHAR(32) `server_default='OTHER'`, `schema_definition` JSON,
+  `version` Integer `server_default=1`, `status` `server_default='DRAFT'`,
+  `created_by_account_id` FK SET NULL, `published_at`, `created_at` ix) +
+  unique index `uq_organization_document_schemas_org_name_ver`
+  (`organization_id, name, version`); `down_revision = "0015"` (the 4f head —
+  the chain is `0013 → 0015 → 0014`), with the phased `0014` name kept;
+  downgrade-safe + wiring/round-trip verified (`tests/unit/test_schema.py`).
+- `app/models/organization.py` — `OrganizationDocumentSchema` (enums as VARCHAR
+  `native_enum=False`; `DocumentType` platform enum; `organization` selectin;
+  indexes matched to the migration). Registered in `app/models/__init__.py`.
+- `app/domain/organization.py` — `OrganizationDocumentSchemaNotFoundError` (404),
+  `OrganizationDocumentSchemaConflictError` (409: duplicate draft name /
+  re-publish), `OrganizationDocumentSchemaImmutableError` (422: edited after
+  publish). `app/domain/access.py` — `ORGANIZATION_SCHEMA_CREATED` / `_UPDATED` /
+  `_PUBLISHED`.
+- Schemas (`app/schemas/organization.py`) — `OrganizationDocumentSchemaCreate`
+  (`name` 1-128, `description?`, `document_type?` default OTHER,
+  `schema_definition`), `OrganizationDocumentSchemaUpdate` (at-least-one),
+  `OrganizationDocumentSchemaResponse`; shared `validate_schema_definition`
+  structural guard (must be an object; `type` a string; `properties` an object
+  of objects).
+- Service (`app/services/organization_schema.py`) — `OrganizationSchemaService`
+  (`list_schemas`, `get_schema` org-scoped, `create_schema` one-draft-per-name
+  + `find_next_version` monotonic version, `update_schema` DRAFT-only +
+  rename-collision guard, `publish_schema` freezes status + `published_at`);
+  each mutation audits the matching action.
+- Repo (`app/repositories/organization.py`) — `list_schemas` (name, version),
+  `get_schema` (org-scoped, no IDOR), `find_draft_by_name`,
+  `find_schemas_by_name`, `find_next_version` (`MAX(version) + 1`, 1 first).
+- Router `app/api/v1/organizations.py` — `GET/POST /organizations/me/schemas`,
+  `PATCH /…/{schema_id}` (DRAFT only), `POST /…/{schema_id}/publish`
+  (owner|admin membership-role gate via `OrganizationAdmin`); `http_errors.py`
+  maps 404/409/422.
+- Tests: `tests/unit/test_schema.py` (16) + `tests/test_organizations_schemas_api.py`
+  (13). Account-api suite **469 passed** (was 440); `ruff` clean on Phase 4g
+  paths.
 
 ### Phase 4h — Monitoring [ ]
 
@@ -870,7 +935,7 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | `0011_organization_api_requests.py` ✓ | `organization_api_requests` + indexes |
 | `0012_organization_document_source.py` ✓ | `documents` source columns + partial unique indexes (org-scoped `external_id`/`idempotency_key`) |
 | `0013_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
-| `0014_organization_document_schemas.py` | `organization_document_schemas` |
+| `0014_organization_document_schemas.py` ✓ | `organization_document_schemas` (unique index `uq_organization_document_schemas_org_name_ver`; `down_revision = "0015"` — phased number, linear chain) |
 | `0015_notifications.py` | `notifications` |
 
 ### 4.5 API-key architecture
@@ -920,7 +985,7 @@ manage, `member` reads context only — 4b):
 | `GET/POST /organizations/me/licenses` · `PATCH/DELETE /…/{id}` | `LicenseCreate/Update` → `LicenseResponse` · 204 | ✓ Ph3; dup number 409; DELETE = soft revoke; auto `EXPIRED` on list/get |
 | `GET/POST /organizations/me/api-keys` · `DELETE/Rotate /…/{id}` | `ApiKeyCreate` → response (**raw once**) · 204 · `POST …/{id}/rotate` | ✓ Ph4; list hides raw; rotate returns new raw key |
 | `GET /organizations/me/api-usage` | `?from&to` → aggregates | Ph11 |
-| `GET/POST /organizations/me/schemas` · `POST /…/{id}/publish` | schema CRUD + publish | Ph10; published immutable |
+| `GET/POST /organizations/me/schemas` · `PATCH /…/{id}` · `POST /…/{id}/publish` | schema CRUD + publish (immutable) | **✓ 4g**; published immutable; versioned per `(org, name)` |
 
 Integration (API key + scope):
 
@@ -1018,8 +1083,12 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 
 ## 5. Tests
 
-- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip; + 4c migration 0011 round-trip + `ApiKeyRateLimiter` window/TTL/isolation; + 4d migration 0012 round-trip), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py` ✓ (8 resolver cases incl. race recovery), `test_integration_documents.py` ✓ (11: source columns, quota skip, pipeline event, submit+audit+event, replays, branches, phone reject, org-scoped GET), `test_bulk_upload.py`, `test_schema.py`.
-- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); new `tests/test_organizations_integration_api.py` **4c** (401 no/missing/unknown/revoked/expired key, 403 org-inactive / verification-REJECTED / missing scope, pre-seeded 429 window, happy 201 + `X-Request-Id` echo + `organization_api_requests` row on success and failed auth, `API_KEY_AUTH_FAILED` audit, `last_used_at`, key org-scoping); new `tests/test_integration_documents_api.py` **4d** (201 shape + audit/account/patient side effects, `X-Request-Id` echo, 422 invalid doc-type/phone/missing email, 415 MIME mismatch, 413 oversized, 404 unknown branch, 409 conflicting keys, idempotent replay by `external_id` and `Idempotency-Key` (201→200), GET org-scoped status 200/403/404, same-email dedup); `tests/test_integration_api.py`.
+- **Unit** (`tests/unit/`): `test_inn_ogrn.py` ✓ (checksums), `test_organization.py` ✓ (service + 0006–0009 round-trips + api-key hash/rotate; + 4a admin onboarding: org+OWNER membership in one transaction, account reuse (no dup), duplicate INN/OGRN → 409 pre-check and `IntegrityError`→409, audit actions, migration 0010 round-trip; + 4c migration 0011 round-trip + `ApiKeyRateLimiter` window/TTL/isolation; + 4d migration 0012 round-trip), `test_config.py` ✓ (integration secrets), `test_api_key.py`, `test_patient_resolver.py` ✓ (8 resolver cases incl. race recovery), `test_integration_documents.py` ✓ (11: source columns, quota skip, pipeline event, submit+audit+event, replays, branches, phone reject, org-scoped GET), `test_bulk_upload.py` ✓ (10: batch state machine, per-item failures, duplicates, idempotent replay, no giant transaction, migration 0013 round-trip), `test_schema.py` ✓ (16: versioning incl. monotonic increments, publish-immutability, one-draft-per-name / rename conflicts, org scoping, audits, `validate_schema_definition`, migration 0014 wiring + round-trip incl. unique index).
+- **API**: `tests/test_organizations_api.py` ✓ (existing `/me/*` gates, now membership-role); new `tests/test_organizations_admin_api.py` **4a** (401, 403 non-system-admin gate, 201 create-with-owner, email/account reuse, 409 dup INN/OGRN, 409 same-(org,account) membership, 404 missing/inactive org, multi-org attach, audit rows, no global role granted); new `tests/test_organizations_context_api.py` **4b** (list my orgs + no-membership 403, scoped get 200/foreign 404, member reads-context-not-manages, owner lists members, ambiguity 400 → explicit `X-Organization-Id` 200 / unknown 404, write endpoint explicit-org scoping, owner→member downgrade loses manage, implicit current-org for single membership); new `tests/test_organizations_integration_api.py` **4c** (401 no/missing/unknown/revoked/expired key, 403 org-inactive / verification-REJECTED / missing scope, pre-seeded 429 window, happy 201 + `X-Request-Id` echo + `organization_api_requests` row on success and failed auth, `API_KEY_AUTH_FAILED` audit, `last_used_at`, key org-scoping); new `tests/test_integration_documents_api.py` **4d** (201 shape + audit/account/patient side effects, `X-Request-Id` echo, 422 invalid doc-type/phone/missing email, 415 MIME mismatch, 413 oversized, 404 unknown branch, 409 conflicting keys, idempotent replay by `external_id` and `Idempotency-Key` (201→200), GET org-scoped status 200/403/404, same-email dedup); `tests/test_integration_api.py` ✓; new
+  `tests/test_organizations_schemas_api.py` **4g** (401, 403 member gate, 201
+  shape, 409 duplicate draft / re-publish, 422 invalid definition +
+  published-immutability, list order, missing + cross-org 404,
+  multi-membership `X-Organization-Id`).
 - **Security**: cross-org 404, revoked/expired 401, inactive org 403, missing scope 403, no duplicate docs on retry (concurrency via `ASGITransport`).
 - **Run**: `uv run --project apps/account-api pytest apps/account-api` + `uvx ruff check apps packages tests`. S3/RabbitMQ-leg tests live in root `tests/integration` (marked `integration`).
 
@@ -1037,7 +1106,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 8. Phase 4d — Integration API + patient resolver. [x] (done)
 9. Phase 4e — Bulk upload. [x] (done)
 10. Phase 4f — Notifications. [ ]
-11. Phase 4g — Organization schemas. [ ]
+11. Phase 4g — Organization schemas. [x]
 12. Phase 4h — Monitoring. [ ]
 13. Phase 4i — Registry verification + ownership/invite. [ ]
 
@@ -1067,7 +1136,8 @@ Each phase: implement → update this status → pause for confirmation.
 2. **Rate limit / batch size** — 120 req/min/key, max 100 items — configurable.
 3. **Integration read of canonical** — status + `document_date` only in v1; `read_canonical` scope possible later.
 4. **Notification timing** — process-completed/-failed only; "received" is optional P1 (two-emails risk).
-5. **Org schema format** — JSON Schema, published immutable; not yet consumed by ai-worker.
+5. **Org schema format** — JSON Schema, published immutable; not yet consumed by
+   ai-worker. ✓ applied in Phase 4g (structural registry guard only).
 6. **API-key scopes** — the 4 of §4.2; no `full`/per-type scopes.
 7. **`organization_api_requests` retention** — 90 days; purge in 4h.
 8. **Org docs quota** — no free-plan cap (server-side submissions).

@@ -23,6 +23,9 @@ from app.domain.organization import (
     OrganizationBranchConflictError,
     OrganizationBranchNotFoundError,
     OrganizationDocumentIdempotencyConflictError,
+    OrganizationDocumentSchemaConflictError,
+    OrganizationDocumentSchemaImmutableError,
+    OrganizationDocumentSchemaNotFoundError,
     OrganizationInactiveError,
     OrganizationLegalDataConflictError,
     OrganizationLicenseConflictError,
@@ -83,6 +86,10 @@ _EXCEPTION_STATUS: dict[type[Exception], int] = {
     # Integration API (Phase 4e)
     OrganizationBatchNotFoundError: status.HTTP_404_NOT_FOUND,
     OrganizationBatchSizeLimitExceededError: status.HTTP_422_UNPROCESSABLE_ENTITY,
+    # Organization schemas (Phase 4g)
+    OrganizationDocumentSchemaNotFoundError: status.HTTP_404_NOT_FOUND,
+    OrganizationDocumentSchemaConflictError: status.HTTP_409_CONFLICT,
+    OrganizationDocumentSchemaImmutableError: status.HTTP_422_UNPROCESSABLE_ENTITY,
     # Admin
     RoleNotFoundError: status.HTTP_404_NOT_FOUND,
 }
