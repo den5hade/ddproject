@@ -83,6 +83,25 @@ identity-map header never shadows the finalize counters in the POST response.
 Account-api suite **426 passed**, `ruff` clean on Phase 4e paths. Phase 4f is
 next — see §6 and the Phase 4e Implementation Status block.
 
+**Revision 12** — Phase 4f (notifications) completed: migration
+`0015_notifications.py` (`notifications`: `account_id` CASCADE / `organization_id`
+SET NULL, `type`/`channel`/`status`, rendered `title`+`template`, `resource_type`
+= `document`, `resource_id`, `error_message`, `sent_at`/`read_at`) + `Notification`
+model; `NotificationService` (PENDING row + best-effort publish → mark FAILED on
+broker failure) with template helpers that carry **org name + secure link +
+document reference only — never medical data**; the hook fires in
+`DocumentService.on_document_analysis_completed` /
+`on_document_processing_failed` for org-sourced documents only (resolves the
+recipient account via patient(person)→account link, org name, secure link);
+`NotificationRequested` (`notification.requested`) +
+`NotificationDelivered` (`notification.delivered`) contract events;
+notification-worker extended with the `send_message` provider method (console/
+smtp) and publishes delivery results back; new `notification_result` consumer in
+account-api moves rows PENDING→SENT/FAILED. Migration `0015` chains from `0013`;
+the 4g `0014` will set `down_revision = "0015"` when it lands. Full suite
+**440 passed**, `ruff` clean on Phase 4f paths. Phase 4g is next — see §6 and the
+Phase 4f Implementation Status block.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -154,7 +173,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4c | API-key auth & verification policy | [x] |
 | 4d | Integration API & patient resolver | [x] |
 | 4e | Bulk upload | [x] |
-| 4f | Notifications | [ ] |
+| 4f | Notifications | [x] |
 | 4g | Organization schemas | [ ] |
 | 4h | Monitoring | [ ] |
 | 4i | Registry verification + ownership/invite | [ ] |
@@ -669,13 +688,71 @@ idempotent.
   422, partial failure items, GET batch + items 200, cross-org 404,
   `document_type` round-trip). Account-api suite **426 passed**; `ruff` clean.
 
-### Phase 4f — Notifications [ ]
+### Phase 4f — Notifications [x]
 
 DB `notifications` (in `0015`); `NotificationService`; extend `notification-worker`
 (provider `send_message`, consume `notification.requested`); hook after analysis
 completed/failed for org-sourced docs. Tests: row created, email has no medical
 data, worker delivery. Deps: 4d. **Accept:** client receives "document
 processed/failed" email with org name + secure link, no medical data.
+
+**Phase 4f Implementation Status** (Revision 12, `[x]`):
+
+- Migration `0015_notifications.py` — `notifications` (`account_id` CASCADE ix,
+  `organization_id` SET NULL nullable ix, `type` VARCHAR(32), `channel`
+  `server_default='EMAIL'`, `status` `server_default='PENDING'`, `title`
+  VARCHAR(255), `template` TEXT, `resource_type` `server_default='document'`,
+  `resource_id` UUID, `error_message` VARCHAR(512), `sent_at`/`read_at`,
+  `created_at` ix); `down_revision = "0013"` (the 4g `0014` will chain from
+  `"0015"` when it lands); downgrade-safe; wiring + round-trip verified
+  (`tests/unit/test_notification_service.py`).
+- `app/models/notification.py` — `Notification` (enums `native_enum=False` from
+  `app/domain/organization.py`; carries delivery/reference data only — never
+  medical data); registered in `app/models/__init__.py`.
+- `app/services/notifications.py` — `NotificationService(session, publisher)`
+  with `create_for_document` (INSERT PENDING + publish `NotificationRequested` on
+  `notification.requested`; best-effort — a broker failure marks the row FAILED
+  and is swallowed), `mark_delivered`/`mark_failed` (PENDING→SENT/FAILED),
+  `notification_subject`/`notification_body` template helpers (org name + secure
+  link + document reference only); `NOTIFICATION_ROUTING_KEY`; existing OTP
+  `RabbitNotificationGateway` untouched (still fails closed).
+- `app/services/documents.py` — `_notify_org_document(document, succeeded)`
+  hooked into `on_document_analysis_completed`/`on_document_processing_failed`
+  **after** the commit, firing only for org-sourced documents
+  (`organization_id IS NOT NULL`); resolves the recipient account via
+  patient(person)→account link (`Account.person_id == patient.person_id`), org
+  name, and the secure link
+  (`{notification_link_base}/documents/{document_id}`); failures are logged and
+  swallowed so the document pipeline keeps working.
+- `packages/contracts/contracts/events/notification_requested.py` +
+  `notification_delivered.py` — `NotificationRequested` (`notification.requested`)
+  and `NotificationDelivered` (`notification.delivered`, `status` `sent|failed`
+  + `error_message`); exported + 5 round-trip tests (payload carries the
+  recipient address + rendered subject/body, never medical data).
+- `apps/notification-worker` — provider protocol gains `send_message(*, to,
+  channel, subject, body)` (console logs `notification_delivery`; smtp builds an
+  `EmailMessage` through the same thread-safe `_deliver`); `main.py` dispatches on
+  `message.type`, acks failed deliveries without requeue, and publishes
+  `NotificationDelivered` back; `NOTIFICATION_ROUTING_KEYS` default now
+  `auth.otp.requested,notification.requested` (also in `.env.example` +
+  `infrastructure/main-vps/.env.example`); worker gains a `Publisher` +
+  `connect_publisher` on `notification.delivered`.
+- `app/consumers/notification_result.py` — new reconnecting consumer (mirrors
+  `document_events`) bound to `notification.delivered`; `NotificationDelivered`
+  handling calls `mark_delivered`/`mark_failed`; wired as a second consumer task
+  in `app/main.py` lifespan.
+- `app/core/config.py` — `notification_link_base`, `notification_result_queue`,
+  `notification_result_routing_keys` (+ cached key list).
+- Tests: `tests/unit/test_notification_service.py` (12 service/hook/round-trip
+  tests: row creation + publish payload, no-medical-data templates, publish
+  failure → FAILED without raising, SENT/FAILED transitions, org-sourced
+  completed/failed hooks, non-org → no row, notification failure doesn't break
+  the pipeline, orphan org skipped, migration 0015 wiring + upgrade/downgrade);
+  `apps/notification-worker/tests/test_dispatch.py` (11: console/smtp
+  `send_message`, channel guard, OTP reuses the message path, dispatch → sent,
+  provider failure → failed result, unknown event dropped, no-publisher result
+  drop). Account-api suite **440 passed**; notification-worker 11 passed;
+  `ruff` clean.
 
 ### Phase 4g — Organization schemas [ ]
 

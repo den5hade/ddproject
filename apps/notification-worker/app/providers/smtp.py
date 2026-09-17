@@ -8,16 +8,24 @@ from app.providers.base import NotificationProvider
 
 
 class SmtpProvider:
-    """Delivers OTP codes by email over SMTP (run in a thread, non-blocking)."""
+    """Delivers notifications by email over SMTP (run in a thread, non-blocking)."""
 
     async def send(self, *, to: str, channel: str, code: str) -> None:
+        await self.send_message(
+            to=to,
+            channel=channel,
+            subject="Your verification code",
+            body=f"Your DDProject verification code is: {code}",
+        )
+
+    async def send_message(self, *, to: str, channel: str, subject: str, body: str) -> None:
         if channel != "email":
             raise ValueError(f"SMTpProvider cannot deliver to channel={channel!r}")
         message = EmailMessage()
         message["From"] = settings.smtp_from
         message["To"] = to
-        message["Subject"] = "Your verification code"
-        message.set_content(f"Your DDProject verification code is: {code}")
+        message["Subject"] = subject
+        message.set_content(body)
 
         await asyncio.to_thread(self._deliver, settings.smtp_host, settings.smtp_port, message)
 

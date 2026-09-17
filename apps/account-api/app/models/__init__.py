@@ -7,6 +7,7 @@ from app.models.document import Document, DocumentVersion
 from app.models.encounter import Encounter
 from app.models.extraction import DocumentExtraction
 from app.models.medical_record import MedicalRecord
+from app.models.notification import Notification
 from app.models.organization import (
     Organization,
     OrganizationApiKey,
@@ -35,6 +36,7 @@ __all__ = [
     "DocumentVersion",
     "Encounter",
     "MedicalRecord",
+    "Notification",
     "Organization",
     "OrganizationApiKey",
     "OrganizationApiRequest",

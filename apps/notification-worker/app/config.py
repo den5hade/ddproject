@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     rabbitmq_vhost: str = "/"
 
     notification_queue: str = "auth_otp"
-    notification_routing_keys: str = "auth.otp.requested"
+    notification_routing_keys: str = "auth.otp.requested,notification.requested"
     notification_provider: str = "console"
 
     smtp_host: str = ""

@@ -33,6 +33,7 @@ from app.domain.medical import (
     ProcessingJobType,
     UnsupportedFileTypeError,
 )
+from app.domain.organization import NotificationType
 from app.models.account import Account
 from app.models.document import Document, DocumentVersion
 from app.models.extraction import DocumentExtraction
@@ -46,6 +47,7 @@ from app.repositories.document import (
     ProcessingJobRepository,
 )
 from app.repositories.encounter import EncounterRepository
+from app.repositories.organization import OrganizationRepository
 from app.repositories.patient import PatientRepository
 from app.schemas.document import (
     CanonicalDataResponse,
@@ -53,6 +55,7 @@ from app.schemas.document import (
     DocumentCreateRequest,
     DocumentVersionCreateRequest,
 )
+from app.services.notifications import NotificationService
 from app.services.storage import StorageService
 
 logger = logging.getLogger("account_api.documents")
@@ -544,6 +547,8 @@ class DocumentService:
             event.extraction_id,
             event.status,
         )
+        if document is not None:
+            await self._notify_org_document(document, succeeded)
 
     async def on_document_processing_failed(self, event: DocumentProcessingFailed) -> None:
         document = await self._documents.get(event.document_id)
@@ -561,6 +566,8 @@ class DocumentService:
             event.document_id,
             event.error_code,
         )
+        if document is not None:
+            await self._notify_org_document(document, False)
 
     # ---------------------------------------------------------------- helpers
     async def _conversion_job_or_skip(self, event) -> DocumentProcessingJob | None:
@@ -657,6 +664,63 @@ class DocumentService:
         if medical_record is None:
             return None
         return await self._patients.get_by_id(medical_record.patient_id)
+
+    async def _notify_org_document(self, document: Document, succeeded: bool) -> None:
+        """Best-effort org-source notification after analysis completes/fails.
+
+        Only fires for documents submitted by an organization; the email
+        carries org name + secure link + document reference — never medical
+        data. Failures are logged and swallowed so the document pipeline keeps
+        working (this is a side channel).
+        """
+        if document is None or document.organization_id is None:
+            return
+        try:
+            patient = await self._document_patient(document)
+            if patient is None:
+                logger.warning(
+                    "notification_skipped_no_patient document_id=%s", document.id
+                )
+                return
+            account = await self._session.scalar(
+                select(Account).where(Account.person_id == patient.person_id)
+            )
+            if account is None or not account.email:
+                logger.warning(
+                    "notification_skipped_no_account document_id=%s", document.id
+                )
+                return
+            organization = await OrganizationRepository(
+                self._session
+            ).get_by_id(document.organization_id)
+            if organization is None:
+                logger.warning(
+                    "notification_skipped_org_missing document_id=%s", document.id
+                )
+                return
+            notification_type = (
+                NotificationType.DOCUMENT_PROCESSED
+                if succeeded
+                else NotificationType.DOCUMENT_PROCESSING_FAILED
+            )
+            secure_link = (
+                f"{settings.notification_link_base.rstrip('/')}/documents/{document.id}"
+            )
+            await NotificationService(
+                self._session, self._publisher
+            ).create_for_document(
+                account_id=account.id,
+                organization_id=document.organization_id,
+                notification_type=notification_type,
+                org_name=organization.name,
+                to_email=account.email,
+                secure_link=secure_link,
+                resource_id=document.id,
+            )
+        except Exception:
+            logger.warning(
+                "notification_failed document_id=%s", document.id, exc_info=True
+            )
 
 
 __all__ = ["DocumentService", "FREE_DOCUMENT_LIMIT"]

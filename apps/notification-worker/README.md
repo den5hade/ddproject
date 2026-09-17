@@ -1,12 +1,18 @@
 # notification-worker
 
-Async worker that consumes OTP delivery events from RabbitMQ and sends the
-one-time login codes to users via a pluggable provider (email / console).
+Async worker that consumes delivery events from RabbitMQ and sends them to
+users via a pluggable provider (email / console). It handles two event types:
 
-The **account-api** publishes `AuthOtpRequested` events to the topic exchange
-`pdf.events` (routing key `auth.otp.requested`); this worker consumes them and
-performs the actual delivery. This keeps credential delivery outside the API
-request path.
+- **OTP login codes** — `AuthOtpRequested` (`auth.otp.requested`), published by
+  **account-api**.
+- **Document notifications** — `NotificationRequested`
+  (`notification.requested`), published by **account-api** when an
+  organization-sourced document finishes processing or fails (Phase 4f).
+
+This keeps credential and document-notification delivery outside the API
+request path. After a `NotificationRequested` delivery attempt the worker
+reports the outcome back on `notification.delivered` (`NotificationDelivered`)
+so account-api can move the row to SENT/FAILED.
 
 ## How it works
 
@@ -14,20 +20,32 @@ request path.
  account-api ──► RabbitMQ pdf.events ──► queue "auth_otp" ──► notification-worker
   (publisher)     exchange=topic                 │              │
                  routing=auth.otp.requested      ▼              │
-                                          Consumer (aio-pika)   │
-                                          ┌───────────────┐      │
-                                          │ validate event│      │
-                                          │ pick provider │      ▼
-                                          │ send(to,channel,code)► SMTP (email)
-                                          └───────────────┘         or console log
+                 routing=notification.requested Consumer       │
+                                            (aio-pika)         │
+                                            ┌────────────────┐  │
+                                            │ validate event │  │
+                                            │ pick provider  │  ▼
+                                            │ send/send_message ► SMTP (email)
+                                            └────────────────┘    or console log
+                                                       │
+                                    NotificationDelivered (notification.delivered)
+                                                       ▼
+                                                account-api
+                                          (notification_result consumer)
 ```
 
 - **Consumption**: `Consumer` (from the `pdf-messaging` package) declares a
   **durable queue** bound to the topic exchange; `prefetch_count=10`; messages
   are acked only after successful handling (`message.process()`).
-- **Validation**: the body is parsed into the `AuthOtpRequested` Pydantic
-  contract; malformed events are logged and dropped (ack'ed) without delivery.
-- **Delivery**: chosen by `NOTIFICATION_PROVIDER` (see below).
+- **Validation**: the body is parsed into the `AuthOtpRequested` /
+  `NotificationRequested` Pydantic contract, dispatched on `message.type`;
+  malformed events are logged and dropped (ack'ed) without delivery.
+- **Delivery**: chosen by `NOTIFICATION_PROVIDER` (see below). A failed
+  `NotificationRequested` delivery is still ack'ed (no infinite requeue) and
+  reported back as `status="failed"` with the error message.
+- **Result reporting**: the worker publishes `NotificationDelivered` on
+  `notification.delivered` after each document-notification attempt (best
+  effort — a broker hiccup drops the result, the row stays PENDING).
 
 ## Message contract
 
@@ -41,15 +59,37 @@ request path.
 | `code` | str | 6-digit one-time code |
 | `expires_at` | datetime (UTC) | When the code stops being valid |
 
+`packages/contracts/contracts/events/notification_requested.py`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `notification_id` | UUID | Row id in `notifications` (account-api) |
+| `account_id` | UUID | Recipient account |
+| `organization_id` | UUID \| None | Source organization (if any) |
+| `type` | str | `document_received` / `document_processed` / `document_processing_failed` |
+| `channel` | str | `email` |
+| `to` | str | Recipient address |
+| `subject` / `body` | str | Rendered template — org name + secure link only, **no medical data** |
+| `resource_type` / `resource_id` | str / UUID | Target resource (`document`, id) |
+
+`packages/contracts/contracts/events/notification_delivered.py`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `notification_id` | UUID | Row id being reported on |
+| `status` | `sent" \| "failed"` | Delivery outcome |
+| `error_message` | str \| None | Present on failure |
+
 ## Providers
 
 Provider is selected once by `NOTIFICATION_PROVIDER` in
-`app/providers/__init__.py:get_provider()`:
+`app/providers/__init__.py:get_provider()` (implements `send` for OTP codes and
+`send_message` for document notifications):
 
 | Provider | Env | Behavior |
 | --- | --- | --- |
-| `console` (default) | — | Logs the code (`otp_delivery to=... channel=... code=...`). Dev/test only. |
-| `smtp` | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_TLS` | Sends an email with the code via StartTLS; SMTP I/O runs in a thread (`asyncio.to_thread`) so the loop stays responsive. Own channel is `email`; a `phone` event raises. |
+| `console` (default) | — | Logs the code (`otp_delivery to=... channel=... code=...`) or the message (`notification_delivery to=... channel=... subject=...`). Dev/test only. |
+| `smtp` | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_TLS` | Sends an email via StartTLS; SMTP I/O runs in a thread (`asyncio.to_thread`) so the loop stays responsive. Own channel is `email`; a `phone` event raises. `send` and `send_message` share the same delivery path. |
 
 To add a provider: implement the `NotificationProvider` protocol in
 `app/providers/base.py`, add a `build_provider()` factory, and branch on it in
@@ -67,7 +107,7 @@ All settings from environment / `.env` (`app/config.py`):
 | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | `""` | Credentials |
 | `RABBITMQ_VHOST` | `/` | Virtual host |
 | `NOTIFICATION_QUEUE` | `auth_otp` | Durable queue name |
-| `NOTIFICATION_ROUTING_KEYS` | `auth.otp.requested` | Comma-separated routing keys to bind |
+| `NOTIFICATION_ROUTING_KEYS` | `auth.otp.requested,notification.requested` | Comma-separated routing keys to bind |
 | `NOTIFICATION_PROVIDER` | `console` | `console` or `smtp` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | — | SMTP server |
 | `SMTP_FROM` | `no-reply@ddproject.local` | Sender address |

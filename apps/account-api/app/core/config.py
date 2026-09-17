@@ -136,6 +136,21 @@ class Settings(BaseSettings):
     integration_max_batch_size: int = 100
 
     # ------------------------------------------------------------------
+    # Notifications (Phase 4f)
+    # ------------------------------------------------------------------
+    notification_link_base: str = "http://localhost:5173"
+    notification_result_queue: str = "notification_results"
+    notification_result_routing_keys: str = "notification.delivered"
+
+    @cached_property
+    def notification_result_routing_key_list(self) -> list[str]:
+        return [
+            key.strip()
+            for key in self.notification_result_routing_keys.split(",")
+            if key.strip()
+        ]
+
+    # ------------------------------------------------------------------
     # AI Feature (cloud.ru model API)
     # ------------------------------------------------------------------
     ai_feature: bool = False

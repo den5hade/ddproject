@@ -8,6 +8,8 @@ from contracts.events import (
     DocumentStored,
     DocumentUploaded,
     DocumentUploadRequested,
+    NotificationDelivered,
+    NotificationRequested,
     OrganizationBatchCompleted,
     OrganizationBatchCreated,
     OrganizationDocumentSubmitted,
@@ -209,3 +211,66 @@ def test_organization_batch_completed_round_trip():
     assert parsed.status == "partial"
     assert parsed.accepted_count == 2
     assert parsed.failed_count == 1
+
+
+def test_notification_requested_round_trip():
+    event = NotificationRequested(
+        event_id=uuid4(),
+        notification_id=uuid4(),
+        account_id=uuid4(),
+        organization_id=uuid4(),
+        type="document_processed",
+        channel="email",
+        to="patient@example.com",
+        subject="Document processed — Acme Labs",
+        body="Acme Labs processed your document. Sign in to view it.",
+        resource_id=uuid4(),
+    )
+    parsed = NotificationRequested.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.event_version == 1
+    assert parsed.resource_type == "document"
+    assert parsed.organization_id is not None
+
+
+def test_notification_requested_optional_fields_default():
+    event = NotificationRequested(
+        event_id=uuid4(),
+        notification_id=uuid4(),
+        account_id=uuid4(),
+        type="document_processed",
+        channel="email",
+        to="patient@example.com",
+        subject="s",
+        body="b",
+        resource_id=uuid4(),
+    )
+    assert event.organization_id is None
+    assert event.resource_type == "document"
+    assert event.event_version == 1
+
+
+def test_notification_delivered_round_trip():
+    event = NotificationDelivered(
+        event_id=uuid4(),
+        notification_id=uuid4(),
+        status="sent",
+    )
+    parsed = NotificationDelivered.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.status == "sent"
+    assert parsed.error_message is None
+    assert parsed.event_version == 1
+
+
+def test_notification_delivered_failure_carries_error():
+    event = NotificationDelivered(
+        event_id=uuid4(),
+        notification_id=uuid4(),
+        status="failed",
+        error_message="smtp connect refused",
+    )
+    parsed = NotificationDelivered.model_validate_json(event.model_dump_json())
+    assert parsed == event
+    assert parsed.status == "failed"
+    assert parsed.error_message == "smtp connect refused"
