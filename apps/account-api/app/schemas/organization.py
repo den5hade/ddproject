@@ -159,6 +159,7 @@ class OrganizationResponse(BaseModel):
     phone: str | None
     website: str | None
     verification_status: OrganizationVerificationStatus
+    created_by_account_id: UUID | None
     created_at: datetime
     updated_at: datetime
 

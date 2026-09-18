@@ -155,6 +155,23 @@ multi-membership `X-Organization-Id`). Full suite **490 passed** (was 469),
 `ruff` clean on Phase 4h paths (only pre-existing UP042 enum findings remain,
 untouched). Phase 4h is done — see §6.
 
+**Revision 15** — Phase 4i (registry verification + ownership/invite) completed:
+registry-verification **extension point only** — new `app/domain/registry.py`
+(`OrganizationRegistryProvider` `Protocol` answering `verify(inn, ogrn) ->
+OrganizationVerificationResult`, a frozen value object whose `status` is
+guarded to `VERIFIED|REJECTED` only) with **no** provider implementation, no
+`VerificationService`, no endpoint, no migration (chain stays at the `0016`
+head); `OrganizationResponse` now exposes `created_by_account_id` (the 4a
+ownership anchor for future invite/claim by INN — the "join existing org by
+INN" lookups `find_by_inn`/`find_by_ogrn` are covered as the claim-resolution
+primitives); ownership (creator anchor) and membership
+(`OrganizationMembership.role`) remain separate concepts;
+`ORGANIZATION_VERIFIED`/`ORGANIZATION_REJECTED` audits and the
+`organization_verifications` table (arch §76) stay future entities that arrive
+with a concrete provider. Full suite **501 passed** (was 490), `ruff` clean on
+Phase 4i paths (only pre-existing findings in `packages/storage` remain,
+untouched). Phase 4i is done — see §6.
+
 **Revision 6** — Phase 4a (organization self-registration) was planned/staged in
 this format; **superseded by Revision 7** (admin onboarding).
 
@@ -229,7 +246,7 @@ DocumentExtraction ──────────▶ Notification (email, no med
 | 4f | Notifications | [x] |
 | 4g | Organization schemas | [x] |
 | 4h | Monitoring | [x] |
-| 4i | Registry verification + ownership/invite | [ ] |
+| 4i | Registry verification + ownership/invite | [x] |
 
 ---
 
@@ -906,13 +923,39 @@ success/error, docs, batches, failures.
   StrEnum suggestions on untouched enum classes).
 
 
-### Phase 4i — Registry verification + ownership/invite [ ]
+### Phase 4i — Registry verification + ownership/invite [x]
 
-Add `OrganizationRegistryProvider` `Protocol` + `OrganizationVerificationResult`;
-**no** provider implementation; `Organization.created_by_account_id` as the
-ownership anchor for future invite/claim flows (join existing org by INN).
-Deps: 4b. **Accept:** a future `FederalRegistryProvider` injects without changing
-`OrganizationService`; ownership/membership remain separate concepts.
+Add `OrganizationRegistryProvider` `Protocol` + `OrganizationVerificationResult`; **no** provider implementation; `Organization.created_by_account_id` as the ownership anchor for future invite/claim flows (join existing org by INN). Deps: 4b. **Accept:** a future `FederalRegistryProvider` injects without changing `OrganizationService`; ownership/membership remain separate concepts.
+
+#### Phase 4i Implementation Status
+
+- `app/domain/registry.py` (new) — `OrganizationRegistryProvider` `Protocol`
+  (`async verify(inn, ogrn) -> OrganizationVerificationResult`, spec §29) +
+  frozen `OrganizationVerificationResult` value object (`status` guarded to
+  `VERIFIED|REJECTED`, `provider`, `verified_at` UTC, `error_code`/
+  `error_message`; `verified`/`rejected` class factories; naive-tz
+  normalization) + `OrganizationVerificationError` /
+  `OrganizationVerificationProviderError` / `OrganizationVerificationUnavailableError`
+  (reserved for the phase that wires a provider). **No provider is shipped** —
+  a future `FederalRegistryProvider` (and license verification, arch §77) plugs
+  in via DI with **zero** changes to `OrganizationService` (the accept
+  criterion).
+- `app/schemas/organization.py` — `OrganizationResponse` gains
+  `created_by_account_id: UUID | None` (the 4a ownership anchor; schema-only,
+  **no migration**) so system-admin list/get reveals who provisioned the org.
+- Persistence + audit deferred: the `organization_verifications` table (arch
+  §76) and `ORGANIZATION_VERIFIED`/`ORGANIZATION_REJECTED` audit actions arrive
+  with the concrete provider that fires them; `verification_status` still only
+  moves **to `PENDING`** via the human API and the 4c gate (`≠ REJECTED`) is
+  unchanged.
+- Tests: `tests/unit/test_registry.py` (9: structural Protocol conformance via
+  `@runtime_checkable`, `verify` round-trip, result optionals + frozenness,
+  `verified`/`rejected` factories, UNVERIFIED/PENDING construction guard,
+  naive-tz normalization) + `tests/unit/test_organization.py` (`find_by_inn`/
+  `find_by_ogrn` claim-resolution primitives — "join existing org by INN") +
+  `tests/test_organizations_admin_api.py` (201 + list/get expose
+  `created_by_account_id` == the acting system admin). Full suite **501
+  passed** (was 490); `ruff` clean on Phase 4i paths.
 
 ---
 
@@ -944,6 +987,15 @@ Enums (already created in Phase 1): `OrganizationVerificationStatus`
 (`draft|published`), `NotificationType` (`document_received|processed|
 processing_failed`), `NotificationStatus` (`pending|sent|failed|read`),
 `NotificationChannel` (`email`).
+
+Registry-verification extension point (Phase 4i): `OrganizationRegistryProvider`
+`Protocol` (`async verify(inn, ogrn) -> OrganizationVerificationResult`, in
+`app/domain/registry.py`) + frozen `OrganizationVerificationResult` value object
+(`status ∈ {VERIFIED, REJECTED}` guarded at construction; `provider`,
+`verified_at`, `error_code`/`error_message`). **No provider implementation** —
+a concrete `FederalRegistryProvider` and license verification (arch §77) plug in
+via DI without touching `OrganizationService`; `organization_verifications`
+persistence (arch §76) stays a future entity.
 
 INN/OGRN helpers (Phase 1): `normalize_inn`/`inn_checksum_valid` (10|12 digits,
 weighted control digits), `normalize_ogrn`/`ogrn_checksum_valid` (13 digits,
@@ -1010,6 +1062,10 @@ Unchanged: `DocumentVersion`, `DocumentExtraction`, `DocumentProcessingJob`,
 | `0013_organization_upload_batches.py` | batches + items (drop items first on downgrade) |
 | `0014_organization_document_schemas.py` ✓ | `organization_document_schemas` (unique index `uq_organization_document_schemas_org_name_ver`; `down_revision = "0015"` — phased number, linear chain) |
 | `0015_notifications.py` | `notifications` |
+
+Head after 4h = `0016`. **Phase 4i adds no migration** — the extension point is
+pure Python (`registry.py`) and the ownership anchor (schema-only
+`created_by_account_id` exposure) reuses the `0010` column.
 
 ### 4.5 API-key architecture
 
@@ -1181,7 +1237,7 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 10. Phase 4f — Notifications. [x] (done)
 11. Phase 4g — Organization schemas. [x]
 12. Phase 4h — Monitoring. [x]
-13. Phase 4i — Registry verification + ownership/invite. [ ]
+13. Phase 4i — Registry verification + ownership/invite. [x] (done)
 
 Each phase: implement → update this status → pause for confirmation.
 

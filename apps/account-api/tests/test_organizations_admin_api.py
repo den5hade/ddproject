@@ -103,6 +103,7 @@ async def test_system_admin_creates_organization_with_owner_membership(
     assert body["inn"] == "7707083893"
     assert body["status"] == "active"
     assert body["verification_status"] == "pending"
+    assert body["created_by_account_id"] == str(admin_id)
 
     async with db_factory() as session:
         org = await session.get(Organization, UUID(body["id"]))
@@ -192,6 +193,28 @@ async def test_list_organizations_returns_all(app_client, fake_redis, db_factory
     assert resp.status_code == 200
     names = {org["name"] for org in resp.json()}
     assert names == {"City Clinic", "Lab Plus"}
+
+
+async def test_admin_list_and_get_expose_ownership_anchor(
+    app_client, fake_redis, db_factory
+):
+    token, admin_id = await _system_admin(db_factory, app_client, fake_redis)
+    created = await app_client.post(
+        "/api/v1/admin/organizations", headers=_auth(token), json=_payload()
+    )
+    org_id = created.json()["id"]
+
+    listed = await app_client.get("/api/v1/admin/organizations", headers=_auth(token))
+    assert listed.status_code == 200
+    assert all(
+        org["created_by_account_id"] == str(admin_id) for org in listed.json()
+    )
+
+    fetched = await app_client.get(
+        f"/api/v1/admin/organizations/{org_id}", headers=_auth(token)
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["created_by_account_id"] == str(admin_id)
 
 
 async def test_get_organization_404(app_client, fake_redis, db_factory):

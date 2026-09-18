@@ -1479,6 +1479,19 @@ async def test_admin_create_organization_writes_audit_log(db_session) -> None:
     assert "account_id" in added_row.metadata_
 
 
+async def test_find_by_inn_and_ogrn_support_claim_resolution(db_session) -> None:
+    """Phase 4i: INN/OGRN lookup is the future 'join existing org by INN'
+    claim-resolution primitive (ownership stays separate from membership)."""
+    org = await _org(db_session, inn="7707083893", ogrn="1027700132195")
+    repo = OrganizationRepository(db_session)
+    by_inn = await repo.find_by_inn("7707083893")
+    by_ogrn = await repo.find_by_ogrn("1027700132195")
+    assert by_inn is not None and by_inn.id == org.id
+    assert by_ogrn is not None and by_ogrn.id == org.id
+    assert await repo.find_by_inn("500100732259") is None
+    assert await repo.find_by_ogrn("1027700132206") is None
+
+
 async def test_membership_resolution_is_deterministic_for_multi_membership(
     db_session,
 ) -> None:
