@@ -8,7 +8,7 @@ the plan stays a roadmap with per-phase verification.
 
 Uses the concise step/status format established in
 `docs/development/DOC_PROC_DEV_FLOW_IMPL_PLAN.md` (dev flow) and
-`docs/development/ORGS/OC_IMPL_PLAN.md` (organization domain).
+`docs/development/ORGS/IMPL_PLAN.md` (organization domain).
 
 Status legend: `[ ]` pending · `[x]` done.
 
@@ -162,6 +162,6 @@ Each phase: implement → update this status → pause for confirmation.
 ## 7. References
 
 - Exemplar (completed-heavy): `docs/development/DOC_PROC_DEV_FLOW_IMPL_PLAN.md`
-- Exemplar (spec-heavy, condensed): `docs/development/ORGS/OC_IMPL_PLAN.md`
+- Exemplar (spec-heavy, condensed): `docs/development/ORGS/IMPL_PLAN.md`
 - Engineering conventions: `docs/development/CONTRIBUTING.md`
 - Migration rules: `docs/development/MIGRATIONS.md`

@@ -2584,11 +2584,53 @@ Create API key
 Integration ready
 ```
 
+## 73.0 Архитектурный принцип и UX-сценарии
+
+**System Admin — точка доверия.** На текущем этапе организация не создаёт себя
+самостоятельно — подключение выполняет оператор платформы во время персонального
+onboarding. Пользователь не доказывает «я владею этой организацией»; это делает
+`system_admin`. Провиджининг является текущим *operational verification*
+(«я проверил организацию и подключил её»). Модель строится так, чтобы позже
+System Admin можно было заменить автоматизированной registry verification без
+изменения `OrganizationMembership`, `Organization`, API authorization и document
+ingestion.
+
+### Управление: поиск и подключение
+
+```text
+System Admin
+      ↓
+Search Organization (INN / OGRN / name)
+      ↓
+Scenario A — найдена:  POST /admin/organizations/{id}/members {email, role}
+Scenario B — не найдена: POST /admin/organizations {organization, administrator}
+      ↓
+Account resolution: email → reuse ИЛИ create PENDING
+      ↓
+OrganizationMembership (ACTIVE, role = owner|admin)
+      ↓
+Представитель завершает регистрацию через OTP; видит Organization
+```
+
+### Admin UI (дизайн-референс, P2)
+
+Простой список организаций со строкой поиска по INN/OGRN/name и кнопкой
+«Add organization»; одна операция = **Create Organization + create/resolve
+Account + create Membership в одной transaction**:
+
+```text
+Organizations                    Organization (form)
+[+ Add organization]             Name * / Type * / INN * / OGRN *
+Search: [INN/OGRN/name]          Legal address / Email / Phone / Website
+─ ООО "...", INN, Status ─       Administrator email * / Role [Owner ▼]
+  [Open] [Add administrator]      [Create and connect]
+```
+
 ## 73.1 Phase 4a — Admin organization onboarding
 
 Организацию создаёт и подключает **system_admin** во время персонального
 onboarding. Пользователь **не** создаёт организацию самостоятельно — public
-self-registration не реализуется (см. `OAI_ONBOARD_IMPL_PLAN.md` §1/§4):
+self-registration не реализуется (§73.0, «System Admin — точка доверия»):
 
 ```text
 System Admin (JWT, RoleCode.SYSTEM_ADMIN)
@@ -2650,7 +2692,14 @@ POST /api/v1/admin/organizations/{organization_id}/members
   organization + request; metadata = `{account_id, role}`; без legal data,
   контактов, email-адресов и секретов.
 - **Notification:** факт подключения фиксируется в audit; доставка invitation
-  email представителю — в фазе 4f (notifications).
+  email представителю — в фазе 4f (notifications). Два случая: новый
+  **PENDING** Account получает onboarding/invitation уведомление («Organization X
+  пригласила вас администратором») перед OTP-логином; существующий Account —
+  уведомление о доступе администратора. Email = название организации +
+  безопасная ссылка; без медицинских и юридических данных.
+- **Сервисная архитектура:** admin endpoints — интерфейс над
+  `OrganizationService` (`admin_create_organization` /
+  `admin_attach_membership`); отдельная admin-бизнес-логика не создаётся.
 - **Миграция `0010`:** `organizations.created_by_account_id` (FK SET NULL),
   `organization_memberships.role` (default `member`).
 
@@ -3147,6 +3196,21 @@ commit; IntegrityError → 409
 организации (404 при отсутствии / организация не ACTIVE → 409).
 
 Миграция `0010`: `created_by_account_id` + `organization_memberships.role`.
+
+Definition of Done 4a:
+- Организация уже существует: admin выбирает org → email → existing Account
+  resolved → Membership created → доступ администратора организации.
+- Организации нет: admin вводит данные org → Organization created → email →
+  Account resolved/created → Membership created → доступ администратора
+  организации.
+- Security: обычный Account → 403 на `POST /admin/organizations`
+  и `/…/{id}/members`; system admin — может; organization admin не получает
+  прав system admin автоматически (глобальные роли не выдаются).
+- Data integrity: невозможен duplicate INN / duplicate OGRN / duplicate active
+  membership (unique indexes → 409).
+- Audit: зафиксированы `ORGANIZATION_CREATED` + `ORGANIZATION_ADMIN_ADDED`.
+- Notification: представитель получает onboarding/invitation notification
+  (доставка — 4f).
 
 # 87b. Phase 4b — Organization context & membership-role authorization
 

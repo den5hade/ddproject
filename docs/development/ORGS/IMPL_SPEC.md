@@ -425,6 +425,21 @@ GET  /api/v1/admin/organizations/{id}/members          (list representatives)
 (no public `POST /organizations`; gate: `system_admin`; representative access
 is `OrganizationMembership.role`, no global role granted)
 
+Admin onboarding design (locked):
+- **System Admin is the point of trust** — provisioning is the platform
+  operator's *operational verification*; the user does not prove ownership. A
+  later automated registry-verification provider must be able to replace this
+  trust **without** changing `OrganizationMembership`, `Organization`, API
+  authorization or document ingestion.
+- **Two admin scenarios** — an existing organization is found by the admin
+  (search by INN/OGRN/name over `GET /admin/organizations`) and the
+  representative is attached via `POST /admin/organizations/{id}/members`; a
+  missing one is created via `POST /admin/organizations` in **one transaction**
+  (Organization + create/resolve Account by email + Membership).
+- Admin endpoints are an interface over `OrganizationService`
+  (`admin_create_organization` / `admin_attach_membership`) — no parallel
+  admin business logic.
+
 ## Organization management
 
 ```text
@@ -798,6 +813,14 @@ document processing failed
 ```
 
 Determine which notifications should actually be implemented in the first version.
+
+Also cover the **representative onboarding notification** (recorded at
+`POST /admin/organizations` / `POST /admin/organizations/{id}/members`,
+actual delivery in Phase 4f):
+
+* a **new PENDING account** gets an invitation/onboarding notification
+  ("Organization X has invited you as administrator") before it completes OTP login;
+* an **existing account** gets an admin-access-granted notification.
 
 Do not include sensitive medical information in email.
 

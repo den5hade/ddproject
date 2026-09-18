@@ -5,10 +5,10 @@ branches, licenses, API keys, a machine-to-machine integration API, patient
 resolution, single + bulk document ingestion through the existing pipeline,
 client notifications, organization document schemas, API-usage monitoring, and
 the registry-verification extension point. Built on existing infrastructure
-only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/OAI_IMPL_ARCH.md` (arch) + `docs/development/ORGS/OAI_IMPL_SPEC.md` (spec).
+only — **no parallel architecture**. Sources for depth: `docs/development/ORGS/IMPL_ARCH.md` (arch) + `docs/development/ORGS/IMPL_SPEC.md` (spec).
 
-**Revision 7** — Phase 4a re-planned as **admin organization onboarding** per
-`docs/development/ORGS/OAI_ONBOARD_IMPL_PLAN.md`: a `system_admin` provisions
+**Revision 7** — Phase 4a re-planned as **admin organization onboarding** (design
+folded into §3 + §4.15 below): a `system_admin` provisions
 organizations and connects representatives by email. **No public**
 `POST /organizations` self-registration (the never-committed 4a code was
 reverted). Endpoints move to `/api/v1/admin/organizations`
@@ -457,8 +457,9 @@ Vertical slices; migration numbers from §4.4. Each phase ends with tests +
 
 **Objective.** A `system_admin` provisions organizations and connects a
 representative by email. **No public self-registration** (`POST /organizations`)
-— the user NEVER creates/claims an organization on their own (see
-`docs/development/ORGS/OAI_ONBOARD_IMPL_PLAN.md` §1/§4). Representative
+— the user NEVER creates/claims an organization on their own (locked admin
+onboarding design, §4.15; two scenarios: org already exists → attach, org absent
+→ create). Representative
 authorization is the `OrganizationMembership.role`; no global
 `organization_admin` `AccountRole` is granted.
 
@@ -512,17 +513,24 @@ String(16) `OrganizationMembershipRole` (`owner|admin|member`), server default
 
 **Boundaries.** `Organization.email`/`phone` are contact data — never derived from
 the account identity. Audit metadata carries no legal data, contacts, secrets or
-emails. Representative notification is **recorded** at onboarding (audit); the
-delivery/email lands in Phase 4f (notifications). `/organizations/me/*` resource
-authorization migrates from the legacy global `organization_admin` `AccountRole`
-check to `OrganizationMembership.role` in 4b — onboarding itself grants no global
-role. API-key policies stay 4c.
+emails. Representative notification is **recorded** at onboarding (audit) and
+follows the two cases (delivery/email lands in Phase 4f): a **new** PENDING
+account gets an onboarding/invitation notification ("Organization X has invited
+you as administrator") before it completes OTP login; an **existing** account
+gets an admin-access-granted notification. Email content carries org name +
+secure link only — never legal data or medical data. `/organizations/me/*`
+resource authorization migrates from the legacy global `organization_admin`
+`AccountRole` check to `OrganizationMembership.role` in 4b — onboarding itself
+grants no global role. Admin endpoints are an **interface over
+`OrganizationService`** (`admin_create_organization` / `admin_attach_membership`)
+— no parallel admin business logic. API-key policies stay 4c.
 
 **Accept.** system_admin-only (non-admin → 403); org + OWNER membership created
 in one transaction; account reused (not duplicated) on email match; INN/OGRN
 duplicate → 409 via both pre-check and unique-index paths; attach to existing
 org; audit `ORGANIZATION_CREATED` + `ORGANIZATION_ADMIN_ADDED` with no sensitive
-metadata; a non-system-admin account can never create/claim an org.
+metadata; representative invitation/notification is recorded (delivery 4f); a
+non-system-admin account can never create/claim an org.
 
 #### Phase 4a Implementation Status
 
@@ -1179,6 +1187,22 @@ JSON-Schema metadata registry; versions monotonic per `(org, name)`; publish fre
 - **No public self-registration:** a regular ACTIVE account cannot
   `POST /organizations`; organization creation/attachment is exclusively
   system-admin onboarding.
+- **Two admin scenarios:** an org that already exists is found by the admin
+  (INN/OGRN/name via `GET /admin/organizations`) and the representative is
+  attached with `POST /admin/organizations/{id}/members`; an org that does not
+  exist is created with `POST /admin/organizations`. Both funnel into
+  `OrganizationService` (`admin_create_organization` /
+  `admin_attach_membership`) — the admin API is an interface, not parallel
+  business logic.
+- **System Admin is the point of trust:** provisioning is the platform
+  operator's *operational verification* ("I verified this organization and
+  connected it") — the user does not prove ownership. A later automated
+  registry-verification provider (4i) replaces this trust without changing
+  `OrganizationMembership`, `Organization`, API authorization or ingestion.
+- **Rep notification (two cases):** new PENDING account → onboarding/invitation
+  notification ("Organization X has invited you as administrator") before OTP
+  login; existing account → admin-access-granted notification. Recorded at
+  onboarding; delivery lands in 4f; content = org name + secure link only.
 - **Account resolution:** normalize email → reuse existing `Account` (no
   duplicates — `email_normalized` UNIQUE); only create a new **PENDING** account
   when there is no match. The representative completes registration via the
