@@ -2,6 +2,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
+from messaging.topology import DOCUMENT_CONVERT_QUEUE, DOCUMENT_CONVERT_ROUTING_KEYS
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,8 +21,8 @@ class Settings(BaseSettings):
     rabbitmq_password: str = ""
     rabbitmq_vhost: str = "/"
 
-    ai_worker_queue: str = "document.convert"
-    ai_worker_routing_keys: str = "document.uploaded,document.converted"
+    ai_worker_queue: str = DOCUMENT_CONVERT_QUEUE
+    ai_worker_routing_keys: str = ",".join(DOCUMENT_CONVERT_ROUTING_KEYS)
 
     ai_base_url: str = "https://foundation-models.api.cloud.ru/v1"
     ai_api_key: str = ""

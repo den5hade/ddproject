@@ -228,6 +228,22 @@ keeps `app/` out of `sys.path` (it is a namespace package, and the real
 `storage` comes from the `pdf-storage` dependency), and the empty shadow
 package was deleted.
 
+**Queue ownership (rabbit-setup).** The ai-worker is **not** the queue-holder.
+`compose-dev` runs a one-shot `rabbit-setup` service (`messaging.bootstrap`,
+modelled on `db-migrate`) that declares `document.convert` + bindings +
+`document.convert_dlx`/`document.convert_dlq` via the same `Consumer` primitive,
+**before** `account-api` starts and independent of whether the ai-worker runs.
+Uploads made while the ai-worker is off therefore buffer in the durable queue
+instead of being silently dropped by the topic exchange (see
+`docs/development/TOPOLOGY_IMPL_PLAN.md`).
+
+**Migration path to the main architecture.** The stub's queue declaration is a
+placeholder for the permanent `marker-orchestrator`: it will replace the
+one-shot with a long-running service that runs the same `bootstrap()` plus
+queue-depth monitoring (`docs/services/MARKER_ORCHESTRATOR.md`). Publishers,
+queue names, routing keys, DLX/DLQ names and message formats do **not** change —
+only the *holder* of the topology does.
+
 ---
 
 ## 10. Configuration

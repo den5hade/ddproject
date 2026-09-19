@@ -79,7 +79,8 @@ FastAPI at `/openapi.json` / `/docs` / `/redoc`):
 - [Migrations](development/MIGRATIONS.md)
 - Dev & implementation plans: [OC_ACC_IMPLEMTATION.md](development/OC_ACC_IMPLEMTATION.md),
   [OAI_IMPLEMENTATION_PLAN.md](development/OAI_IMPLEMENTATION_PLAN.md),
-  [OAI_DB_MODELS.md](development/OAI_DB_MODELS.md)
+  [OAI_DB_MODELS.md](development/OAI_DB_MODELS.md),
+  [TOPOLOGY_IMPL_PLAN.md](development/TOPOLOGY_IMPL_PLAN.md)
 
 ## Roadmap & Decisions
 

@@ -1,18 +1,46 @@
+import logging
+
 import aio_pika
 from aio_pika import DeliveryMode, ExchangeType, Message
-from aio_pika.abc import AbstractExchange, AbstractRobustConnection
+from aio_pika.abc import (
+    AbstractChannel,
+    AbstractExchange,
+    AbstractIncomingMessage,
+    AbstractRobustConnection,
+)
 from pydantic import BaseModel
+
+logger = logging.getLogger("messaging.publisher")
 
 EVENTS_EXCHANGE = "pdf.events"
 CONTENT_TYPE_JSON = "application/json"
 
 
-class Publisher:
-    """Publishes Pydantic events to the topic exchange."""
+def _on_return(message: AbstractIncomingMessage) -> None:
+    logger.warning(
+        "unroutable_message routing_key=%s type=%s",
+        message.routing_key,
+        message.type,
+    )
 
-    def __init__(self, exchange: AbstractExchange, connection: AbstractRobustConnection) -> None:
+
+class Publisher:
+    """Publishes Pydantic events to the topic exchange.
+
+    Publishes are **mandatory** (routed or returned); returned messages are
+    logged as warnings, never raised, so upload flow keeps working on partially
+    started stacks.
+    """
+
+    def __init__(
+        self,
+        exchange: AbstractExchange,
+        connection: AbstractRobustConnection,
+        channel: AbstractChannel,
+    ) -> None:
         self._exchange = exchange
         self._connection = connection
+        self._channel = channel
 
     async def publish(self, routing_key: str, event: BaseModel) -> None:
         await self._exchange.publish(
@@ -23,6 +51,7 @@ class Publisher:
                 delivery_mode=DeliveryMode.PERSISTENT,
             ),
             routing_key=routing_key,
+            mandatory=True,
         )
 
     async def close(self) -> None:
@@ -32,10 +61,16 @@ class Publisher:
 async def connect_publisher(
     dsn: str, exchange_name: str = EVENTS_EXCHANGE
 ) -> Publisher:
-    """Declare the events topic exchange and return a ready Publisher."""
+    """Declare the events topic exchange and return a ready Publisher.
+
+    The exchange publishes with publisher confirms enabled; unroutable messages
+    are returned to ``_on_return`` and logged instead of raising.
+    """
     connection = await aio_pika.connect_robust(dsn)
     channel = await connection.channel()
+    await channel.confirm_delivery()
+    channel.add_on_return_callback(_on_return)
     exchange = await channel.declare_exchange(
         exchange_name, ExchangeType.TOPIC, durable=True
     )
-    return Publisher(exchange, connection)
+    return Publisher(exchange, connection, channel)

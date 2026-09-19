@@ -25,7 +25,7 @@ format-web: ## Prettier for apps/web
 	cd $(WEB_DIR) && npm run format
 
 test: ## Run pytest for every Python app
-	uv run --all-packages pytest apps tests
+	uv run --all-packages pytest apps tests packages/messaging/tests
 
 test-web: ## Run vitest for apps/web
 	cd $(WEB_DIR) && npm test

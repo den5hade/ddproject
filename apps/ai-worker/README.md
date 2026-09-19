@@ -12,7 +12,12 @@ serves to the frontend.
 The dev flow is **event-driven**, not a flag. The ai-worker does its job simply
 by **running and being subscribed** to the `document.convert` queue (routing keys
 `document.uploaded,document.converted`). It is an opt-in service: not part of the
-default dev stack, starts either manually or via a Docker compose profile.
+default dev stack, starts either manually or via a Docker compose profile. The
+**queue itself is not the worker's responsibility**: the `rabbit-setup` one-shot
+service in `compose-dev` declares `document.convert` + bindings + DLX/DLQ up
+front, so uploads made while the ai-worker is off buffer in the durable queue
+instead of being dropped (see
+[docs/development/TOPOLOGY_IMPL_PLAN.md](../../docs/development/TOPOLOGY_IMPL_PLAN.md)).
 
 ---
 
@@ -160,6 +165,11 @@ make compose-start        # from images already built
 # or, first time:
 make compose-dev          # build + start
 ```
+
+`compose-dev` also runs the one-shot `rabbit-setup` service, which declares the
+`document.convert` queue + bindings + DLX/DLQ before `account-api` starts. You
+can verify the topology in the RabbitMQ management UI at
+`http://localhost:15672` even before the ai-worker is started.
 
 ### 2. Run the ai-worker
 
