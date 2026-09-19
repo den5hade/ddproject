@@ -1,9 +1,9 @@
 # ROADMAP.md
 
 > Milestones for the whole platform. Detailed, per-service dev plans live in
-> [development/](development/): `OAI_IMPLEMENTATION_PLAN.md` (full 8-phase plan)
-> and `OC_ACC_IMPLEMTATION.md` (account-api M1–M6). This file is the canonical
-> milestone list; it is not a task tracker (issues belong in GitHub).
+> [development/implementation/](development/implementation/) (active plans)
+> and [development/operational/](development/operational/) (conventions).
+> This file is the canonical milestone list; it is not a task tracker (issues belong in GitHub).
 
 Legend: ✅ done · ⏳ deferred / future · ◼ in progress
 
@@ -27,7 +27,7 @@ Each phase must end with a **working vertical slice**, not just a set of tables.
 
 ---
 
-## Account API milestones (from `OC_ACC_IMPLEMTATION.md`)
+## Account API milestones (from `development/implementation/ORGS/IMPL_PLAN.md`)
 
 | Milestone | Scope | Status |
 |-----------|-------|--------|
@@ -44,7 +44,7 @@ Dependency rule: **M3 and M4 must not ship without the M5 dependency
 
 ---
 
-## Platform milestones (from `OAI_IMPLEMENTATION_PLAN.md` §34)
+## Platform milestones (from `development/operational/IMPL_PLAN_SCHEMA.md` and `development/ORGS/IMPL_PLAN.md`)
 
 | Milestone | Scope | Status |
 |-----------|-------|--------|

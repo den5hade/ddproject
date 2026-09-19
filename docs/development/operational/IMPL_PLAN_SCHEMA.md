@@ -7,7 +7,7 @@ contour that you skim in 2 minutes to know *what is done*, *what is next*, and
 the plan stays a roadmap with per-phase verification.
 
 Uses the concise step/status format established in
-`docs/development/DOC_PROC_DEV_FLOW_IMPL_PLAN.md` (dev flow) and
+`docs/development/implementation/DOC_PROC_DEV_FLOW/IMPL_PLAN.md` (dev flow) and
 `docs/development/ORGS/IMPL_PLAN.md` (organization domain).
 
 Status legend: `[ ]` pending · `[x]` done.
@@ -26,7 +26,7 @@ Status legend: `[ ]` pending · `[x]` done.
 
 | Rule | Guidance |
 |---|---|
-| Location | `docs/development/<FEATURE>_IMPL_PLAN.md` (sibling of `DOC_PROC_DEV_FLOW_IMPL_PLAN.md`, `CONTRIBUTING.md`, `MIGRATIONS.md`) |
+| Location | `docs/development/implementation/<FEATURE>/IMPL_PLAN.md` (sibling of `development/operational/CONTRIBUTING.md`, `development/operational/MIGRATIONS.md`) |
 | Status markers | `[x]` done / `[ ]` pending — mirrored in **three places**: section heading, execution-summary table, implementation-order list |
 | Revision notes | Block under the intro; added when the plan is restructured, a phase set is added/removed, or a started phase's plan changes. Record *what changed* and the base doc when the format is derived from another plan. Never rewrite history. |
 | Source-of-depth | Link ARCH/SPEC docs in the intro; the plan keeps condensed summaries only (§4) |
@@ -161,7 +161,7 @@ Each phase: implement → update this status → pause for confirmation.
 
 ## 7. References
 
-- Exemplar (completed-heavy): `docs/development/DOC_PROC_DEV_FLOW_IMPL_PLAN.md`
+- Exemplar (completed-heavy): `docs/development/implementation/DOC_PROC_DEV_FLOW/IMPL_PLAN.md`
 - Exemplar (spec-heavy, condensed): `docs/development/ORGS/IMPL_PLAN.md`
 - Engineering conventions: `docs/development/CONTRIBUTING.md`
 - Migration rules: `docs/development/MIGRATIONS.md`
