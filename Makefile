@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-stop compose-ai-worker-start compose-ai-worker-logs migrate
+.PHONY: help setup setup-web lock lint lint-web format-web test test-api test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-stop compose-ai-worker-start compose-ai-worker-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ format-web: ## Prettier for apps/web
 
 test: ## Run pytest for every Python app
 	uv run --all-packages pytest apps tests packages/messaging/tests
+
+test-api: ## Run pytest for the API app only
+	uv run --project apps/account-api pytest apps/account-api
 
 test-web: ## Run vitest for apps/web
 	cd $(WEB_DIR) && npm test

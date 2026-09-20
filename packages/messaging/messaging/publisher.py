@@ -5,7 +5,6 @@ from aio_pika import DeliveryMode, ExchangeType, Message
 from aio_pika.abc import (
     AbstractChannel,
     AbstractExchange,
-    AbstractIncomingMessage,
     AbstractRobustConnection,
 )
 from pydantic import BaseModel
@@ -14,14 +13,6 @@ logger = logging.getLogger("messaging.publisher")
 
 EVENTS_EXCHANGE = "pdf.events"
 CONTENT_TYPE_JSON = "application/json"
-
-
-def _on_return(message: AbstractIncomingMessage) -> None:
-    logger.warning(
-        "unroutable_message routing_key=%s type=%s",
-        message.routing_key,
-        message.type,
-    )
 
 
 class Publisher:
@@ -43,7 +34,7 @@ class Publisher:
         self._channel = channel
 
     async def publish(self, routing_key: str, event: BaseModel) -> None:
-        await self._exchange.publish(
+        published = await self._exchange.publish(
             Message(
                 body=event.model_dump_json().encode(),
                 content_type=CONTENT_TYPE_JSON,
@@ -53,24 +44,19 @@ class Publisher:
             routing_key=routing_key,
             mandatory=True,
         )
+        if not published:
+            logger.warning(
+                "unroutable_message routing_key=%s type=%s",
+                routing_key,
+                event.__class__.__name__,
+            )
 
     async def close(self) -> None:
         await self._connection.close()
 
 
-async def connect_publisher(
-    dsn: str, exchange_name: str = EVENTS_EXCHANGE
-) -> Publisher:
-    """Declare the events topic exchange and return a ready Publisher.
-
-    The exchange publishes with publisher confirms enabled; unroutable messages
-    are returned to ``_on_return`` and logged instead of raising.
-    """
+async def connect_publisher(dsn: str, exchange_name: str = EVENTS_EXCHANGE) -> Publisher:
     connection = await aio_pika.connect_robust(dsn)
-    channel = await connection.channel()
-    await channel.confirm_delivery()
-    channel.add_on_return_callback(_on_return)
-    exchange = await channel.declare_exchange(
-        exchange_name, ExchangeType.TOPIC, durable=True
-    )
+    channel = await connection.channel(publisher_confirms=True)
+    exchange = await channel.declare_exchange(exchange_name, ExchangeType.TOPIC, durable=True)
     return Publisher(exchange, connection, channel)
