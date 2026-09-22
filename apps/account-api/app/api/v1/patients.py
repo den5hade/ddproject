@@ -8,7 +8,11 @@ from app.dependencies.auth import CurrentAccount
 from app.dependencies.patient import PatientServiceDep
 from app.domain.access import AuditAction
 from app.domain.medical import PatientAlreadyExistsError, PersonNotFoundError
-from app.schemas.patient import PatientCreateRequest, PatientResponse
+from app.schemas.patient import (
+    PatientCreateRequest,
+    PatientResponse,
+    PatientSummaryResponse,
+)
 from app.schemas.profile import PersonResponse, PersonUpdate
 from app.services.patient import PatientContext
 
@@ -56,6 +60,17 @@ async def update_my_person(
     except PersonNotFoundError as exc:
         raise_for(exc)
     return _to_response(context)
+
+
+@router.get("/me/summary", response_model=PatientSummaryResponse)
+async def get_my_summary(
+    account: CurrentAccount,
+    service: PatientServiceDep,
+) -> PatientSummaryResponse:
+    documents_count, read_grants_count = await service.get_summary(account)
+    return PatientSummaryResponse(
+        documents_count=documents_count, read_grants_count=read_grants_count
+    )
 
 
 @router.get(

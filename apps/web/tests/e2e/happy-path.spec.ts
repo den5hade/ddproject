@@ -100,7 +100,7 @@ test("pages pass axe a11y scan and have no 320px horizontal overflow", async ({
   }
   await expect(page).toHaveURL("/", { timeout: 15_000 });
 
-  for (const path of ["/", "/documents", "/medical-record", "/profile"]) {
+  for (const path of ["/", "/documents", "/medical-record", "/profile", "/profile/edit"]) {
     await page.goto(path);
     // Session restore (silent refresh) can take a moment on cold start
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible({

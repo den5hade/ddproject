@@ -11,7 +11,9 @@ from app.models.account import Account
 from app.models.medical_record import MedicalRecord
 from app.models.patient import Patient
 from app.models.person import Person
+from app.repositories.access import AccessGrantRepository
 from app.repositories.account import AccountRepository
+from app.repositories.document import DocumentRepository
 from app.repositories.patient import PatientRepository
 from app.repositories.person import PersonRepository
 from app.schemas.patient import PatientCreateRequest
@@ -73,6 +75,21 @@ class PatientService:
         if patient is None:
             raise PersonNotFoundError("patient not found")
         return await self._build_context(patient)
+
+    async def get_summary(self, account: Account) -> tuple[int, int]:
+        """Documents and active read-grant counters for the owner's profile.
+
+        Returns ``(documents_count, read_grants_count)``. Patient is
+        auto-created on first call, mirroring ``get_patient``.
+        """
+        context = await self.ensure_patient_for_account(account)
+        documents_count = await DocumentRepository(self._session).count_documents(
+            context.medical_record.id
+        )
+        read_grants_count = await AccessGrantRepository(self._session).count_active_read_grants(
+            context.patient.id
+        )
+        return documents_count, read_grants_count
 
     async def _ensure(
         self, account: Account, data: PatientCreateRequest | None

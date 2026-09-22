@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.access import AccessReason, GrantStatus
@@ -70,6 +70,24 @@ class AccessGrantRepository:
             .order_by(PatientAccessGrant.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def count_active_read_grants(self, patient_id: UUID) -> int:
+        """Active grants that carry document-read permission and have not expired."""
+        now = datetime.now(UTC)
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(PatientAccessGrant)
+            .where(
+                PatientAccessGrant.patient_id == patient_id,
+                PatientAccessGrant.status == GrantStatus.ACTIVE,
+                PatientAccessGrant.can_view_documents.is_(True),
+                or_(
+                    PatientAccessGrant.expires_at.is_(None),
+                    PatientAccessGrant.expires_at > now,
+                ),
+            )
+        )
+        return count or 0
 
     async def find_active_for(
         self,

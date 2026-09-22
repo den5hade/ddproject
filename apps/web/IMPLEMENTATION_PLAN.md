@@ -289,6 +289,9 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 - [x] RHF+zod form: имя, фамилия, отчество, дата рождения, пол → PATCH `/patients/me` → invalidate → toast «Изменения сохранены» [SG §49]
 - [x] Account block: email/phone (read-only), subscription status
 - [x] Logout button (tertiary placement, confirm not required)
+- [x] Summary stats card: documents + active read grants (`GET /patients/me/summary`, calm 2-value card per SG §2)
+- [x] Personal-data summary + link to dedicated `/profile/edit` form page (form moved off `/profile`)
+- [x] Account block drops subscription/payment status (private, calm — SG §1/§50)
 
 ---
 
@@ -378,6 +381,13 @@ Style guide refs in brackets. Each screen must pass: mobile 320px ✓, keyboard 
 > saves never clear existing data; future-DOB rejected client-side,
 > mirroring backend 422 (live-smoked). DocumentList extracted as a shared
 > presentational component used by both /documents and /medical-record.
+>
+> Profile rework: `/profile` is now an overview (summary counters,
+> account, personal-data summary + «Изменить данные») with the form moved
+> to `/profile/edit`; medical-record's «Изменить в профиле» links there.
+> Stats come from a lean `GET /patients/me/summary` (no document metadata
+> over the wire); read-grant count = active + `can_view_documents` +
+> unexpired. Summary key is invalidated on upload success for freshness.
 
 ### M7 — Hardening & E2E
 | Task | Done | Status |

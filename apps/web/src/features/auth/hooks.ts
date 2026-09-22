@@ -7,7 +7,7 @@ import {
   hasSession,
   storeTokens,
 } from "./session";
-import { getMyPatient } from "@/features/patients/api";
+import { getMyPatient, getMyPatientSummary } from "@/features/patients/api";
 import { keys } from "@/lib/query/keys";
 
 /*
@@ -32,6 +32,17 @@ export function useMyPatient() {
     enabled: hasSession(),
     retry: false,
     staleTime: 60_000,
+  });
+}
+
+/** Lean counters for the profile page (GET /patients/me/summary). */
+export function useMyPatientSummary() {
+  return useQuery({
+    queryKey: keys.patientSummary(),
+    queryFn: getMyPatientSummary,
+    enabled: hasSession(),
+    retry: false,
+    staleTime: 30_000,
   });
 }
 

@@ -5,6 +5,7 @@
 export const keys = {
   me: () => ["me"] as const,
   patientMe: () => ["patient", "me"] as const,
+  patientSummary: () => ["patient", "me", "summary"] as const,
   documents: (patientId: string) => ["documents", patientId] as const,
   document: (documentId: string) => ["document", documentId] as const,
   versions: (documentId: string) =>

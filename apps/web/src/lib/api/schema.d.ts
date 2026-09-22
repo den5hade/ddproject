@@ -141,6 +141,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List All Organizations */
+        get: operations["list_all_organizations_api_v1_admin_organizations_get"];
+        put?: never;
+        /** Create Onboarded Organization */
+        post: operations["create_onboarded_organization_api_v1_admin_organizations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/organizations/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Organization */
+        get: operations["get_organization_api_v1_admin_organizations__organization_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/organizations/{organization_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Organization Members */
+        get: operations["list_organization_members_api_v1_admin_organizations__organization_id__members_get"];
+        put?: never;
+        /** Add Organization Member */
+        post: operations["add_organization_member_api_v1_admin_organizations__organization_id__members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/patients/{patient_id}/access-grants": {
         parameters: {
             query?: never;
@@ -227,6 +280,23 @@ export interface paths {
         head?: never;
         /** Update My Person */
         patch: operations["update_my_person_api_v1_patients_me_patch"];
+        trace?: never;
+    };
+    "/api/v1/patients/me/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Summary */
+        get: operations["get_my_summary_api_v1_patients_me_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/patients/{patient_id}": {
@@ -437,6 +507,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integration/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit a document
+         * @description Accept an organization document submission (Phase 4d).
+         *
+         *     Returns ``201`` for a new submission and ``200`` for an idempotent replay
+         *     keyed by ``external_id`` or the ``Idempotency-Key`` header.
+         */
+        post: operations["submit_document_api_v1_integration_documents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integration/documents/{document_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an organization document status
+         * @description Return the current state of an org-submitted document (org-scoped).
+         */
+        get: operations["get_document_api_v1_integration_documents__document_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integration/documents/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit a batch of documents
+         * @description Accept an organization bulk submission (Phase 4e, §4.11).
+         *
+         *     ``metadata`` is a JSON array describing one item per uploaded file (same
+         *     index); each item is processed in its own transaction, so partial failures
+         *     are tracked per item. Returns ``202`` for a new batch and ``200`` for an
+         *     idempotent replay by the ``Idempotency-Key`` header.
+         */
+        post: operations["submit_bulk_api_v1_integration_documents_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integration/batches/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get an upload batch
+         * @description Return an org upload batch with its items (org-scoped, no IDOR).
+         */
+        get: operations["get_batch_api_v1_integration_batches__batch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integration/batches/{batch_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an upload batch's items
+         * @description Return the items of an org upload batch (org-scoped, no IDOR).
+         */
+        get: operations["get_batch_items_api_v1_integration_batches__batch_id__items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -446,6 +624,285 @@ export interface paths {
         };
         /** Get Job */
         get: operations["get_job_api_v1_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Organization */
+        get: operations["get_my_organization_api_v1_organizations_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update My Organization */
+        patch: operations["update_my_organization_api_v1_organizations_me_patch"];
+        trace?: never;
+    };
+    "/api/v1/organizations/me/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List My Branches */
+        get: operations["list_my_branches_api_v1_organizations_me_branches_get"];
+        put?: never;
+        /** Create My Branch */
+        post: operations["create_my_branch_api_v1_organizations_me_branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/branches/{branch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Branch */
+        get: operations["get_my_branch_api_v1_organizations_me_branches__branch_id__get"];
+        put?: never;
+        post?: never;
+        /** Deactivate My Branch */
+        delete: operations["deactivate_my_branch_api_v1_organizations_me_branches__branch_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update My Branch */
+        patch: operations["update_my_branch_api_v1_organizations_me_branches__branch_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/organizations/me/licenses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List My Licenses */
+        get: operations["list_my_licenses_api_v1_organizations_me_licenses_get"];
+        put?: never;
+        /** Create My License */
+        post: operations["create_my_license_api_v1_organizations_me_licenses_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/licenses/{license_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My License */
+        get: operations["get_my_license_api_v1_organizations_me_licenses__license_id__get"];
+        put?: never;
+        post?: never;
+        /** Deactivate My License */
+        delete: operations["deactivate_my_license_api_v1_organizations_me_licenses__license_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update My License */
+        patch: operations["update_my_license_api_v1_organizations_me_licenses__license_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/organizations/me/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List My Api Keys */
+        get: operations["list_my_api_keys_api_v1_organizations_me_api_keys_get"];
+        put?: never;
+        /** Create My Api Key */
+        post: operations["create_my_api_key_api_v1_organizations_me_api_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/api-keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke My Api Key */
+        delete: operations["revoke_my_api_key_api_v1_organizations_me_api_keys__key_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/api-keys/{key_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rotate My Api Key */
+        post: operations["rotate_my_api_key_api_v1_organizations_me_api_keys__key_id__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/schemas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List My Schemas
+         * @description Phase 4g: list the org's versioned document schemas.
+         */
+        get: operations["list_my_schemas_api_v1_organizations_me_schemas_get"];
+        put?: never;
+        /** Create My Schema */
+        post: operations["create_my_schema_api_v1_organizations_me_schemas_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/schemas/{schema_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update My Schema */
+        patch: operations["update_my_schema_api_v1_organizations_me_schemas__schema_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/organizations/me/schemas/{schema_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish My Schema */
+        post: operations["publish_my_schema_api_v1_organizations_me_schemas__schema_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/api-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get My Organization Api Usage
+         * @description Phase 4h: org-scoped API-usage aggregates (counts/dates only, no PII).
+         */
+        get: operations["get_my_organization_api_usage_api_v1_organizations_me_api_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List My Organizations
+         * @description Phase 4b: org-context read — every org with an ACTIVE membership.
+         */
+        get: operations["list_my_organizations_api_v1_organizations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get My Organization By Id
+         * @description Phase 4b: org-context read — an org the account belongs to (404 otherwise).
+         */
+        get: operations["get_my_organization_by_id_api_v1_organizations__organization_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/{organization_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List My Organization Members
+         * @description Phase 4b: members of MY org (owner|admin); 404 foreign, 403 member role.
+         */
+        get: operations["list_my_organization_members_api_v1_organizations__organization_id__members_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -600,11 +1057,85 @@ export interface components {
          * @enum {string}
          */
         AccountStatus: "pending" | "active" | "blocked" | "deleted";
+        /** ApiKeyCreate */
+        ApiKeyCreate: {
+            /** Name */
+            name: string;
+            /** Scopes */
+            scopes: components["schemas"]["OrganizationApiKeyScope"][];
+            /** Expires At */
+            expires_at?: string | null;
+        };
+        /**
+         * ApiKeyCreateResponse
+         * @description Returned once on create/rotate — includes the raw key.
+         */
+        ApiKeyCreateResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Name */
+            name: string;
+            /** Prefix */
+            prefix: string;
+            status: components["schemas"]["OrganizationApiKeyStatus"];
+            /** Permissions */
+            permissions: string[] | null;
+            /** Created By Account Id */
+            created_by_account_id: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Expires At */
+            expires_at: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Last Used At */
+            last_used_at: string | null;
+            /** Raw Key */
+            raw_key: string;
+        };
+        /** ApiKeyResponse */
+        ApiKeyResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Name */
+            name: string;
+            /** Prefix */
+            prefix: string;
+            status: components["schemas"]["OrganizationApiKeyStatus"];
+            /** Permissions */
+            permissions: string[] | null;
+            /** Created By Account Id */
+            created_by_account_id: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Expires At */
+            expires_at: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Last Used At */
+            last_used_at: string | null;
+        };
         /**
          * AuditAction
          * @enum {string}
          */
-        AuditAction: "LOGIN" | "LOGOUT" | "VIEW_PATIENT" | "VIEW_MEDICAL_RECORD" | "VIEW_DOCUMENT" | "DOWNLOAD_DOCUMENT" | "UPLOAD_DOCUMENT" | "CREATE_ENCOUNTER" | "UPDATE_ENCOUNTER" | "GRANT_ACCESS" | "REVOKE_ACCESS" | "VIEW_ANALYTICS";
+        AuditAction: "LOGIN" | "LOGOUT" | "VIEW_PATIENT" | "VIEW_MEDICAL_RECORD" | "VIEW_DOCUMENT" | "DOWNLOAD_DOCUMENT" | "UPLOAD_DOCUMENT" | "CREATE_ENCOUNTER" | "UPDATE_ENCOUNTER" | "GRANT_ACCESS" | "REVOKE_ACCESS" | "VIEW_ANALYTICS" | "ORGANIZATION_UPDATED" | "ORGANIZATION_CREATED" | "ORGANIZATION_ADMIN_ADDED" | "ORGANIZATION_BRANCH_CREATED" | "ORGANIZATION_BRANCH_UPDATED" | "ORGANIZATION_BRANCH_DEACTIVATED" | "ORGANIZATION_LICENSE_CREATED" | "ORGANIZATION_LICENSE_UPDATED" | "ORGANIZATION_LICENSE_DEACTIVATED" | "API_KEY_CREATED" | "API_KEY_REVOKED" | "API_KEY_AUTH_FAILED" | "INTEGRATION_DOCUMENT_UPLOADED" | "INTEGRATION_BATCH_CREATED" | "ORGANIZATION_SCHEMA_CREATED" | "ORGANIZATION_SCHEMA_UPDATED" | "ORGANIZATION_SCHEMA_PUBLISHED";
         /** AuditLogResponse */
         AuditLogResponse: {
             /**
@@ -635,6 +1166,16 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * BatchItemStatus
+         * @enum {string}
+         */
+        BatchItemStatus: "pending" | "accepted" | "rejected";
+        /**
+         * BatchStatus
+         * @enum {string}
+         */
+        BatchStatus: "accepted" | "processing" | "completed" | "partial" | "failed";
         /** Body_create_document_api_v1_patients__patient_id__documents_post */
         Body_create_document_api_v1_patients__patient_id__documents_post: {
             /** Upload */
@@ -660,6 +1201,106 @@ export interface components {
              * @default
              */
             title: string;
+        };
+        /** Body_submit_bulk_api_v1_integration_documents_bulk_post */
+        Body_submit_bulk_api_v1_integration_documents_bulk_post: {
+            /** Metadata */
+            metadata: string;
+            /** Files */
+            files: string[];
+        };
+        /** Body_submit_document_api_v1_integration_documents_post */
+        Body_submit_document_api_v1_integration_documents_post: {
+            /** Patient Email */
+            patient_email: string;
+            /** Upload */
+            upload: string;
+            document_type?: components["schemas"]["DocumentType"] | null;
+            /** External Id */
+            external_id?: string | null;
+            /** Branch Code */
+            branch_code?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** BranchCreate */
+        BranchCreate: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Address */
+            address?: string | null;
+            /** Phone */
+            phone?: string | null;
+        };
+        /** BranchResponse */
+        BranchResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Address */
+            address: string | null;
+            /** Phone */
+            phone: string | null;
+            status: components["schemas"]["BranchStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * BranchStatus
+         * @enum {string}
+         */
+        BranchStatus: "active" | "inactive";
+        /** BranchUpdate */
+        BranchUpdate: {
+            /** Code */
+            code?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Address */
+            address?: string | null;
+            /** Phone */
+            phone?: string | null;
+        };
+        /**
+         * BulkUploadResponse
+         * @description 202 acknowledgment of POST /integration/documents/bulk.
+         */
+        BulkUploadResponse: {
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            status: components["schemas"]["BatchStatus"];
+            /** Total Count */
+            total_count: number;
+            /** Accepted Count */
+            accepted_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
         };
         /**
          * CanonicalDataResponse
@@ -901,6 +1542,54 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * IntegrationDocumentResponse
+         * @description POST /integration/documents acknowledgment (Phase 4d, §4.8).
+         */
+        IntegrationDocumentResponse: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            /**
+             * Status
+             * @default processing
+             * @constant
+             */
+            status: "processing";
+            /** External Id */
+            external_id?: string | null;
+            /**
+             * Patient Id
+             * Format: uuid
+             */
+            patient_id: string;
+        };
+        /**
+         * IntegrationDocumentStatusResponse
+         * @description GET /integration/documents/{id} current state of an org-submitted document.
+         */
+        IntegrationDocumentStatusResponse: {
+            /**
+             * Document Id
+             * Format: uuid
+             */
+            document_id: string;
+            status: components["schemas"]["DocumentStatus"];
+            document_type: components["schemas"]["DocumentType"];
+            /** External Id */
+            external_id: string | null;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Document Date */
+            document_date?: string | null;
+            /** Created At */
+            created_at: string | null;
+        };
         /** JobResponse */
         JobResponse: {
             /**
@@ -932,6 +1621,425 @@ export interface components {
             /** Updated At */
             updated_at: string | null;
         };
+        /** LicenseCreate */
+        LicenseCreate: {
+            /** License Number */
+            license_number: string;
+            /** License Type */
+            license_type: string;
+            /** @default active */
+            status: components["schemas"]["OrganizationLicenseStatus"];
+            /** Issued At */
+            issued_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Scope */
+            scope?: string | null;
+            /** Issuer */
+            issuer?: string | null;
+        };
+        /** LicenseResponse */
+        LicenseResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** License Number */
+            license_number: string;
+            /** License Type */
+            license_type: string;
+            status: components["schemas"]["OrganizationLicenseStatus"];
+            /** Issued At */
+            issued_at: string | null;
+            /** Expires At */
+            expires_at: string | null;
+            /** Scope */
+            scope: string | null;
+            /** Issuer */
+            issuer: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** LicenseUpdate */
+        LicenseUpdate: {
+            /** License Number */
+            license_number?: string | null;
+            /** License Type */
+            license_type?: string | null;
+            status?: components["schemas"]["OrganizationLicenseStatus"] | null;
+            /** Issued At */
+            issued_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Scope */
+            scope?: string | null;
+            /** Issuer */
+            issuer?: string | null;
+        };
+        /**
+         * MembershipStatus
+         * @enum {string}
+         */
+        MembershipStatus: "pending" | "active" | "left";
+        /** OrganizationAdminCreate */
+        OrganizationAdminCreate: {
+            organization: components["schemas"]["OrganizationCreate"];
+            administrator: components["schemas"]["OrganizationMemberCreate"];
+        };
+        /**
+         * OrganizationApiKeyScope
+         * @enum {string}
+         */
+        OrganizationApiKeyScope: "organization.documents.upload" | "organization.documents.bulk_upload" | "organization.documents.read" | "organization.jobs.read";
+        /**
+         * OrganizationApiKeyStatus
+         * @enum {string}
+         */
+        OrganizationApiKeyStatus: "active" | "revoked" | "expired";
+        /**
+         * OrganizationApiUsageDay
+         * @description Per-day aggregates for an organization (Phase 4h monitoring).
+         *
+         *     Counts and rates only — this response intentionally carries **no PII**
+         *     (no patient emails, request paths, IPs or user agents) so it is safe to
+         *     serve to the organization's management users.
+         */
+        OrganizationApiUsageDay: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Requests */
+            requests: number;
+            /** Successes */
+            successes: number;
+            /** Errors */
+            errors: number;
+            /** Success Rate */
+            success_rate: number;
+            /** Error Rate */
+            error_rate: number;
+            /** Documents */
+            documents: number;
+            /** Documents Failed */
+            documents_failed: number;
+            /** Batches */
+            batches: number;
+            /** Batch Items Failed */
+            batch_items_failed: number;
+        };
+        /**
+         * OrganizationApiUsageResponse
+         * @description Aggregated API usage over an inclusive ``from``/``to`` day range.
+         *
+         *     ``days`` is a sparse per-day series (only days with at least one recorded
+         *     event); ``total_*``/``avg_*`` roll the series up. ``from``/``to`` are the
+         *     JSON keys (``from`` is a Python keyword, hence the field names below).
+         *
+         *     .. note:: day boundaries are UTC (v1 semantics).
+         */
+        OrganizationApiUsageResponse: {
+            /**
+             * From
+             * Format: date
+             */
+            from: string;
+            /**
+             * To
+             * Format: date
+             */
+            to: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Days */
+            days: components["schemas"]["OrganizationApiUsageDay"][];
+            /** Total Requests */
+            total_requests: number;
+            /** Total Successes */
+            total_successes: number;
+            /** Total Errors */
+            total_errors: number;
+            /** Overall Success Rate */
+            overall_success_rate: number;
+            /** Overall Error Rate */
+            overall_error_rate: number;
+            /** Total Documents */
+            total_documents: number;
+            /** Total Documents Failed */
+            total_documents_failed: number;
+            /** Total Batches */
+            total_batches: number;
+            /** Total Batch Items Failed */
+            total_batch_items_failed: number;
+        };
+        /**
+         * OrganizationBatchItemResponse
+         * @description One item of an upload batch (GET /integration/batches/{id}/items).
+         */
+        OrganizationBatchItemResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Item Index */
+            item_index: number;
+            /** Document Id */
+            document_id: string | null;
+            /** Patient Email */
+            patient_email: string;
+            document_type: components["schemas"]["DocumentType"];
+            /** External Id */
+            external_id: string | null;
+            status: components["schemas"]["BatchItemStatus"];
+            /** Error Code */
+            error_code: string | null;
+            /** Error Message */
+            error_message: string | null;
+            /** Created At */
+            created_at: string | null;
+        };
+        /**
+         * OrganizationBatchResponse
+         * @description An upload batch with its items (GET /integration/batches/{id}).
+         */
+        OrganizationBatchResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            status: components["schemas"]["BatchStatus"];
+            /** Total Count */
+            total_count: number;
+            /** Accepted Count */
+            accepted_count: number;
+            /** Failed Count */
+            failed_count: number;
+            /** Idempotency Key */
+            idempotency_key: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Items */
+            items: components["schemas"]["OrganizationBatchItemResponse"][];
+        };
+        /** OrganizationCreate */
+        OrganizationCreate: {
+            /** Name */
+            name: string;
+            type: components["schemas"]["OrganizationType"];
+            /** Inn */
+            inn: string;
+            /** Ogrn */
+            ogrn: string;
+            /** Legal Address */
+            legal_address?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Phone */
+            phone?: string | null;
+            /** Website */
+            website?: string | null;
+        };
+        /** OrganizationDocumentSchemaCreate */
+        OrganizationDocumentSchemaCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** @default other */
+            document_type: components["schemas"]["DocumentType"];
+            /** Schema Definition */
+            schema_definition: {
+                [key: string]: unknown;
+            };
+        };
+        /** OrganizationDocumentSchemaResponse */
+        OrganizationDocumentSchemaResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            document_type: components["schemas"]["DocumentType"];
+            /** Schema Definition */
+            schema_definition: {
+                [key: string]: unknown;
+            };
+            /** Version */
+            version: number;
+            status: components["schemas"]["OrganizationDocumentSchemaStatus"];
+            /** Created By Account Id */
+            created_by_account_id: string | null;
+            /** Published At */
+            published_at: string | null;
+            /** Created At */
+            created_at: string | null;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /**
+         * OrganizationDocumentSchemaStatus
+         * @enum {string}
+         */
+        OrganizationDocumentSchemaStatus: "draft" | "published";
+        /** OrganizationDocumentSchemaUpdate */
+        OrganizationDocumentSchemaUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            document_type?: components["schemas"]["DocumentType"] | null;
+            /** Schema Definition */
+            schema_definition?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * OrganizationLicenseStatus
+         * @enum {string}
+         */
+        OrganizationLicenseStatus: "active" | "expired" | "suspended" | "revoked" | "pending";
+        /** OrganizationMemberCreate */
+        OrganizationMemberCreate: {
+            /** Email */
+            email: string;
+            /** @default owner */
+            role: components["schemas"]["OrganizationMembershipRole"];
+        };
+        /** OrganizationMemberResponse */
+        OrganizationMemberResponse: {
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+            /**
+             * Account Id
+             * Format: uuid
+             */
+            account_id: string;
+            role: components["schemas"]["OrganizationMembershipRole"];
+            status: components["schemas"]["MembershipStatus"];
+            /**
+             * Joined At
+             * Format: date-time
+             */
+            joined_at: string;
+        };
+        /**
+         * OrganizationMembershipRole
+         * @description Organization-scoped role (Phase 4a, ``organization_memberships.role``).
+         *
+         *     Authorization for ``/organizations/me/*`` migrates from the legacy global
+         *     ``RoleCode.ORGANIZATION_ADMIN`` check to this column in Phase 4b; admin
+         *     onboarding never grants a global role.
+         * @enum {string}
+         */
+        OrganizationMembershipRole: "owner" | "admin" | "member";
+        /** OrganizationResponse */
+        OrganizationResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            type: components["schemas"]["OrganizationType"];
+            status: components["schemas"]["OrganizationStatus"];
+            /** Inn */
+            inn: string | null;
+            /** Ogrn */
+            ogrn: string | null;
+            /** Legal Address */
+            legal_address: string | null;
+            /** Email */
+            email: string | null;
+            /** Phone */
+            phone: string | null;
+            /** Website */
+            website: string | null;
+            verification_status: components["schemas"]["OrganizationVerificationStatus"];
+            /** Created By Account Id */
+            created_by_account_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * OrganizationStatus
+         * @enum {string}
+         */
+        OrganizationStatus: "active" | "inactive";
+        /**
+         * OrganizationType
+         * @enum {string}
+         */
+        OrganizationType: "clinic" | "hospital" | "private_practice" | "laboratory";
+        /** OrganizationUpdate */
+        OrganizationUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Inn */
+            inn?: string | null;
+            /** Ogrn */
+            ogrn?: string | null;
+            /** Legal Address */
+            legal_address?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Phone */
+            phone?: string | null;
+            /** Website */
+            website?: string | null;
+        };
+        /**
+         * OrganizationVerificationStatus
+         * @enum {string}
+         */
+        OrganizationVerificationStatus: "unverified" | "pending" | "verified" | "rejected";
         /** PatientCreateRequest */
         PatientCreateRequest: {
             person?: components["schemas"]["PersonUpdate"] | null;
@@ -956,6 +2064,16 @@ export interface components {
          * @enum {string}
          */
         PatientStatus: "active" | "inactive";
+        /**
+         * PatientSummaryResponse
+         * @description Lean counters for the profile page — no document metadata over the wire.
+         */
+        PatientSummaryResponse: {
+            /** Documents Count */
+            documents_count: number;
+            /** Read Grants Count */
+            read_grants_count: number;
+        };
         /** PermissionResponse */
         PermissionResponse: {
             /**
@@ -1383,6 +2501,156 @@ export interface operations {
             };
         };
     };
+    list_all_organizations_api_v1_admin_organizations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"][];
+                };
+            };
+        };
+    };
+    create_onboarded_organization_api_v1_admin_organizations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationAdminCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_api_v1_admin_organizations__organization_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_organization_members_api_v1_admin_organizations__organization_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationMemberResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_organization_member_api_v1_admin_organizations__organization_id__members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationMemberCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationMemberResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_access_grants_api_v1_patients__patient_id__access_grants_get: {
         parameters: {
             query?: never;
@@ -1634,6 +2902,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_summary_api_v1_patients_me_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatientSummaryResponse"];
                 };
             };
         };
@@ -2154,6 +3442,169 @@ export interface operations {
             };
         };
     };
+    submit_document_api_v1_integration_documents_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_submit_document_api_v1_integration_documents_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationDocumentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_document_api_v1_integration_documents__document_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationDocumentStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_bulk_api_v1_integration_documents_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_submit_bulk_api_v1_integration_documents_bulk_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_batch_api_v1_integration_batches__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationBatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_batch_items_api_v1_integration_batches__batch_id__items_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationBatchItemResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_job_api_v1_jobs__job_id__get: {
         parameters: {
             query?: never;
@@ -2172,6 +3623,788 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_organization_api_v1_organizations_me_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_organization_api_v1_organizations_me_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_branches_api_v1_organizations_me_branches_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BranchResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_my_branch_api_v1_organizations_me_branches_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BranchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BranchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_branch_api_v1_organizations_me_branches__branch_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BranchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_my_branch_api_v1_organizations_me_branches__branch_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_branch_api_v1_organizations_me_branches__branch_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BranchUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BranchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_licenses_api_v1_organizations_me_licenses_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_my_license_api_v1_organizations_me_licenses_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LicenseCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_license_api_v1_organizations_me_licenses__license_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                license_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_my_license_api_v1_organizations_me_licenses__license_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                license_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_license_api_v1_organizations_me_licenses__license_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                license_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LicenseUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LicenseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_api_keys_api_v1_organizations_me_api_keys_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_my_api_key_api_v1_organizations_me_api_keys_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_my_api_key_api_v1_organizations_me_api_keys__key_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_my_api_key_api_v1_organizations_me_api_keys__key_id__rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_schemas_api_v1_organizations_me_schemas_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationDocumentSchemaResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_my_schema_api_v1_organizations_me_schemas_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDocumentSchemaCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationDocumentSchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_schema_api_v1_organizations_me_schemas__schema_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                schema_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDocumentSchemaUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationDocumentSchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_my_schema_api_v1_organizations_me_schemas__schema_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path: {
+                schema_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationDocumentSchemaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_organization_api_usage_api_v1_organizations_me_api_usage_get: {
+        parameters: {
+            query?: {
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: {
+                "x-organization-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationApiUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_organizations_api_v1_organizations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"][];
+                };
+            };
+        };
+    };
+    get_my_organization_by_id_api_v1_organizations__organization_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_organization_members_api_v1_organizations__organization_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationMemberResponse"][];
                 };
             };
             /** @description Validation Error */

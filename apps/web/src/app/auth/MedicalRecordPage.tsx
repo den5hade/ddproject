@@ -75,7 +75,7 @@ export function MedicalRecordPage() {
             <div className="mt-4 flex items-center justify-between gap-4">
               <p className="text-sm text-ink-muted">{strings.common.privacyLine}</p>
               <Link
-                to="/profile"
+                to="/profile/edit"
                 className="shrink-0 text-sm font-medium text-primary underline-offset-4 hover:underline"
               >
                 {strings.record.editInProfile}

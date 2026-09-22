@@ -127,6 +127,9 @@ export function useUploader(patientId: string | undefined) {
           void queryClient.invalidateQueries({
             queryKey: keys.documents(patientId),
           });
+          void queryClient.invalidateQueries({
+            queryKey: keys.patientSummary(),
+          });
           toast(strings.documents.uploadedToast, {
             description: document.title || document.original_filename,
           });

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from app.domain.access import GrantStatus
@@ -36,17 +37,96 @@ async def _account_id(client, token: str) -> UUID:
     return UUID(resp.json()["id"])
 
 
-async def _grant(db_factory, patient_id: UUID, account_id: UUID) -> None:
+async def _grant(
+    db_factory,
+    patient_id: UUID,
+    account_id: UUID,
+    *,
+    view: bool = False,
+    status: GrantStatus = GrantStatus.ACTIVE,
+    expires_at: datetime | None = None,
+) -> None:
     async with db_factory() as session:
         rbac = RbacRepository(session)
         await rbac.seed_defaults()
         await rbac.assign_roles(account_id, [RoleCode.SPECIALIST.value])
         session.add(
             PatientAccessGrant(
-                patient_id=patient_id, account_id=account_id, status=GrantStatus.ACTIVE
+                patient_id=patient_id,
+                account_id=account_id,
+                status=status,
+                can_view_documents=view,
+                expires_at=expires_at,
             )
         )
         await session.commit()
+
+
+async def test_summary_requires_auth(app_client):
+    resp = await app_client.get("/api/v1/patients/me/summary")
+    assert resp.status_code == 401
+
+
+async def test_summary_zero_defaults(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    resp = await app_client.get("/api/v1/patients/me/summary", headers=_auth(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["documents_count"] == 0
+    assert body["read_grants_count"] == 0
+
+
+async def test_summary_counts_documents(app_client, fake_redis):
+    token = await _register(app_client, fake_redis, _identity())
+    headers = _auth(token)
+    patient_id = UUID((await app_client.get("/api/v1/patients/me", headers=headers)).json()["id"])
+
+    resp = await app_client.post(
+        f"/api/v1/patients/{patient_id}/documents",
+        headers=headers,
+        files={"upload": ("scan.pdf", b"%PDF-1.4 test", "application/pdf")},
+        data={"title": "Blood test", "document_type": "other"},
+    )
+    assert resp.status_code == 201
+
+    summary = await app_client.get("/api/v1/patients/me/summary", headers=headers)
+    assert summary.status_code == 200
+    assert summary.json()["documents_count"] == 1
+    assert summary.json()["read_grants_count"] == 0
+
+
+async def test_summary_counts_only_active_view_grants(app_client, fake_redis, db_factory):
+    owner = await _register(app_client, fake_redis, _identity())
+    spec_read = await _register(app_client, fake_redis, _identity())
+    spec_upload = await _register(app_client, fake_redis, _identity())
+    spec_revoked = await _register(app_client, fake_redis, _identity())
+    spec_expired = await _register(app_client, fake_redis, _identity())
+
+    created = await app_client.post("/api/v1/patients", headers=_auth(owner))
+    patient_id = UUID(created.json()["id"])
+
+    await _grant(db_factory, patient_id, await _account_id(app_client, spec_read), view=True)
+    await _grant(db_factory, patient_id, await _account_id(app_client, spec_upload))
+    await _grant(
+        db_factory,
+        patient_id,
+        await _account_id(app_client, spec_revoked),
+        view=True,
+        status=GrantStatus.REVOKED,
+    )
+    await _grant(
+        db_factory,
+        patient_id,
+        await _account_id(app_client, spec_expired),
+        view=True,
+        expires_at=datetime.now(UTC) - timedelta(days=1),
+    )
+
+    summary = await app_client.get(
+        "/api/v1/patients/me/summary", headers=_auth(owner)
+    )
+    assert summary.status_code == 200
+    assert summary.json()["read_grants_count"] == 1
 
 
 async def test_patients_routes_require_auth(app_client):

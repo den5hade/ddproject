@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.medical import DocumentStatus, DocumentType, ProcessingJobType
@@ -117,6 +117,15 @@ class DocumentRepository:
             select(Document.id).where(Document.medical_record_id == medical_record_id)
         )
         return len(result.scalars().all())
+
+    async def count_documents(self, medical_record_id: UUID) -> int:
+        """Aggregate count for a medical record (no row materialization)."""
+        count = await self._session.scalar(
+            select(func.count(Document.id)).where(
+                Document.medical_record_id == medical_record_id
+            )
+        )
+        return count or 0
 
 
 class DocumentVersionRepository:
