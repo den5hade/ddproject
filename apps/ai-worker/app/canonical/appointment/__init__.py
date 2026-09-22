@@ -1,0 +1,1 @@
+"""Appointment canonical handling (AppointmentCanonical, planned)."""

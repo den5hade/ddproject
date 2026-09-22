@@ -45,9 +45,10 @@ account-api: persists canonical into document_extractions.data, status COMPLETED
 Triggered by `DocumentUploaded`.
 
 1. Loads the source object from S3 (`event.storage_key`).
-2. For each page, renders it to an image (`pdf_converter.convert_pdf_to_images`,
-   PyMuPDF, 300 DPI PNG) and sends it to the **vision model** to be OCR'd
-   (`ai_client.extract_text_from_image`), producing markdown per page.
+2. For each page, renders it to an image (`app/ingestion/loader.py`
+   `convert_pdf_to_images`, PyMuPDF, 300 DPI PNG) and sends it to the
+   **vision model** to be OCR'd (`app/llm/client.py`
+   `extract_text_from_image`), producing markdown per page.
 3. Joins pages into one unstructured markdown and uploads it to S3
    (`.../unstructured.md`).
 4. Publishes `document.converted` (`DocumentConverted`) with the output key plus
@@ -119,19 +120,22 @@ shared monorepo packages plus its own app modules.
 ### App modules (`apps/ai-worker/app`)
 
 ```text
-main.py            Consumer loop: subscribe to document.convert → dispatch handlers
-config.py          Settings (rabbitmq, ai, s3, prompts_dir) from env/.env
-processor.py       DocumentProcessor: handle_converting + handle_structuring + helpers
-ai_client.py       AIClient: vision OCR (extract_text_from_image) + canonical JSON
-                   (extract_canonical), token usage capture
-pdf_converter.py   convert_pdf_to_images / get_pdf_page_count (PyMuPDF)
+main.py            Thin entrypoint: module mode keeps pdf-* packages resolvable
+worker/            runner (consume loop + dispatch), lifecycle (ensure_bucket)
+pipeline/          DocumentPipeline: handle_converting + handle_structuring
+ingestion/         loader (PDF → page images), ocr (vision LLM → page markdown)
+llm/               AIClient: vision OCR + canonical JSON extraction, usage capture
+classification/    classify_document_type (offline heuristic keyword classifier)
+canonical/         extraction/validation/rendering glue over pdf-canonical schemas
+artifacts/         CloudS3 construction, markdown_key/KIND* constants, I/O helpers
+messaging/         QueueConsumer / MessagePublisher wrappers, routing keys
+config/            Settings (rabbitmq, ai, s3, prompts_dir) + logging setup
 prompts/           ocr.yaml, canonical.yaml (per-doc-type), legacy structuring.yaml
 ```
 
-> `worker.py`, `queue.py`, `app/llm/`, and `app/pipeline/` are empty scaffolding
-> (0 bytes) carried from the monorepo bootstrap; they are **not** part of the
-> current flow. `structuring.yaml` is legacy — active extraction uses
-> `canonical.yaml`.
+> `pii/`, `provenance/`, `repositories/`, `health/`, and the sub-typed
+> `classification/signals/`, `canonical/registry/` modules are planned-slot
+> scaffolds (per the AI_FLOW 2.0 architecture), not part of the current flow.
 
 ### Prompts (`settings.prompts_dir` = `app/prompts`)
 
@@ -233,13 +237,19 @@ uv run pytest          # unit tests (25)
 
 ```text
 app/
-  main.py           consumer entrypoint (async run)
-  config.py         pydantic-settings Settings
-  processor.py      DocumentProcessor (two stage handlers)
-  ai_client.py      AIClient (OpenAI-compatible vision + JSON extraction)
-  pdf_converter.py  PyMuPDF page rendering
+  main.py           thin entrypoint (imports worker.runner)
+  worker/           runner (consumer loop), lifecycle (ensure_bucket)
+  pipeline/         DocumentPipeline: converting + structuring stage handlers
+  ingestion/        loader (pdf/pdf/images → page images), ocr (page → markdown)
+  llm/              AIClient (OpenAI-compatible vision + JSON extraction)
+  classification/   classify_document_type (offline heuristic keyword classifier)
+  canonical/        extraction/validation/rendering glue, schema registry slots
+  artifacts/        CloudS3 construction, markdown_key/KIND* constants, I/O helpers
+  messaging/        QueueConsumer / MessagePublisher, routing keys, message decode
+  config/           Settings from env/.env + logging setup
   prompts/          ocr.yaml, canonical.yaml (+ legacy structuring.yaml)
-tests/              unit tests (conftest, prompt manager, converter, client, processor)
+  pii/ provenance/ repositories/ health/   planned-slot scaffolding
+tests/              unit tests (conftest, prompt manager, loader, client, pipeline…)
 pyproject.toml      uv workspace member ([tool.uv] package = false)
 Dockerfile          container image (uv, python 3.12)
 ```

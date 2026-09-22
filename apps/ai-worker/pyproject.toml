@@ -1,14 +1,13 @@
 [project]
 name = "ai-worker"
 version = "0.1.0"
-description = "Consumes converted docs, extracts data per schema with an LLM, embeds and stores in Qdrant."
+description = "Consumes uploaded docs, converts them to markdown via OCR, structures them into canonical docs with an LLM, and publishes results."
 requires-python = ">=3.12"
 dependencies = [
     "aio-pika>=9.4",
     "openai>=1.50",
     "pymupdf>=1.24",
     "pyyaml>=6.0",
-    "qdrant-client>=1.12",
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "pdf-contracts",

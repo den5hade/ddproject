@@ -1,0 +1,1 @@
+"""Generic canonical handling (GenericCanonical 2.0, planned)."""
