@@ -2,7 +2,7 @@
 
 **Scope.** This plan defines **M1 – Classification 2.0 contract** only (specification, schemas, models, service interfaces, normalization/signals/scoring contracts, and versioning). No implementation of detection logic, no LLM calls, no pipeline wiring in this plan. The contour is built on existing infra only — no parallel architecture.
 
-**Depth sources:** [CLASSIFICATION 2.0/SUM.md](./SUM.md), [AI_FLOW 2.0/STRUCTURE.md](../STRUCTURE.md#1-ai-worker), [AI_FLOW 2.0/ORDER.md](../ORDER.md#1-classification-20), [IMPL_PLAN_SCHEMA.md](../../operational/IMPL_PLAN_SCHEMA.md). The plan keeps condensed summaries only; full design stays in the SUM/spec docs.
+**Depth sources:** [IMPL_RPRT.md](./IMPL_RPRT.md) (implementation report; the superseded design spec is preserved in git history, referenced below as "design-spec §…"), [AI_FLOW 2.0/STRUCTURE.md](../STRUCTURE.md#1-ai-worker), [AI_FLOW 2.0/ORDER.md](../ORDER.md#1-classification-20), [IMPL_PLAN_SCHEMA.md](../../operational/IMPL_PLAN_SCHEMA.md). The plan keeps condensed summaries only; full design is superseded — the implementation report and code are the source of truth (original spec in git history).
 
 **Revision 1** — initial M1-only plan (2025-09-22).
 
@@ -26,9 +26,9 @@
 
 **Invariants (locked):**
 - Classification is **deterministic and rule-based by contract** (method = `"rule_score"` in the contract; LLM fallback remains out of scope for M1). 
-- Boundary: *Classification answers “what kind of document is this?”; Extraction answers “what structured medical information is contained in this document?”* (per SUM.md §1443). 
+- Boundary: *Classification answers “what kind of document is this?”; Extraction answers “what structured medical information is contained in this document?”* (per design-spec §1443). 
 - **No import dependency** from `classification/` to `canonical/extraction` schemas (one-way dependency: pipeline/orchestration maps `document_type` → schema via `SchemaResolver`).
-- Flat module layout inside `apps/ai-worker/app/classification/` (aligns with STRUCTURE.md §4). The `domain/` subpackage proposed in SUM.md §33 is **not used** in this plan; this is an explicit deviation from SUM.md and is recorded here (see §7).
+- Flat module layout inside `apps/ai-worker/app/classification/` (aligns with STRUCTURE.md §4). The `domain/` subpackage proposed in design-spec §33 is **not used** in this plan; this is an explicit deviation from the design spec and is recorded here (see §7).
 - `NormalizedDocument` is introduced as a contract type (separate from existing canonical extraction models). Marker.md enters pipeline as text; normalization produces `NormalizedDocument` (structure: `raw_text`, `headings`, `tables`, `paragraphs`, `metadata`).
 - Classification result is an explicit `ClassificationResult` object (not a bare string). Pipeline integration point is the `ClassificationService.classify` contract (wiring deferred to M2/M3).
 - Versioning is mandatory: `classifier_version = "2.0.0"` constant; any future change to the contract increments version per SemVer (policy in §7).
@@ -61,7 +61,7 @@
 
 **Verification:** 16 tests pass (`uv run pytest tests/unit/classification`), `make lint` clean on touched paths, import smoke check passes.
 
-**Deviation:** flat layout within `apps/ai-worker/app/classification/` chosen over the `domain/` subpackage proposed in SUM.md §33, matching STRUCTURE.md §4 and existing scaffolding (identical to the deviation recorded in §7).
+**Deviation:** flat layout within `apps/ai-worker/app/classification/` chosen over the `domain/` subpackage proposed in design-spec §33, matching STRUCTURE.md §4 and existing scaffolding (identical to the deviation recorded in §7).
 
 ### Phase 2 — Schemas [x] (2025-09-22)
 
@@ -163,7 +163,7 @@
 - `apps/ai-worker/app/classification/__init__.py` may export `NormalizedDocument`.
 
 **Deps:** None (uses stdlib only).  
-**Accept:** Types exist, importable, frozen dataclass with fields per SUM.md §§15–16. No parsing logic.
+**Accept:** Types exist, importable, frozen dataclass with fields per design-spec §§15–16. No parsing logic.
 
 ### Phase 5 — Signals contract [x]
 
@@ -210,7 +210,7 @@
 
 ## 4. Locked design reference (condensed)
 
-**Boundary & invariants:** Classification answers “what kind?” (not extraction). Deterministic rule-based contract (method `"rule_score"`). Flat layout (no `domain/` subpackage) — this is an **explicit deviation** from CLASSIFICATION 2.0/SUM.md §33; see §7. `NormalizedDocument` is a new contract type (separate from canonical extraction models). No classification→extraction import.
+**Boundary & invariants:** Classification answers “what kind?” (not extraction). Deterministic rule-based contract (method `"rule_score"`). Flat layout (no `domain/` subpackage) — this is an **explicit deviation** from the design spec §33; see §7. `NormalizedDocument` is a new contract type (separate from canonical extraction models). No classification→extraction import.
 
 **ClassificationResult contract (locked shape):**
 ```text
@@ -299,7 +299,7 @@ warnings (list[str])
 ## 7. Notes & conventions
 
 ### Gotchas (verified)
-- **Flat vs domain layout deviation (explicit):** STRUCTURE.md §4 shows flat `classification/{models,schemas,service,validators,exceptions}.py`; SUM.md §33 proposes `classification/domain/{enums,models}.py`. We choose **flat layout** to match existing scaffolding and STRUCTURE.md. This is a `Deviation:` and will be recorded in Phase 1 Implementation Status if/when phases are marked done later. No code moves of non-existent domain code required.
+- **Flat vs domain layout deviation (explicit):** STRUCTURE.md §4 shows flat `classification/{models,schemas,service,validators,exceptions}.py`; design-spec §33 proposes `classification/domain/{enums,models}.py`. We choose **flat layout** to match existing scaffolding and STRUCTURE.md. This is a `Deviation:` and will be recorded in Phase 1 Implementation Status if/when phases are marked done later. No code moves of non-existent domain code required.
 - **Existing keyword classifier remains intact in M1.** Contract-only changes; no behavior change to pipeline. Existing tests (`test_classifier.py`) must continue to pass.
 - `NormalizedDocument` is new (not present in codebase). Keep separate from `packages/canonical` models to avoid coupling classification to extraction schemas.
 - Use string annotations + `TYPE_CHECKING` for `ProcessingContext`/`NormalizedDocument` cross-imports (avoid cycles between `classification` and `pipeline`).
@@ -307,12 +307,12 @@ warnings (list[str])
 
 ### Open decisions (defaults chosen)
 - **Normalization method signature:** `TextNormalizer.normalize(markdown: str) -> NormalizedDocument` (sync). Default chosen (normalization is pure string/structure transform). Can revisit to async if OCR/IO added later.
-- **Subtype optionality:** `document_subtype: str | None = None` (per SUM.md). Default `None` allowed.
+- **Subtype optionality:** `document_subtype: str | None = None` (per the design spec). Default `None` allowed.
 - **Generic mapping:** `discharge/diagnosis/imaging/consultation` → `"generic.v1"` until specialized canonical schemas exist. Default chosen to keep pipeline stable.
 - **Confidence range/documentation:** enforce 0.0–1.0 in comments only (no validator in M1). Default documented.
 
 ### Risks (mitigations in place)
-- **Spec drift between STRUCTURE.md and SUM.md:** Mitigated by explicit deviation note above and choosing one layout (flat). 
+- **Spec drift between STRUCTURE.md and the design spec:** Mitigated by explicit deviation note above and choosing one layout (flat). 
 - **Premature implementation:** M1 is contract-only (stubs, protocols, types). No detection logic prevents behavior changes. 
 - **Missing type-check in CI:** Repo has no mypy/pyright. Mitigation: rely on Pydantic validation + import tests + ruff. If type-checking becomes required later, evaluate tooling separately.
 

@@ -1,7 +1,7 @@
 PYTHON  := uv
 WEB_DIR := apps/web
 
-.PHONY: help setup setup-web lock lint lint-web format-web test test-api test-web test-e2e test-integration generate-api-types build-web dev-web compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-stop compose-ai-worker-start compose-ai-worker-logs migrate
+.PHONY: help setup setup-web lock lint lint-web format-web test test-api test-web test-e2e test-integration generate-api-types build-web dev-web eval-classification compose-dev compose-start compose-stop compose-down compose-logs compose-ai-worker compose-ai-worker-stop compose-ai-worker-start compose-ai-worker-logs migrate
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ build-web: ## Build the React SPA
 
 dev-web: ## Run the Vite dev server (proxies /api to account-api:8000)
 	cd $(WEB_DIR) && npm run dev
+
+eval-classification: ## Run the Classification 2.0 eval report (CLI must run from apps/ai-worker)
+	cd apps/ai-worker && uv run python -m app.classification.evaluate
 
 compose-dev: ## Build & start dev stack: postgres, rabbitmq, redis, account-api, workers
 	docker compose -f infrastructure/development/docker-compose.yml up -d --build

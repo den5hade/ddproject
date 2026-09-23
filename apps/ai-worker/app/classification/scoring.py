@@ -28,8 +28,9 @@ from app.classification.models import (
     DocumentType,
 )
 
-CLASSIFIER_VERSION = "2.0.0"
-"""Classification contract version (SemVer). Baseline for M1."""
+CLASSIFIER_VERSION = "2.1.0"
+"""Classification contract version (SemVer). Baseline 2.0.0; 2.1.0 = M3
+subtype calibration (microbiology, finding F2)."""
 
 # Contract constants.
 WEIGHT_STRONG = 5.0

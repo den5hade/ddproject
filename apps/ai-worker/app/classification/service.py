@@ -151,15 +151,24 @@ class RuleBasedClassificationService(ClassificationServiceBase):
 
     @staticmethod
     def _laboratory_subtype(signals: Sequence[ClassificationSignal]) -> str | None:
-        """Laboratory subtype: hematology >= biomarker and > 0 else biomarker."""
+        """Laboratory subtype: dominant marker family.
+
+        M3 calibration (2.1.0, finding F2) adds ``microbiology`` for culture
+        results that fire ``laboratory.microbiology_marker``. Microbiology
+        requires strict dominance over hematology/biomarker; hematology wins
+        ties with biomarker (backward-compatible with the M2 rule).
+        """
         def score_of(name: str) -> float:
             return sum(signal_score(s) for s in signals if s.name == name)
 
         hematology = score_of("laboratory.hematology_marker")
         biomarker = score_of("laboratory.biomarker")
+        microbiology = score_of("laboratory.microbiology_marker")
+        if microbiology > 0 and microbiology > hematology and microbiology > biomarker:
+            return LaboratorySubtype.MICROBIOLOGY.value
         if hematology > 0 and hematology >= biomarker:
             return LaboratorySubtype.HEMATOLOGY.value
-        if biomarker > 0 and biomarker > hematology:
+        if biomarker > 0:
             return LaboratorySubtype.BIOCHEMISTRY.value
         return None
 

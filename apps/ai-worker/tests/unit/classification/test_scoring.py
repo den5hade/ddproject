@@ -35,7 +35,7 @@ def test_new_scoring_constants():
     assert AMBIGUITY_MARGIN_RATIO == 0.25
     assert THRESH_HIGH_MIN == 0.90
     assert THRESH_MED_LOW == 0.70
-    assert CLASSIFIER_VERSION == "2.0.0"
+    assert CLASSIFIER_VERSION == "2.1.0"
 
 
 def test_signal_score_formula():

@@ -4,7 +4,7 @@ Signals (name convention ``appointment.<signal>``): appointment_section,
 doctor_specialty, cabinet, appointment_time, key_value_patterns (structural
 key:value rows in tables), plus contradictory ``appointment.laboratory_evidence``
 (high-precision laboratory phrases that make an appointment reading less
-likely). Phrase coverage follows SUM.md §11 and the appointment-confirmation
+likely). Phrase coverage follows design-spec §11 and the appointment-confirmation
 regression marker; calibration is M3 evaluation work.
 """
 

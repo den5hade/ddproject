@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "notes": "Regression dataset for Classification 2.0. Real markers are copies of .dev/flow_upload_test/ (2026-09-23) plus datalab-produced markers (2026-09-23: PDF-text, paper-result photos, mobile print screen). Synthetic fixtures cover prescription, a second appointment, the lab-without-keywords (false-generic) edge and a generic document. Expected values reflect the M2 rule-based classifier; recalibration in M3 may update them.",
+  "notes": "Regression dataset for Classification 2.0. Real markers are copies of .dev/flow_upload_test/ (2026-09-23) plus datalab-produced markers (2026-09-23: PDF-text, paper-result photos, mobile print screen). Synthetic fixtures cover prescription, a second appointment, the lab-without-keywords (false-generic) edge and a generic document. Expected values reflect the rule-based classifier; the Helix culture result subtype was corrected to \"microbiology\" during the M3 ground-truth audit (2.1.0, finding F2).",
   "fixtures": [
     {
       "file": "laboratory/fbbcb675.md",
@@ -34,7 +34,7 @@
       "file": "laboratory/datalab-output-helix_3_photo.jpeg.md",
       "source": "real",
       "expected_type": "laboratory",
-      "expected_subtype": null,
+      "expected_subtype": "microbiology",
       "expected_decision": "accept"
     },
     {

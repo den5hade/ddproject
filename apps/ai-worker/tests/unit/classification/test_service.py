@@ -124,7 +124,7 @@ async def test_lab_marker_classifies_laboratory_hematology():
     assert result.decision == ClassificationDecision.ACCEPT
     assert result.confidence_level == ClassificationConfidenceLevel.HIGH
     assert result.method == "rule_score"
-    assert result.classifier_version == "2.0.0"
+    assert result.classifier_version == "2.1.0"
     assert any(s.score > 0 for s in result.signals)
 
 

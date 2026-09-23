@@ -132,7 +132,7 @@ async def test_structuring_publishes_document_analysis_completed(
     assert completed.data["classification_key"].endswith("/classification_result.json")
     assert completed.data["classification"]["document_type"] == "other"
     assert completed.data["classification"]["decision"] == "fallback"
-    assert completed.data["classification"]["classifier_version"] == "2.0.0"
+    assert completed.data["classification"]["classifier_version"] == "2.1.0"
 
 
 @pytest.mark.asyncio

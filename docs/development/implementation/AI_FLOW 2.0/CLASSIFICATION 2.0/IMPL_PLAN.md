@@ -2,7 +2,7 @@
 
 **Scope.** Implements Classification 2.0 (ORDER.md **M2**): a deterministic, rule-based classifier replaces the legacy keyword classifier as the pipeline's document-type router. Built on the M1 contract ([CONTRACT_IMPL_PLAN.md](./CONTRACT_IMPL_PLAN.md), done `c3a3763`) and existing infra only — no parallel architecture. Delivers normalization, signal detectors (laboratory/appointment/prescription), rule scoring + `ClassificationService`, a concrete `SchemaResolver`, pipeline wiring with classification persistence (event metadata + versioned S3 `classification_result.json` artifact), and the regression dataset. Evaluation/calibration (accuracy, schema-validity, latency, token usage, reproducibility — ORDER **M3**) is out of scope; M3 consumes this implementation as-is.
 
-**Depth sources:** [SUM.md](./SUM.md), [CONTRACT_IMPL_PLAN.md](./CONTRACT_IMPL_PLAN.md), [ORDER.md](../ORDER.md), [SUMMARY.md](../SUMMARY.md), [STRUCTURE.md](../STRUCTURE.md), [IMPL_PLAN_SCHEMA.md](../../operational/IMPL_PLAN_SCHEMA.md). Full signal regexes/weights stay in SUM.md §§8–13; this plan is the runbook.
+**Depth sources:** [IMPL_RPRT.md](./IMPL_RPRT.md) (implementation report; superseded design spec preserved in git history), [CONTRACT_IMPL_PLAN.md](./CONTRACT_IMPL_PLAN.md), [ORDER.md](../ORDER.md), [SUMMARY.md](../SUMMARY.md), [STRUCTURE.md](../STRUCTURE.md), [IMPL_PLAN_SCHEMA.md](../../operational/IMPL_PLAN_SCHEMA.md). Full signal regexes/weights hold in the detector modules (`app/classification/signals/*.py`); this plan is the runbook.
 
 **Revision 1** — initial M2 plan (2026-09-23).
 
@@ -244,3 +244,52 @@ Each phase: implement → update status in all three places (§1 table, §3 head
 ### Conventions
 - Follow `docs/development/CONTRIBUTING.md`; keep changes localized to `apps/ai-worker/app/classification/`, `apps/ai-worker/app/pipeline/`, `apps/ai-worker/app/canonical/rendering.py`, `packages/storage`, `packages/canonical/metadata.py`, plus tests/fixtures.
 - Deviations from this plan, if any, are labeled `Deviation:` in a phase's Implementation Status paragraph when signed off.
+
+## 8. M3 addendum (Evaluation & calibration — done 2026-09-23)
+
+**Scope.** M3 (ORDER.md) ran against this implementation per
+[EVAL_IMPL_PLAN.md](./EVAL_IMPL_PLAN.md) (Phases 1–5, all `[x]`): dedicated
+eval tooling, a ground-truth audit of the 11-fixture manifest, a
+findings-cited calibration, count-based regression gates, and a close-out
+report.
+
+**Tooling added (unchanged pipeline behavior).** `app/classification/evaluate.py`
+(CLI `--json`/`--report`, design-spec Phase 9 shape), `app/classification/fixtures.py`
+(app-owned manifest loader; `tests/support/classification_fixtures.py` now
+delegates to it), metrics/domain-rates/confidence-stats helpers (all Pydantic).
+Test surface: `tests/unit/classification/test_evaluate.py` + tightened
+`test_regression_dataset.py`; Makefile target `make eval-classification`.
+
+**Calibration applied (report-driven, findings-cited — F2 only).** The Helix
+culture result (`laboratory/datalab-output-helix_3_photo.jpeg.md`) fired
+`laboratory.microbiology_marker` ×20 but the M2 subtype rule only emitted
+`hematology`/`biochemistry` → stored `subtype=null` (projection, not truth).
+`service._laboratory_subtype` gained a `microbiology` branch with strict
+dominance; manifest `expected_subtype` flipped to `microbiology`;
+`CLASSIFIER_VERSION` bumped `2.0.0 → 2.1.0` per the M1 §7 policy (output-altering
+calibration). This supersedes the §0 line-39 invariant ("`2.0.0` holds through
+M2") — the 2.1.0 calibration point predicted there has now materialized. F1
+(saturation at 1.00), F4 (biochemistry over-fire), F5 (gemotest urinalysis
+note) were **not** applied: not evidenced / expected behavior on clear
+documents. Scoring constants unchanged (`0.90`/`0.70`, `SCORE_FLOOR=5.0`,
+`0.25` margin, client-hint +5).
+
+**Subtype rule (2.1.0):** `microbiology` if its score strictly dominates
+hematology and biomarker; else `hematology` if `≥ biomarker`; else
+`biochemistry` if biomarker > 0; else `None`. M2 branches preserved
+(hematology still wins ties with biomarker).
+
+**Regression gates (count-based at N=11).** `wrong_schema == 0` on real
+markers, `false_laboratory == 0`, recall ≥ 0.95, CLI metrics equal
+ground-truth counts. `ambiguous` is report-only at N=11. Verified: 11/11
+recall, accuracy 1.0, suite green at `2.1.0` (classification 139, pipeline 9,
+ruff clean on `apps/ai-worker`).
+
+**Eval report artifact.** `apps/ai-worker/reports/classification-eval-20260923.md`
+(gitignored; regenerable via `make eval-classification` with `--report`),
+contains findings → changes → gate results → ORDER.md DoD verification table.
+
+**Dataset-scaling caveat.** M3 gated on counts (1 document ≈ 9% at N=11). When
+the real-marker set grows past ~50: re-calibrate on the larger sample, switch
+gates to the design-spec §30 percentage targets, and re-run the manifest audit
+before any further version bump.

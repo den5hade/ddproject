@@ -37,6 +37,8 @@ apps/web/dist/
 
 # Runtime temp storage
 tmp/
+# Eval/calibration report artifacts (regenerable via `make eval-classification` + `--report`)
+apps/ai-worker/reports/
 # Playwright
 apps/web/test-results/
 apps/web/playwright-report/

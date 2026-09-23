@@ -7,7 +7,7 @@ normalization (NFC), case folding, whitespace collapse and punctuation
 normalization for deterministic matching, plus markdown structure parsing into
 headings / table blocks / paragraphs.
 
-Markdown structure is **preserved, not stripped** (SUM.md §15): classifiers
+Markdown structure is **preserved, not stripped** (design-spec §15): classifiers
 keep access to ``headings``, ``tables`` and ``paragraphs`` instead of a single
 flattened string, so structural signals (table headers, key:value rows) can be
 extracted later.

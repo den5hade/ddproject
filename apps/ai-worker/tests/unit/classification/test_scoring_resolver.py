@@ -22,7 +22,7 @@ from app.classification.scoring import (
 
 
 def test_classifier_version_constant():
-    assert CLASSIFIER_VERSION == "2.0.0"
+    assert CLASSIFIER_VERSION == "2.1.0"
 
 
 def test_contract_weight_constants():
@@ -109,7 +109,7 @@ def test_full_public_api_smoke():
         NormalizedDocument,
     )
 
-    assert CLASSIFIER_VERSION == "2.0.0"
+    assert CLASSIFIER_VERSION == "2.1.0"
     assert DocumentType.LABORATORY == "laboratory"
     assert ClassificationDecision.ACCEPT == "accept"
     assert ClassificationConfidenceLevel.HIGH == "high"

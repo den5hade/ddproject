@@ -4,7 +4,7 @@ Signals (name convention ``prescription.<signal>``): drug_terms (лексical:
 рецепт/назначение/препарат/лекарственное средство/таблетки/…), dosage_frequency
 (дозировка/принимать/курс/раз в день/перед едой/…), struct_medication_headers
 (structural table headers declaring a drug/knznacen list). Keyword lists follow
-SUM.md §12 and the legacy keyword classifier; calibration is M3 evaluation work.
+design-spec §12 and the legacy keyword classifier; calibration is M3 evaluation work.
 """
 
 from app.classification.models import ClassificationSignal
