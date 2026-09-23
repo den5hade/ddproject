@@ -2,6 +2,7 @@
 
 from storage import (
     MARKDOWN_KIND_CANONICAL,
+    MARKDOWN_KIND_CLASSIFICATION,
     MARKDOWN_KIND_STRUCTURED,
     MARKDOWN_KIND_UNSTRUCTURED,
     markdown_key,
@@ -9,6 +10,7 @@ from storage import (
 
 __all__ = [
     "MARKDOWN_KIND_CANONICAL",
+    "MARKDOWN_KIND_CLASSIFICATION",
     "MARKDOWN_KIND_STRUCTURED",
     "MARKDOWN_KIND_UNSTRUCTURED",
     "build_markdown_key",

@@ -9,11 +9,13 @@ from storage.s3 import ALLOWED_MIME_TYPES, CloudS3, StorageConfig
 MARKDOWN_KIND_UNSTRUCTURED = "unstructured"
 MARKDOWN_KIND_STRUCTURED = "structured"
 MARKDOWN_KIND_CANONICAL = "canonical"
+MARKDOWN_KIND_CLASSIFICATION = "classification"
 
 __all__ = [
     "ALLOWED_MIME_TYPES",
     "CloudS3",
     "MARKDOWN_KIND_CANONICAL",
+    "MARKDOWN_KIND_CLASSIFICATION",
     "MARKDOWN_KIND_STRUCTURED",
     "MARKDOWN_KIND_UNSTRUCTURED",
     "StorageConfig",

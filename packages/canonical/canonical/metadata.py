@@ -52,6 +52,28 @@ class ValidationMeta(BaseModel):
     validated_at: datetime | None = None
 
 
+class ClassificationMeta(BaseModel):
+    """Classification 2.0 verdict recorded alongside a canonical document.
+
+    A Python-determined (rule-based) classification outcome; the block appears
+    in the YAML frontmatter and the ``analysis-completed`` event ``data``. The
+    verbatim ``ClassificationResult`` lives in the versioned
+    ``classification_result.json`` artifact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_type: str
+    document_subtype: str | None = None
+    confidence: float
+    confidence_level: str
+    decision: str
+    method: str = "rule_score"
+    classifier_version: str
+    reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FrontmatterMeta(BaseModel):
     """Full YAML-frontmatter metadata envelope rendered around a document.
 
@@ -68,6 +90,7 @@ class FrontmatterMeta(BaseModel):
     source: SourceMeta = Field(default_factory=SourceMeta)
     processing: ProcessingMeta = Field(default_factory=ProcessingMeta)
     validation: ValidationMeta = Field(default_factory=ValidationMeta)
+    classification: ClassificationMeta | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True, by_alias=True)

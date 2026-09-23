@@ -7,6 +7,7 @@ account-api (presentation).
 """
 
 from canonical.metadata import (
+    ClassificationMeta,
     DocumentMeta,
     ExtractionMeta,
     FrontmatterMeta,
@@ -28,6 +29,7 @@ from canonical.schemas import (
 __all__ = [
     "BaseCanonical",
     "CANONICAL_MODELS",
+    "ClassificationMeta",
     "DEFAULT_CANONICAL_MODEL",
     "DocumentMeta",
     "ExtractionMeta",

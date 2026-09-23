@@ -47,6 +47,7 @@ def test_markdown_artifact_filename_known_kinds():
     assert markdown_artifact_filename("unstructured") == "marker.md"
     assert markdown_artifact_filename("structured") == "structured.md"
     assert markdown_artifact_filename("canonical") == "canonical.json"
+    assert markdown_artifact_filename("classification") == "classification_result.json"
 
 
 def test_markdown_artifact_filename_unknown_kind_raises():
@@ -88,5 +89,22 @@ def test_markdown_key_canonical_builds_full_immutable_path():
     expected = (
         f"tenants/{tenant}/patients/{patient_id}"
         f"/documents/{document_id}/versions/{version_id}/canonical.json"
+    )
+    assert key == expected
+
+
+def test_markdown_key_classification_builds_full_immutable_path():
+    tenant = "acme"
+    patient_id, document_id, version_id = uuid4(), uuid4(), uuid4()
+    key = markdown_key(
+        tenant_id=tenant,
+        patient_id=patient_id,
+        document_id=document_id,
+        version_id=version_id,
+        kind="classification",
+    )
+    expected = (
+        f"tenants/{tenant}/patients/{patient_id}"
+        f"/documents/{document_id}/versions/{version_id}/classification_result.json"
     )
     assert key == expected

@@ -5,6 +5,7 @@ types). ``classify_document_type`` is the legacy keyword classifier and
 remains available for the current pipeline.
 """
 
+from app.classification.artifact import build_classification_artifact
 from app.classification.classifier import classify_document_type
 from app.classification.exceptions import (
     ClassificationError,
@@ -20,8 +21,10 @@ from app.classification.models import (
     DocumentType,
     LaboratorySubtype,
 )
-from app.classification.normalize import NormalizedDocument
-from app.classification.scoring import CLASSIFIER_VERSION
+from app.classification.normalize import MarkdownNormalizer, NormalizedDocument
+from app.classification.resolver import RegistrySchemaResolver, SchemaResolver
+from app.classification.scoring import CLASSIFIER_VERSION, RuleScoringEngine
+from app.classification.service import RuleBasedClassificationService
 
 __all__ = [
     "CLASSIFIER_VERSION",
@@ -34,7 +37,13 @@ __all__ = [
     "DocumentType",
     "InvalidClassificationInputError",
     "LaboratorySubtype",
+    "MarkdownNormalizer",
     "NormalizedDocument",
+    "RegistrySchemaResolver",
+    "RuleBasedClassificationService",
+    "RuleScoringEngine",
     "SchemaResolutionError",
+    "SchemaResolver",
+    "build_classification_artifact",
     "classify_document_type",
 ]

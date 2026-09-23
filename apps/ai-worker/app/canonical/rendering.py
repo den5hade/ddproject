@@ -43,6 +43,7 @@ def build_frontmatter_meta(
     prompt_version: str,
     tokens: dict[str, Any],
     validation: dict[str, Any],
+    classification: Any | None = None,
 ) -> FrontmatterMeta:
     """Compose the full YAML metadata envelope around a rendered canonical doc."""
     return FrontmatterMeta(
@@ -67,4 +68,5 @@ def build_frontmatter_meta(
             },
         },
         validation=validation,
+        classification=classification,
     )

@@ -1,0 +1,83 @@
+{
+  "version": "1.0.0",
+  "notes": "Regression dataset for Classification 2.0. Real markers are copies of .dev/flow_upload_test/ (2026-09-23) plus datalab-produced markers (2026-09-23: PDF-text, paper-result photos, mobile print screen). Synthetic fixtures cover prescription, a second appointment, the lab-without-keywords (false-generic) edge and a generic document. Expected values reflect the M2 rule-based classifier; recalibration in M3 may update them.",
+  "fixtures": [
+    {
+      "file": "laboratory/fbbcb675.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": "hematology",
+      "expected_decision": "accept"
+    },
+    {
+      "file": "laboratory/b8f07559.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": "biochemistry",
+      "expected_decision": "accept"
+    },
+    {
+      "file": "laboratory/datalab-output-27022026.pdf.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": "hematology",
+      "expected_decision": "accept"
+    },
+    {
+      "file": "laboratory/datalab-output-gemotest_1_photo.jpg.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": "hematology",
+      "expected_decision": "accept"
+    },
+    {
+      "file": "laboratory/datalab-output-helix_3_photo.jpeg.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": null,
+      "expected_decision": "accept"
+    },
+    {
+      "file": "laboratory/datalab-output-invitro_3_prscreen.jpg.md",
+      "source": "real",
+      "expected_type": "laboratory",
+      "expected_subtype": "hematology",
+      "expected_decision": "accept"
+    },
+    {
+      "file": "appointment/2b8fdd0d.md",
+      "source": "real",
+      "expected_type": "appointment",
+      "expected_subtype": null,
+      "expected_decision": "accept"
+    },
+    {
+      "file": "appointment/appointment_002.md",
+      "source": "synthetic",
+      "expected_type": "appointment",
+      "expected_subtype": null,
+      "expected_decision": "accept"
+    },
+    {
+      "file": "prescription/prescription_001.md",
+      "source": "synthetic",
+      "expected_type": "prescription",
+      "expected_subtype": null,
+      "expected_decision": "accept"
+    },
+    {
+      "file": "other/lab_without_keywords_001.md",
+      "source": "synthetic",
+      "expected_type": "other",
+      "expected_subtype": null,
+      "expected_decision": "fallback"
+    },
+    {
+      "file": "other/generic_001.md",
+      "source": "synthetic",
+      "expected_type": "other",
+      "expected_subtype": null,
+      "expected_decision": "fallback"
+    }
+  ]
+}

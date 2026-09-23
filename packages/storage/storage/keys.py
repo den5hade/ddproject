@@ -11,6 +11,7 @@ MARKDOWN_ARTIFACTS = {
     "unstructured": "marker.md",
     "structured": "structured.md",
     "canonical": "canonical.json",
+    "classification": "classification_result.json",
 }
 
 
@@ -37,8 +38,8 @@ def markdown_artifact_filename(kind: str) -> str:
     """Return the canonical filename for a markdown artifact.
 
     ``kind`` is one of ``"unstructured"`` (marker.md), ``"structured"``
-    (structured.md), or ``"canonical"`` (canonical.json). Unknown kinds raise
-    ``ValueError``.
+    (structured.md), ``"canonical"`` (canonical.json), or ``"classification"``
+    (classification_result.json). Unknown kinds raise ``ValueError``.
     """
     try:
         return MARKDOWN_ARTIFACTS[kind]

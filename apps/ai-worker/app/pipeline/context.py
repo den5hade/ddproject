@@ -12,4 +12,5 @@ class ProcessingContext:
     document_version_id: UUID | None
     patient_id: UUID
     client_type: str = ""
+    processing_id: str | None = None
     attributes: dict = field(default_factory=dict)

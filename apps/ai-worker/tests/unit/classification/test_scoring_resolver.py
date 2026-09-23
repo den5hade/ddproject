@@ -4,7 +4,12 @@ from typing import Protocol
 
 from app.classification import CLASSIFIER_VERSION
 from app.classification.models import DocumentType
-from app.classification.resolver import SCHEMA_REGISTRY, SchemaResolver
+from app.classification.resolver import (
+    SCHEMA_PROMPT_KEY,
+    SCHEMA_REGISTRY,
+    RegistrySchemaResolver,
+    SchemaResolver,
+)
 from app.classification.scoring import (
     THRESH_HIGH_MIN,
     THRESH_MED_LOW,
@@ -67,6 +72,32 @@ def test_schema_registry_locked_shape():
 
 def test_schema_resolver_is_protocol():
     assert issubclass(SchemaResolver, Protocol)
+
+
+def test_schema_prompt_key_mapping():
+    assert SCHEMA_PROMPT_KEY["laboratory.v1"] == "laboratory"
+    assert SCHEMA_PROMPT_KEY["prescription.v1"] == "prescription"
+    assert SCHEMA_PROMPT_KEY["generic.v1"] == "default"
+    assert SCHEMA_PROMPT_KEY["appointment.v1"] == "default"
+
+
+def test_registry_resolver_maps_classification_to_prompt_key():
+    resolver = RegistrySchemaResolver()
+    assert resolver.resolve(DocumentType.LABORATORY) == "laboratory"
+    assert resolver.resolve(DocumentType.LABORATORY, "hematology") == "laboratory"
+    assert resolver.resolve(DocumentType.PRESCRIPTION) == "prescription"
+    assert resolver.resolve(DocumentType.OTHER) == "default"
+
+
+def test_registry_resolver_appointment_falls_back_to_default_prompt():
+    resolver = RegistrySchemaResolver()
+    assert resolver.resolve(DocumentType.APPOINTMENT) == "default"
+
+
+def test_registry_resolver_unknown_type_falls_back_to_default_prompt():
+    resolver = RegistrySchemaResolver()
+    assert resolver.resolve("doctor_report") == "default"
+    assert resolver.resolve(DocumentType.DISCHARGE) == "default"
 
 
 def test_full_public_api_smoke():

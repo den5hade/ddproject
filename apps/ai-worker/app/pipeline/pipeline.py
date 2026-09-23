@@ -10,7 +10,7 @@ import json
 import logging
 from uuid import UUID, uuid4
 
-from canonical import build_canonical, render_document
+from canonical import ClassificationMeta, build_canonical, render_document
 from contracts.events import (
     DocumentAnalysisCompleted,
     DocumentConverted,
@@ -19,6 +19,7 @@ from contracts.events import (
 )
 from storage import (
     MARKDOWN_KIND_CANONICAL,
+    MARKDOWN_KIND_CLASSIFICATION,
     MARKDOWN_KIND_STRUCTURED,
     MARKDOWN_KIND_UNSTRUCTURED,
 )
@@ -35,7 +36,13 @@ from app.canonical import (
     build_source_meta,
     build_validation_meta,
 )
-from app.classification import classify_document_type
+from app.classification import (
+    ClassificationDecision,
+    MarkdownNormalizer,
+    RegistrySchemaResolver,
+    RuleBasedClassificationService,
+    build_classification_artifact,
+)
 from app.config.settings import Settings
 from app.ingestion import OcrEngine, count_pages, load_images
 from app.llm import AIClient
@@ -44,6 +51,7 @@ from app.messaging import (
     ROUTING_KEY_CONVERTED,
     ROUTING_KEY_PROCESSING_FAILED,
 )
+from app.pipeline.context import ProcessingContext
 from app.prompts import PromptManager
 
 logger = logging.getLogger("ai_worker")
@@ -64,6 +72,9 @@ class DocumentPipeline:
         self._ai_client = AIClient(settings)
         self._prompt_manager = PromptManager(settings.prompts_dir)
         self._ocr = OcrEngine(self._ai_client, settings.ai_model)
+        self._normalizer = MarkdownNormalizer()
+        self._classifier = RuleBasedClassificationService()
+        self._resolver = RegistrySchemaResolver()
 
     async def handle_converting(self, event: DocumentUploaded) -> None:
         """Handle PDF/image -> unstructured markdown conversion."""
@@ -123,8 +134,25 @@ class DocumentPipeline:
             unstructured_markdown = await download_text(self._s3, event.output_storage_key)
 
             client_type = getattr(event, "document_type", None) or ""
-            canonical_doc_type = classify_document_type(unstructured_markdown, client_type)
-            canonical_prompt = self._prompt_manager.load_prompt("canonical", canonical_doc_type)
+            context = ProcessingContext(
+                document_id=event.document_id,
+                document_version_id=event.document_version_id,
+                patient_id=event.patient_id,
+                client_type=client_type,
+            )
+            normalized = self._normalizer.normalize(
+                unstructured_markdown,
+                metadata={"client_type": client_type},
+            )
+            classification = await self._classifier.classify(normalized, context)
+
+            prompt_key = "default"
+            if classification.decision is not ClassificationDecision.AMBIGUOUS:
+                prompt_key = self._resolver.resolve(
+                    classification.document_type,
+                    classification.document_subtype,
+                )
+            canonical_prompt = self._prompt_manager.load_prompt("canonical", prompt_key)
 
             result = await self._ai_client.extract_canonical(
                 markdown=unstructured_markdown,
@@ -133,9 +161,10 @@ class DocumentPipeline:
                 temperature=canonical_prompt.get("temperature", 0.0),
             )
             raw = json.loads(result.content)
-            canonical = build_canonical(canonical_doc_type, raw)
+            canonical = build_canonical(prompt_key, raw)
             page_count = count_pages(unstructured_markdown)
 
+            classification_meta = self._build_classification_meta(classification)
             meta = self._build_frontmatter(
                 event,
                 canonical,
@@ -143,10 +172,28 @@ class DocumentPipeline:
                 result.usage,
                 client_type=client_type,
                 page_count=page_count,
+                classification=classification_meta,
             )
 
+            classification_key = self._build_key(event, MARKDOWN_KIND_CLASSIFICATION)
             canonical_key = self._build_canonical_key(event)
             structured_key = self._build_key(event, MARKDOWN_KIND_STRUCTURED)
+
+            classification_artifact = self._build_classification_artifact(
+                classification,
+                context,
+                canonical,
+                prompt_key,
+                canonical_prompt,
+                classification_key,
+            )
+            await upload_text(
+                self._s3,
+                classification_artifact,
+                classification_key,
+                "application/json",
+            )
+            logger.info("classification_uploaded key=%s", classification_key)
 
             canonical_json = json.dumps(
                 canonical.model_dump(mode="json", by_alias=True),
@@ -184,11 +231,13 @@ class DocumentPipeline:
                     schema_name=canonical.schema_name,
                     schema_version=SCHEMA_VERSION,
                     status="succeeded",
-                    confidence=1.0,
+                    confidence=classification.confidence,
                     data={
                         **canonical.model_dump(mode="json", by_alias=True),
                         "canonical_key": canonical_key,
                         "structured_key": structured_key,
+                        "classification_key": classification_key,
+                        "classification": classification_meta.model_dump(mode="json"),
                     },
                 ),
             )
@@ -212,6 +261,7 @@ class DocumentPipeline:
         usage: dict,
         client_type: str | None = None,
         page_count: int | None = None,
+        classification: ClassificationMeta | None = None,
     ):
         """Compose the Python-built YAML metadata envelope around a canonical doc."""
         model = prompt.get("model", self._settings.ai_model)
@@ -226,6 +276,52 @@ class DocumentPipeline:
             prompt_version=prompt_version,
             tokens=usage,
             validation=build_validation_meta(),
+            classification=classification,
+        )
+
+    def _build_classification_meta(self, classification) -> ClassificationMeta:
+        """Project the classification result into the frontmatter metadata block."""
+        return ClassificationMeta(
+            document_type=classification.document_type.value,
+            document_subtype=classification.document_subtype,
+            confidence=classification.confidence,
+            confidence_level=classification.confidence_level.value,
+            decision=classification.decision.value,
+            method=classification.method,
+            classifier_version=classification.classifier_version,
+            reasons=classification.reasons,
+            warnings=classification.warnings,
+        )
+
+    def _build_classification_artifact(
+        self,
+        classification,
+        context: ProcessingContext,
+        canonical,
+        prompt_key: str,
+        prompt: dict,
+        classification_key: str,
+    ) -> str:
+        """Serialize the classification 2.0 verdict + provenance artifact."""
+        model = prompt.get("model", self._settings.ai_model)
+        prompt_version = str(prompt.get("prompt_version") or PIPELINE_VERSION)
+        return build_classification_artifact(
+            classification=classification,
+            prompt_key=prompt_key,
+            schema_name=canonical.schema_name,
+            prompt_version=prompt_version,
+            model=model,
+            processing={
+                "processing_id": context.processing_id,
+                "document_id": str(context.document_id),
+                "document_version_id": str(context.document_version_id)
+                if context.document_version_id
+                else None,
+                "patient_id": str(context.patient_id),
+                "client_type": context.client_type,
+                "schema_version": SCHEMA_VERSION,
+                "artifact_key": classification_key,
+            },
         )
 
     def _build_key(self, event, kind: str) -> str:
