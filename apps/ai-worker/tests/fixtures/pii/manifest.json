@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "notes": "Regression dataset for the PII gate (plan §4.10). M4 seeds three SYNTHETIC fixtures to prove the manifest shape before any detector exists: the clean/patient/malicious trio covers allow, review and block, which is the widest decision spread obtainable without a real marker. All values are invented and none are copied from .dev/flow_upload_test/ — a real marker is added in M5, and duplicating a real patient's data into a new file would create a second copy of the very leak this milestone exists to prevent. expected_* are declared ground truth in M4: with no detectors, no test can verify them, so they are a specification for M5 to confirm. expected_decision is context-dependent (a patient category is ALLOW_WITH_WARNING at an internal destination and REVIEW at an external one, per Phase 5), and §4.10 fixes the entry keys without a destination field, so the notes here state the assumed context: the external boundary. The clean and malicious fixtures are context-independent (no findings; a secret blocks at every destination). Notes on individual fixtures: clean/generic-notice-01.md carries a bare maintenance date on purpose, since PIICategory has no date member and a service date is not PII. patient/synthetic-consultation-01.md peaks at medical_record_number (high), not critical — only SECRET is critical, so 'critical' is a property of a credential, not of a sensitive identifier. malicious/synthetic-injection-01.md pairs a secret with a prompt-injection attempt, so it proves the block decision is driven by the credential rather than by the injection text itself.",
+  "fixtures": [
+    {
+      "file": "clean/generic-notice-01.md",
+      "source": "synthetic",
+      "expected_categories": [],
+      "expected_decision": "allow",
+      "expected_risk_level": "low"
+    },
+    {
+      "file": "patient/synthetic-consultation-01.md",
+      "source": "synthetic",
+      "expected_categories": [
+        "person_name",
+        "date_of_birth",
+        "phone",
+        "email",
+        "address",
+        "medical_record_number",
+        "doctor_name"
+      ],
+      "expected_decision": "review",
+      "expected_risk_level": "high"
+    },
+    {
+      "file": "malicious/synthetic-injection-01.md",
+      "source": "synthetic",
+      "expected_categories": ["secret"],
+      "expected_decision": "block",
+      "expected_risk_level": "critical",
+      "contains_secret": true
+    }
+  ]
+}
