@@ -1,12 +1,15 @@
-"""AST helpers for the PII package import guards (M4 Phase 3).
+"""AST helpers for the PII package import guards (M4 Phase 3, widened in M5 Phase 8).
 
 The PII gate is a document-level capability: ``app/pii/`` must not import
 infrastructure (S3 / RabbitMQ / storage) and must not import classification
-domain types, pipeline internals or ``packages.canonical`` models. The single
-sanctioned exception is ``app.classification.normalize.NormalizedDocument``,
-imported **type-only** under ``if TYPE_CHECKING:`` — the one normalizer feeds
-both classification and the PII gate, so reusing the type is the point
-(``PII GATE/IMPL_ARCH.md`` Phase 2; plan §4.6).
+domain types, pipeline internals or ``packages.canonical`` models. It must not
+import configuration at runtime either. The sanctioned exceptions are
+``app.classification.normalize.NormalizedDocument``, ``app.pipeline.context
+.ProcessingContext`` and ``app.config.settings.Settings``, all imported
+**type-only** under ``if TYPE_CHECKING:`` — the one normalizer feeds both
+classification and the PII gate, so reusing the type is the point
+(``PII GATE/IMPL_ARCH.md`` Phase 2; plan §4.6), and the other two let the
+package keep its locked signatures while staying free of runtime edges.
 
 A substring scan over source lines cannot tell a runtime import from a
 type-only one, so these helpers parse the module instead. Both test modules
@@ -46,22 +49,30 @@ mean PII cannot be exercised without classification being importable.
 ALLOWED_TYPE_ONLY_IMPORTS = {
     ("app.classification.normalize", "NormalizedDocument"),
     ("app.pipeline.context", "ProcessingContext"),
+    ("app.config.settings", "Settings"),
 }
 """The complete set of type-only borrows ``app/pii/`` is permitted.
 
-Anything else — a second classification type, a pipeline context field, a
-canonical model — fails ``test_pii_package_type_only_imports_are_narrow``.
+Anything else — a second classification type, a canonical model, any other
+settings field — fails ``test_pii_package_type_only_imports_are_narrowed``.
 
 ``ProcessingContext`` was added in Phase 5, and only because ORDER §8 fixes
 ``PIIGate.inspect(document: NormalizedDocument, context: ProcessingContext)``:
 the gate's whole architectural point is that it is a *document-level*
 capability threaded through the pipeline, so its signature must name the
 pipeline's own context. This mirrors what ``app/classification/service.py``
-already does at `:39-40` for the identical reason, and the same objection
+already does at `:39-40`` for the identical reason, and the same objection
 applies to both — a type-only borrow creates no runtime edge, so ``app/pii/``
 stays importable with no pipeline installed. The runtime guard below is what
 actually protects the boundary, and it is unchanged: ``app.pipeline`` still may
 not be imported at runtime.
+
+``Settings`` was added in M5 Phase 8, for ``build_detector_chain`` and
+``build_policy_context``: the fingerprint secret and the tenant id arrive from
+configuration, but a *runtime* ``app.config`` import would make the PII package
+unimportable without an environment — and pull in ``messaging.topology`` with
+it, transitively. The type-only borrow keeps the security control independent of
+the deployment, which is the same argument as the two above.
 """
 
 

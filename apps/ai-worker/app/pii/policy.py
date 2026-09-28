@@ -56,6 +56,23 @@ look at. Silently allowing it would be the worst outcome available, because the
 caller would send unredacted PII to an external provider while the artifact
 claimed the document was merely reviewed.
 
+Where the context comes from
+----------------------------
+
+:meth:`PIIGate.inspect` receives a ``ProcessingContext`` and a
+``NormalizedDocument``, and neither carries ``destination``,
+``redaction_available`` or ``organization_id`` — the three inputs that select
+an override. They are supplied by :func:`build_policy_context`, which reads
+them from configuration at the edge of the package, so the gate's locked
+signature stays exactly as ORDER §8 fixed it and the source of every policy
+input is one auditable line. ``Settings`` is imported type-only for the same
+reason the gate's other cross-package types are: ``app/pii`` must remain
+importable with no configuration present.
+
+``destination`` defaults to :data:`DEFAULT_DESTINATION` — ``INTERNAL_LLM``
+today, a settings read in M5 Phase 15, so that switching to an untrusted
+provider is a configuration change rather than a code change.
+
 Why no working engine
 ---------------------
 
@@ -69,14 +86,15 @@ against. See the Phase 5 implementation status for the gap that exposes.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.pii.exceptions import PIIPolicyError
 from app.pii.models import (
     PIIAction,
     PIICategory,
+    PIIDecision,
     PIIDecisionResult,
     PIIDestination,
     PIIFinding,
@@ -84,18 +102,25 @@ from app.pii.models import (
     PIIScanStage,
 )
 
+if TYPE_CHECKING:
+    from app.config.settings import Settings
+
 __all__ = [
     "CATEGORY_RISK",
+    "DEFAULT_DESTINATION",
     "DEFAULT_POLICY",
     "DEFAULT_POLICY_VERSION",
     "PII_CATEGORY_GROUPS",
     "PII_POLICY_VERSION",
     "REDACT_ON_EXTERNAL",
+    "RISK_ORDER",
+    "DefaultPolicyEngine",
     "PolicyEngine",
     "PolicyEngineBase",
     "PIIPolicy",
     "PIIPolicyContext",
     "PIIRule",
+    "build_policy_context",
 ]
 
 DEFAULT_POLICY_VERSION = "1.0.0"
@@ -207,6 +232,28 @@ risk level fails the suite.
 """
 
 
+RISK_ORDER: tuple[PIIRiskLevel, ...] = (
+    PIIRiskLevel.LOW,
+    PIIRiskLevel.MEDIUM,
+    PIIRiskLevel.HIGH,
+    PIIRiskLevel.CRITICAL,
+)
+"""The risk ladder in *declared* order — the only order ``risk_level`` means.
+
+This module exists because the ladder is not the order the enum's values sort
+in. ``PIIRiskLevel`` is a ``str`` enum, so ``max(low, high)`` compares ``"low"``
+with ``"high"`` as strings and returns ``"low"`` — alphabetically
+``critical < high < low < medium``. Without this rank map a document carrying a
+passport and a date of birth is reported at ``LOW``, which is the kind of bug
+that only ever appears as an artifact nobody reads.
+
+Declared here rather than as a method on the enum because the ladder is a
+*policy* statement (this module's subject); ``models.py`` only names the values.
+"""
+
+_RISK_RANK: dict[PIIRiskLevel, int] = {level: rank for rank, level in enumerate(RISK_ORDER)}
+
+
 class PIIRule(BaseModel):
     """What to do about one category, and how bad it is.
 
@@ -296,6 +343,19 @@ Declared after :data:`DEFAULT_POLICY` so it cannot drift from the table it names
 """
 
 
+DEFAULT_DESTINATION = PIIDestination.INTERNAL_LLM
+"""The destination every gate call uses unless configuration says otherwise.
+
+A constant today, a setting in M5 Phase 15. The current provider is trusted
+and named in §0 (``ai_base_url`` is an external vendor, but the only one
+available), so pre-extraction redaction is dormant: nothing must leave the
+trusted boundary unmasked while that is true. Phase 15 replaces this
+assignment with a settings read, which is what makes switching providers a
+config change instead of a code change (§7 decision 12) — the one line to
+change, and the one test to update.
+"""
+
+
 class PIIPolicyContext(BaseModel):
     """The inputs policy needs that are not on the findings themselves.
 
@@ -319,12 +379,89 @@ class PIIPolicyContext(BaseModel):
     organization_id: str
     """Owning organization. Carried for the same reason — a per-tenant policy is
     a foreseeable M5/M6 extension, and adding the field later would change a
-    locked contract."""
+    locked contract.
+
+    Validated as a non-empty, stripped identifier, because the two degenerate
+    values are both silent: an empty string satisfies ``str`` and would scope
+    every future per-tenant rule to a tenant named "", and whitespace is an id
+    nobody can match. Sourced from ``settings.s3_tenant_id`` by
+    :func:`build_policy_context`; see §7 decision 4 for why that placeholder is
+    the honest answer today."""
 
     redaction_available: bool = False
     """Whether a working redactor exists. Defaults to ``False``, the fail-closed
     direction and the state of the world today: a ``REDACT`` action with nothing
     to redact with escalates to ``REVIEW``."""
+
+    @field_validator("organization_id")
+    @classmethod
+    def _require_organization(cls, value: str) -> str:
+        """Reject a blank organization and normalize surrounding whitespace.
+
+        Raises:
+            PIIPolicyError: If ``value`` is empty or whitespace-only. Raised
+                rather than left to a ``min_length`` constraint so the failure is
+                a domain error a caller can handle, and so the message can name
+                the setting the value came from.
+        """
+        organization = value.strip()
+        if not organization:
+            raise PIIPolicyError(
+                "PIIPolicyContext.organization_id must be a non-empty identifier "
+                "(sourced from settings.s3_tenant_id); a blank tenant would scope "
+                "every per-tenant rule to a tenant named ''."
+            )
+        return organization
+
+
+def build_policy_context(
+    settings: Settings,
+    *,
+    stage: PIIScanStage,
+    destination: PIIDestination = DEFAULT_DESTINATION,
+    document_type: str | None = None,
+    redaction_available: bool = False,
+) -> PIIPolicyContext:
+    """Build the policy context from configuration — the only sanctioned constructor.
+
+    Exists because :class:`PIIPolicyContext` requires an ``organization_id``
+    that nothing upstream carries: neither ``ProcessingContext`` nor any event
+    contract has a tenant, and threading one through ``packages/contracts`` is a
+    schema-versioned change that is explicitly out of M5 (ORDER §13.6, §7
+    decision 4). ``settings.s3_tenant_id`` is the honest placeholder — it has a
+    non-empty default, so the field is real and auditable today, and it is not
+    claimed to be authoritative.
+
+    Keeping the wiring here rather than in the pipeline means the *source* of
+    every policy input is one auditable line in one place, and Phase 15's
+    settings-backed ``destination`` changes one argument default instead of a
+    call site.
+
+    Args:
+        settings: Application settings. Only ``s3_tenant_id`` is read.
+        stage: Which contour is asking — ``DOCUMENT`` for the source scan,
+            ``CANONICAL`` for the canonical-output guard.
+        destination: Where the document is going. Defaults to
+            :data:`DEFAULT_DESTINATION` (``INTERNAL_LLM``) and becomes a
+            settings read in Phase 15.
+        document_type: Optional classification hint, passed through as-is.
+        redaction_available: Whether a working redactor exists. Defaults to
+            ``False`` — the fail-closed direction — and Phase 12 flips it to
+            ``True`` once ``PIIRedactor.redact`` is implemented.
+
+    Returns:
+        A frozen, validated :class:`PIIPolicyContext`.
+
+    Raises:
+        PIIPolicyError: If ``settings.s3_tenant_id`` is blank.
+    """
+    return PIIPolicyContext(
+        destination=destination,
+        stage=stage,
+        document_type=document_type,
+        organization_id=settings.s3_tenant_id,
+        redaction_available=redaction_available,
+    )
 
 
 class PolicyEngine(Protocol):
@@ -364,3 +501,152 @@ class PolicyEngineBase(PolicyEngine):
             "PII policy evaluation arrives with the M5 gate wiring; the locked algorithm is "
             "in this module's docstring."
         )
+
+
+class DefaultPolicyEngine(PolicyEngineBase):
+    """The §4.4 algorithm, implemented — M5 Phase 9.
+
+    Stateless and side-effect free: it reads the policy table and the context and
+    returns a value. Every other component in the package is either stateful
+    (detectors hold the fingerprint secret) or I/O-bound (the gate is ``async``),
+    and keeping the decision step pure is what lets the *precedence* rules be
+    tested one at a time instead of through a whole document.
+    """
+
+    def __init__(self, policy: PIIPolicy = DEFAULT_POLICY) -> None:
+        """Bind to a complete policy table, defaulting to the locked baseline.
+
+        Args:
+            policy: The table to evaluate against. Any
+                :class:`PIIPolicy` is acceptable — completeness is already
+                guaranteed by that model's validator, so this cannot receive a
+                table that would force a ``PIIPolicyError`` at decision time.
+                Injectable so a per-tenant or per-stage table can be tested
+                without touching the baseline.
+        """
+        self.policy = policy
+
+    def evaluate(self, findings: list[PIIFinding], context: PIIPolicyContext) -> PIIDecisionResult:
+        """Resolve an action per category, then reduce to one decision.
+
+        Implements the module docstring's algorithm in order, because the order
+        is the specification: actions first (so ``ALLOW_WITH_WARNING`` can be
+        derived from what *would* have been withheld), risk second (as the
+        maximum category risk, independent of escalation — escalation is a
+        decision about *handling*, not a statement of how sensitive the data is),
+        and the verdict last.
+
+        Args:
+            findings: Already aggregated. An empty list is a valid input and
+                yields ``ALLOW`` at ``LOW`` — an empty scan is a clean scan, and
+                a gate that escalated silence would halt every empty document in
+                the platform.
+            context: The policy inputs. ``destination`` selects the override;
+                ``redaction_available`` decides what happens when an override
+                demands ``REDACT``.
+
+        Returns:
+            A :class:`~app.pii.models.PIIDecisionResult` whose ``actions`` map
+            is post-override and post-escalation, so a caller acting on
+            ``REDACT`` sees the same values the decision was derived from.
+
+        Raises:
+            PIIPolicyError: If a finding carries a category the bound policy has
+                no rule for. Unreachable through a constructed
+                :class:`PIIPolicy`; present because a hand-mutated ``rules`` dict
+                would otherwise raise a bare ``KeyError`` from deep inside the
+                loop, naming neither the category nor the policy version.
+        """
+        if not findings:
+            return PIIDecisionResult(
+                decision=PIIDecision.ALLOW,
+                risk_level=PIIRiskLevel.LOW,
+                actions={},
+                reasons=["no pii detected"],
+            )
+
+        actions: dict[PIICategory, PIIAction] = {}
+        reasons: list[str] = []
+        warnings: list[str] = []
+        risk_level = PIIRiskLevel.LOW
+
+        for finding in findings:
+            category = finding.category
+            if category not in self.policy.rules:
+                raise PIIPolicyError(
+                    f"Policy v{self.policy.version} has no rule for {category.value}; "
+                    "the table was mutated after construction."
+                )
+            risk_level = max(risk_level, self.policy.risk_for(category), key=_RISK_RANK.__getitem__)
+            action = self._action_for(finding, context, reasons, warnings)
+            actions[category] = action
+
+        return PIIDecisionResult(
+            decision=self._decide(actions),
+            risk_level=risk_level,
+            actions=actions,
+            reasons=reasons,
+            warnings=warnings,
+        )
+
+    def _action_for(
+        self,
+        finding: PIIFinding,
+        context: PIIPolicyContext,
+        reasons: list[str],
+        warnings: list[str],
+    ) -> PIIAction:
+        """Resolve one finding's action: base rule, then override, then escalation.
+
+        Records why the action changed in ``reasons``, because the artifact is
+        the only account of a review a human will ever see: a ``REVIEW`` that
+        does not say "external destination, redaction unavailable" is a review
+        nobody can triage.
+        """
+        category = finding.category
+        action = self.policy.action_for(category)
+
+        if context.destination is PIIDestination.UNKNOWN:
+            if action is not PIIAction.BLOCK:
+                action = PIIAction.REVIEW
+            reasons.append(f"{category.value}: destination unknown, forced review")
+            return action
+
+        if (
+            context.destination is PIIDestination.EXTERNAL_LLM
+            and category in REDACT_ON_EXTERNAL
+            and action is not PIIAction.BLOCK
+        ):
+            action = PIIAction.REDACT
+            reasons.append(f"{category.value}: external destination, redact before sending")
+
+        if action is PIIAction.REDACT and not context.redaction_available:
+            action = PIIAction.REVIEW
+            reasons.append(
+                f"{category.value}: redaction required but no redactor is available, "
+                "escalated to review"
+            )
+        elif action is PIIAction.REDACT:
+            warnings.append(f"{category.value}: value must be redacted before leaving the boundary")
+
+        return action
+
+    def _decide(self, actions: dict[PIICategory, PIIAction]) -> PIIDecision:
+        """Reduce per-category actions to one decision by strict precedence.
+
+        ``ALLOW_WITH_WARNING`` is the residue of an applied ``WARN`` or
+        ``REDACT`` (module docstring): it is what distinguishes "nothing to do"
+        from "something was withheld", which is the fact the persisted artifact
+        exists to record. Actions are resolved per category, so a category that
+        was redacted anywhere in a document keeps that action for the whole
+        document regardless of what a later sighting of the same category
+        resolved to.
+        """
+        applied = set(actions.values())
+        if PIIAction.BLOCK in applied:
+            return PIIDecision.BLOCK
+        if PIIAction.REVIEW in applied:
+            return PIIDecision.REVIEW
+        if applied & {PIIAction.WARN, PIIAction.REDACT}:
+            return PIIDecision.ALLOW_WITH_WARNING
+        return PIIDecision.ALLOW

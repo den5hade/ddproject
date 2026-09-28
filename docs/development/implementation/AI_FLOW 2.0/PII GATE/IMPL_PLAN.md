@@ -1,20 +1,41 @@
-# PII Gate — Implementation Plan (M4: Specification)
+# PII Gate — Implementation Plan (M4: Specification · M5: Gate)
 
-**Scope.** This plan defines **M4 – PII Gate specification** (ORDER.md **M4**): the
+**Scope.** Two milestones in one plan file. **M4 – PII Gate specification** (ORDER.md **M4**): the
 contract only — domain enums/models, detector/masking/redaction/policy/gate interfaces, the
-post-extraction canonical-output guard, the locked persistence shape, and versioning. No
-detection logic, no LLM calls, no pipeline wiring, no cross-package changes in this plan. The
-contour is built on existing infra only — no parallel architecture. M5 implements; M6 evaluates.
+post-extraction canonical-output guard, the locked persistence shape, and versioning. **Done.**
+**M5 – PII Gate**: the implementations those contracts specify, both contours wired into the
+pipeline, and the cross-package persistence surface M4 deliberately did not touch. M5 closes the
+live leak through `fields.note`. Built on existing infra only — no parallel architecture. M6
+evaluates and calibrates the false-positive rate.
 
-**Depth sources:** [IMPL_ARCH.md](./IMPL_ARCH.md) (PII gate design spec, §§1–38), [ORDER.md](../ORDER.md)
-(§2 PII Gate, §8 interface, §12 milestones), [STRUCTURE.md](../STRUCTURE.md) (§2 pipeline,
-§5 `pii/` layering), [SUMMARY.md](../SUMMARY.md) (§11 PII gate, §12 medical identity split,
-Phase 4), [Classification 2.0 CONTRACT_IMPL_PLAN.md](../CLASSIFICATION%202.0/CONTRACT_IMPL_PLAN.md)
+**Depth sources:** [IMPL_ARCH.md](./IMPL_ARCH.md) (PII gate design spec, §§1–45),
+[IMPL_RPRT.md](./IMPL_RPRT.md) (M4 implementation report and hand-off), [ORDER.md](../ORDER.md)
+(§2 PII Gate, §8 interface, §12 milestones, **§13 the M5 leak analysis and scope rulings**),
+[STRUCTURE.md](../STRUCTURE.md) (§2 pipeline, §5 `pii/` layering), [SUMMARY.md](../SUMMARY.md)
+(§11 PII gate, §12 medical identity split, Phase 4),
+[Classification 2.0 CONTRACT_IMPL_PLAN.md](../CLASSIFICATION%202.0/CONTRACT_IMPL_PLAN.md)
 (the M1 contract precedent this contour mirrors), [IMPL_PLAN_SCHEMA.md](../../operational/IMPL_PLAN_SCHEMA.md).
 Full taxonomy/policy tables are condensed in §4; the plan holds decisions, not the design prose.
 
 **Revision 1** — initial M4-only plan (2026-09-26). M3 (Classification 2.0 evaluation) closed
 2026-09-23 at `classifier_version = "2.1.0"` (`33af39f`), so M4 is next per ORDER §12.
+
+**Revision 2** — (2026-09-28) **M5 phases added.** M4 closed as `ef412d2`: 436 tests green (174
+baseline + 262 PII contract tests), `make lint` clean apart from 4 pre-existing `packages/storage`
+errors. What changed: (a) M4's seven phases moved **verbatim** into §2 — history is not rewritten;
+(b) ten M5 phases added as §3, sequenced per IMPL_ARCH §45's 19-step order; (c) §4 gains §4.11
+(persistence escalation policy) and §4.12 (per-category remediation), and §4.8 gains the M5 version
+roadmap; (d) §5, §6, §7 extended for M5. **Scope ruling:** IMPL_ARCH §45's full order is
+authoritative over ORDER §13.8's contour-2-only limit — the user chose full order, so M5 builds both
+contours. See §7 open decision 1. **Revision 2 corrected four M4 statements in §4** that M4 recorded
+as future work and that are now settled: §4.7's version example, §4.9's title and its missing
+pipeline-ordering note, and §4.10's instruction to *copy* `.dev/flow_upload_test/` markers into the
+dataset — the last of these is a correction, not an addition, since ORDER §13.3 forbids committing
+real patient data and M4's wording said the opposite. **M4's phase blocks in §2 were left byte-identical**,
+including a formatting drift from Revision 1: Phases 4–7 omit the `**Status.**` and
+`**Verification.**` labels, and Phase 4 has no `#### Phase 4 Implementation Status` heading, so all
+four carry their verification as a `**Verification recap:**` bullet instead. Recorded rather than
+reformatted, per schema rule 4; M5 phases use the §4 grammar consistently.
 
 Status legend: `[ ]` pending · `[x]` done.
 
@@ -22,96 +43,102 @@ Status legend: `[ ]` pending · `[x]` done.
 
 ## 0. Overview
 
-**Current (as-is):** PII mitigation is one prompt line.
+**Current (as-is, after M4):** the contract is complete, the behaviour is not. The five base
+classes still raise, so **the observed leak is live**.
 
 ```text
-app/prompts/canonical.yaml:100
-  - Never include patient identity (name, date of birth, SNILS, insurance policy number).
+upload (PDF)
+  → OCR (external LLM, pipeline.py:92)          ← UNGATED, pre-marker, see §7 risk R1
+  → marker.md
+  → MarkdownNormalizer → NormalizedDocument
+  → CLASSIFICATION
+  → PII GATE  ── PIIGateBase.inspect() → NotImplementedError      ← contract only
+  → LLM extraction → build_canonical
+  → CANONICAL GUARD ── CanonicalPIIInspectorBase.inspect() → raises ← contract only
+  → canonical.json  (S3)          :199  ┐
+      structured.md   (S3)         :203  ├─ fields.note carries the patient's name
+      event data["canonical"]      :236  ┘  → account-api:536 → document_extractions.data
 ```
 
-`apps/ai-worker/app/pii/` exists as five docstring-only placeholders (`__init__.py`,
-`detectors.py`, `gate.py`, `models.py`, `policy.py`) plus one real symbol,
-`PIIError` (`app/pii/exceptions.py:5`). Nothing in `app/pii/` is imported by the pipeline
-(`app/pipeline/pipeline.py:60-77` constructs no gate), no artifact kind, no event field, no DB
-column exists for PII. Consequently **the observed leak is live today** — real runs in
-`.dev/flow_upload_test/`:
+The leak, verbatim from `.dev/flow_upload_test/`:
 
 ```text
-2b8fdd0d.../marker.md  → ФИО: Шадеркин Денис Сергеевич · Полис №: 8152510822001720
-                          СНИЛС: 123-067-082 21 · Дата рождения: 27.07.1984
+2b8fdd0d.../marker.md      → ФИО: Шадеркин Денис Сергеевич · Полис №: 8152510822001720
+                              СНИЛС: 123-067-082 21 · Дата рождения: 27.07.1984
 2b8fdd0d.../canonical.json → fields.note: "...для пациента Шадеркина Дениса Сергеевича.
-                                Номер талона: 2026030709303211960141."
+                                  Номер талона: 2026030709303211960141."
 fbbcb675.../canonical.json → fields.note: "...для пациента Шадеркина Дениса Сергеевича (М, 39 лет)..."
 ```
 
-The same content persists into `document_extractions.data` because
-`DocumentAnalysisCompleted.data` is dumped verbatim (`apps/account-api/app/services/documents.py:536`).
-The prompt rule is a request to the model, not a control — SUMMARY.md §11 is the analysis of
-exactly this failure.
+The prompt rule at `app/prompts/canonical.yaml:100` is a *request* to the model, not a control —
+SUMMARY.md §11 is the analysis of exactly that failure.
 
-**Target (M4):** two locked contracts, one for each boundary where PII can escape.
+**Target (M5):** both contours executable, the canonical object sanitized before every dump point.
 
 ```text
-marker.md
-  → MarkdownNormalizer → NormalizedDocument            (already exists, reused as-is)
-  → CLASSIFICATION (parallel, unchanged)               ClassificationService.classify
-  → PII GATE (contract)                                PIIGate.inspect(document, context) -> PIIScanResult
-       │                                                 detect → aggregate → policy → decide
-       ├── ALLOW          → continue
-       ├── ALLOW_WITH_WARNING → continue, record
-       ├── REVIEW         → halt, needs_review (no human UI yet)
-       └── BLOCK          → halt, processing failure
-  → SchemaResolver → LLM extraction → build_canonical   (unchanged)
-  → CANONICAL GUARD (contract)                          CanonicalPIIInspector.inspect(payload)
-       └── canonical.json / structured.md / document_extractions.data   (guarded, no PII written)
-  → pii_result.json → S3   ·  frontmatter `pii:`  ·  event data["pii"]
+  → OCR (external LLM)   DOCUMENTED TRUSTED BOUNDARY — cannot be gated, produces marker.md
+  → marker.md → NormalizedDocument
+  → CLASSIFICATION
+  → PII GATE (contour 1)   PIIGate.inspect(document, ctx) -> PIIScanResult
+       detect → aggregate → policy → decide
+       ├── ALLOW / ALLOW_WITH_WARNING → continue
+       ├── REVIEW  → halt, processing_status = needs_review
+       └── BLOCK   → halt, processing failure (SECRET only)
+  → PIIRedactor.redact → redacted text, only when destination = EXTERNAL_LLM
+  → LLM extraction → build_canonical
+  → CANONICAL GUARD (contour 2)  CanonicalPIIInspector.inspect(payload)
+       escalation: identity/contact/government/medical_id @ persistence → REDACT
+       sanitize_canonical_payload(...)  ← per-category, REDACT actions only
+  → sanitized canonical ──┬─ canonical.json  (S3)  :199
+                          ├─ structured.md   (S3)  :203
+                          └─ event data      :236
+  → pii_result.json (S3, uploaded BEFORE publish) · frontmatter `pii:` · event data["pii"]
 ```
 
-M4 writes **no** pipeline code. It fixes the types, the two decision boundaries, the
-serialization contract, and the versions that M5 will implement and M6 will calibrate.
+**Key mechanisms.** Detection and policy are separate contracts, so detectors change without policy
+edits and vice versa (STRUCTURE §5, IMPL_ARCH §2/§17). Raw values exist only in-process and are
+structurally incapable of leaking. Risk and action are **policy configuration**, not detection
+output (IMPL_ARCH §12), so escalation for the persistence destination is a data change, not a code
+change — which is exactly why Phase 14 costs a version bump and not a refactor.
 
-**Key mechanisms.** Detection and policy are separate contracts, so detectors change without
-policy edits and vice versa (STRUCTURE §5, IMPL_ARCH §2/§17). Raw values exist only in-process and
-are structurally incapable of leaking (they are excluded from serialization, and the
-serializable summary type has no field for them). Risk and action are **policy configuration**,
-not detection output (IMPL_ARCH §12), so jurisdiction and org-specific rules are data, not code.
+**Invariants (locked — all M4 invariants still bind, plus the M5 additions):**
 
-**Invariants (locked):**
-
-- **PII presence alone never blocks.** A medical document is *expected* to carry patient
-  identity; `PII detected → reject` is explicitly rejected (ORDER §2, IMPL_ARCH §2). `BLOCK` is
-  reserved for `SECRET` and fail-closed conditions; `REVIEW` for unexpected high-risk
-  combinations. Normal patient identity in an internal pipeline is `ALLOW`.
+- **PII presence alone never blocks.** A medical document is *expected* to carry patient identity;
+  `PII detected → reject` is explicitly rejected (ORDER §2, IMPL_ARCH §2). `BLOCK` is reserved for
+  `SECRET` and fail-closed conditions; `REVIEW` for unexpected high-risk combinations.
 - **No raw PII value crosses a boundary.** `PIIFinding.value` is `Field(exclude=True)`;
-  `PIIFindingSummary` / `PIIAuditRecord` / `PIIScanResult` have no value field at all. Logs,
-  audit, events, artifacts and frontmatter carry `masked_value` only (IMPL_ARCH §6, §19, §22, §26).
+  `PIIFindingSummary` / `PIIAuditRecord` / `PIIScanResult` have no value field at all. Logs, audit,
+  events, artifacts and frontmatter carry `masked_value` only (IMPL_ARCH §6, §19, §22, §26).
 - **`value_fingerprint` is a salted HMAC-SHA256, never a plain hash.** Low-entropy identifiers
   (СНИЛС = 9 digits + checksum, полис ОМС = 16 digits, дата рождения) are brute-forceable in
-  seconds, so a plain `sha256` is the value wearing a disguise. The secret comes from settings
-  and the fingerprint is never logged.
-- **The gate is a document-level capability, not a schema-level one.** `app/pii/` must not
-  import `app/classification/` (mirrors Classification's no-extraction-import rule, ORDER §8)
-  and must not import `packages.canonical` models. If the pipeline wants to pass document type
-  into policy, it passes a plain `str`.
-- **Originals are immutable.** `marker.md` and the upload are never rewritten. Redaction
-  produces a *new* artifact string; replacements are applied right-to-left so earlier offsets
-  stay valid (deterministic and testable).
-- **The current LLM provider is trusted, explicitly and by name.**
-  `ai_base_url` is `https://foundation-models.api.cloud.ru/v1` (`app/config/settings.py:27`) — an
-  external vendor, but the *only* provider we have. M4 locks `PIIDestination.INTERNAL_LLM` as
-  the default, so no pre-extraction redaction happens today; `REDACT` is fully specified and
-  unreachable until an external/offshore provider is configured. This is a deliberate,
-  recorded deferral, not an oversight (IMPL_ARCH §16).
-- **Fail closed on gate failure.** If the gate itself cannot produce a decision,
-  `PIIDecisionError` is raised and the pipeline must not proceed to extraction. M4 locks the
+  seconds. The secret comes from settings, is never hard-coded, never defaults, and the fingerprint
+  is never logged. **Supplied as of M5 Phase 8** (`settings.pii_fingerprint_secret` /
+  `PII_FINGERPRINT_SECRET`, empty by default and rejected by every consumer), and still unused in
+  production because nothing detects until Phase 9.
+- **The gate is a document-level capability, not a schema-level one.** `app/pii/` must not import
+  `app/classification/` and must not import `packages.canonical` models. Document type crosses into
+  policy as a plain `str`.
+- **Originals are immutable.** `marker.md` and the upload are never rewritten. Redaction produces a
+  *new* artifact string; replacements are applied right-to-left so earlier offsets stay valid.
+- **The current LLM provider is trusted, explicitly and by name.** `ai_base_url` is
+  `https://foundation-models.api.cloud.ru/v1` (`app/config/settings.py:27`) — an external vendor,
+  but the only provider available. `PIIDestination.INTERNAL_LLM` is the default, so
+  pre-extraction redaction is dormant until an external/offshore provider is configured. Phase 15
+  makes that a setting rather than a constant.
+- **Fail closed on gate failure.** If the gate cannot produce a decision, `PIIDecisionError` is
+  raised and the pipeline must not proceed to extraction **or to persistence**. M4 locked the
   exception; M5 wires the halt.
-- **M4 touches `apps/ai-worker/app/pii/**` only.** The cross-package contract (storage kind,
-  frontmatter model, event field) is *documented* in §4 and coded in M5 — same discipline as
-  M1, which documented classification persistence without touching `packages/`.
+- **Remediation is per-category, not per-decision.** The document-level `PIIDecision` decides
+  halt-vs-continue only. What gets masked is decided by `PIIDecisionResult.actions[category]` — see
+  §4.12. Getting this wrong destroys `doctor_name` / `organization_name`, which `render_document`
+  needs and IMPL_ARCH §3.1 explicitly excludes from patient PII.
+- **Aggregation is per-leaf, never across leaves.** Two paths holding the same value are two
+  separate findings. Merging them would let a remediation fix one path while the second keeps
+  leaking — the exact failure mode ORDER §13.6 calls out.
+- **M5 touches the pipeline and `packages/`.** M4 touched `app/pii/**` only; every cross-package
+  edit M4 documented in §4.9 is executed in M5 (Phases 10, 11, 14).
 - **PII Gate is one security control, not a compliance layer.** It does not make the platform
-  GDPR/HIPAA/152-ФЗ compliant; that also depends on storage, access, retention, consent,
-  encryption, residency, processor agreements, deletion, backups and incident response
-  (IMPL_ARCH §37). Do not cite this plan as evidence of compliance.
+  GDPR/HIPAA/152-ФЗ compliant (IMPL_ARCH §37). Do not cite this plan as evidence of compliance.
 - **Raw PII is internal-only.** The gate's output is a security artifact; it must not become
   user-facing through the normal document API (IMPL_ARCH §26).
 
@@ -119,25 +146,41 @@ not detection output (IMPL_ARCH §12), so jurisdiction and org-specific rules ar
 
 ## 1. Execution summary
 
-| Phase | Scope | Status |
-|---|---|---|
-| 1 | Domain contract (enums, `PIIFinding`/`PIIFindingSummary`/`PIIScanResult`/audit, exceptions) | [x] |
-| 2 | Schemas (JSON Schema exports for scan result + finding summary) | [x] |
-| 3 | Detector contract (`PIIDetector` protocol, per-kind stubs, aggregator/dedup) | [x] |
-| 4 | Masking & redaction contract (mask table, fingerprint, `PIIRedactor`) | [x] |
-| 5 | Policy + gate contract (`DEFAULT_POLICY`, `PolicyEngine`, `PIIGate.inspect`) | [x] |
-| 6 | Canonical-output guard contract (post-extraction leak boundary) | [x] |
-| 7 | Persistence, provenance, versioning contract (+ M5 hand-off touch lists) | [x] |
+| Phase | Milestone | Scope | Status |
+|---|---|---|---|
+| 1 | M4 | Domain contract (enums, `PIIFinding`/`PIIFindingSummary`/`PIIScanResult`/audit, exceptions) | [x] |
+| 2 | M4 | Schemas (JSON Schema exports for scan result + finding summary) | [x] |
+| 3 | M4 | Detector contract (`PIIDetector` protocol, per-kind stubs, aggregator/dedup) | [x] |
+| 4 | M4 | Masking & redaction contract (mask table, fingerprint, `PIIRedactor`) | [x] |
+| 5 | M4 | Policy + gate contract (`DEFAULT_POLICY`, `PolicyEngine`, `PIIGate.inspect`) | [x] |
+| 6 | M4 | Canonical-output guard contract (post-extraction leak boundary) | [x] |
+| 7 | M4 | Persistence, provenance, versioning contract (+ M5 hand-off touch lists) | [x] |
+| 8 | M5 | HMAC secret in settings + `PIIPolicyContext` boundary validation | [x] |
+| 9 | M5 | Pattern detector → aggregator → policy engine → `PIIGate.inspect` | [ ] |
+| 10 | M5 | Persistence surface (`pii_result.json`, `MARKDOWN_KIND_PII`, `PIIMeta`, frontmatter) | [ ] |
+| 11 | M5 | Contour 1 wiring — `inspect` after classification, artifact before publish | [ ] |
+| 12 | M5 | Markdown redaction (`PIIRedactor.redact`) | [ ] |
+| 13 | M5 | Marker-shape fixture + structured-field and secret detectors | [ ] |
+| 14 | M5 | Canonical guard — escalation policy, per-category sanitizer, both dump points | [ ] |
+| 15 | M5 | `EXTERNAL_LLM` destination + redaction on the extraction path | [ ] |
+| 16 | M5 | NER detector (P1) | [ ] |
+| 17 | M5 | `REVIEW` combination threshold (P1) | [ ] |
 
-M4 is complete when all seven phases are `[x]`, the full ai-worker suite is green on the
-174-test baseline, and `make lint` is clean.
+**M4 status: complete.** All seven phases `[x]`, committed as `ef412d2`. `uv run pytest` → 436
+passed (174 baseline + 262 PII contract tests). `make lint` reports only 4 pre-existing
+`packages/storage` errors, unrelated to this milestone and present before M4 began.
 
-**M4 status: complete.** All seven phases `[x]`. `uv run pytest` → 436 passed
-(174 baseline + 262 PII contract tests). `uvx ruff check app/pii tests/unit/pii
-tests/support` → clean. `make lint` reports only 4 pre-existing `packages/storage`
-errors, unrelated to this milestone and present before M4 began. Everything is
-uncommitted, and no `packages/` or `app/pipeline/` file was modified — every
-cross-package edit is still recorded in §4.9 as documented-not-made.
+**M5 status: in progress — Phases 8–9 done, 10–17 pending.** `uv run pytest` → 546 passed
+(436 baseline + 110 new). The gate now *works* in memory: `await gate.inspect(document, context)`
+detects, deduplicates, evaluates policy and returns a verdict — the first vertical slice. It is
+still not **in production**: nothing in `app/pipeline` calls it yet (Phase 11), nothing is
+persisted (Phase 10), and the two detector stubs in the chain still raise.
+
+**M5 is complete when** Phases 8–17 are `[x]`, the full ai-worker suite is green on the 436-test
+baseline, `packages/storage` is green, and — the criterion that actually distinguishes M5 from M4 —
+**the two real leaks from `.dev/flow_upload_test/` produce a clean `canonical.json`, a clean
+`structured.md`, and a clean event `data`**, asserted in three separate tests, one per dump point.
+A green suite that does not include that assertion does not count as M5 done.
 
 ---
 
@@ -848,14 +891,329 @@ apps/ai-worker/tests/unit/pii/test_fixture_manifest.py        32 tests
 
 ---
 
-## 3. Pending phases
+## 3. Phases 8–17
 
-None — all seven M4 phases are implemented. Every item §4.9 lists as an M5
-touch list is still unmade, by design: M4 delivers the contract and M5 delivers
-the gate. The next work is not a phase of this plan but the milestone it hands
-off to, starting with the implementation stubs that currently raise
-(`PIIDetectorBase`, `PIIAggregatorBase`, `PolicyEngineBase`, `PIIGateBase`,
-`CanonicalPIIInspectorBase`) and the cross-package edits recorded in §4.9.
+Ten phases, sequenced per IMPL_ARCH §45's 19-step order. The three **vertical slices** are marked
+**VS#1/#2/#3**; they are the phases that turn a contract into a working control, and each is a
+plausible stopping point if the milestone needs to ship partially. Phases 8 and 9 are `[x]` and
+their status is recorded in place below, M4-style; the remaining eight are `[ ]`.
+
+### Phase 8 — HMAC secret + policy context boundary [x]
+
+`Settings.pii_fingerprint_secret` (env `PII_FINGERPRINT_SECRET`) with **no usable default**;
+`app/pii/detectors.py` gains a settings-driven factory that raises `InvalidPIIInputError` on an
+empty secret rather than degrading to a plain hash. Add `PIIPolicyContext` boundary validation —
+`organization_id` non-empty, `destination` resolved from settings — plus the `organization_id`
+source (ORDER §13.6: `settings.s3_tenant_id`, because neither `ProcessingContext` nor any event
+contract carries a tenant, and cross-package event changes are out of M5). Tests: secret
+required, empty secret fails closed, fingerprint differs under two secrets, context validation.
+Deps: none — first because nothing can compute a fingerprint without it (§45.01–02).
+**Accept:** `hash_pii_value` is unreachable with a missing or empty secret, proven by a test that
+constructs the detector chain with no setting and expects the raise.
+
+#### Phase 8 Implementation Status
+
+**Changes.**
+
+```text
+apps/ai-worker/app/config/settings.py     pii_fingerprint_secret (env PII_FINGERPRINT_SECRET)
+apps/ai-worker/app/pii/detectors.py       PII_FINGERPRINT_SECRET_ENV,
+                                          PIIDetectorBase.__init__(fingerprint_secret=),
+                                          PIIDetectorBase.fingerprint, build_detector_chain
+apps/ai-worker/app/pii/policy.py          PIIPolicyContext._require_organization,
+                                          DEFAULT_DESTINATION, build_policy_context
+apps/ai-worker/app/pii/masking.py         hash_pii_value now rejects a whitespace-only secret
+apps/ai-worker/app/pii/__init__.py        +4 exports (68 total)
+.env.example                              documents PII_FINGERPRINT_SECRET for operators
+apps/ai-worker/tests/support/pii_imports.py   allowlist += type-only Settings
+apps/ai-worker/tests/unit/pii/test_detectors.py      allowlist test generalized (1 test)
+apps/ai-worker/tests/unit/pii/test_policy_gate.py    allowlist test renamed + widened (1 test)
+apps/ai-worker/tests/unit/pii/test_settings_boundary.py  30 tests
+```
+
+- **Two choke points, not one.** `build_detector_chain(settings)` validates at **construction**,
+  so a misconfigured worker fails at start-up rather than emitting unkeyed fingerprints at 3am;
+  `PIIDetectorBase.fingerprint()` validates again **per call**, so a detector built directly (a
+  test, a future tool, an ad-hoc script) still cannot produce a finding. The plan asked for the
+  first; the second is what makes "no key, no finding" a property of the type rather than of the
+  pipeline's wiring.
+- **Deviation — the factory takes `Settings`, not a bare secret string**, which required widening
+  the type-only import allowlist to three symbols. Taken because the accept criterion is phrased
+  as "constructs the detector chain **with no setting**", because `organization_id`'s source
+  (`settings.s3_tenant_id`, ORDER §13.6) is only pinned if something inside `app/pii` names it,
+  and because a bare `str` parameter would have pushed both wirings into the pipeline. The
+  import is **type-only**: a runtime `app.config` import would make the security control
+  unimportable without an environment and would pull `messaging.topology` in transitively
+  (`settings.py:5`). Proven in a subprocess with `app.config` and `messaging` blocked, mirroring
+  the M4 pipeline guard.
+- **Deviation — `pii_fingerprint_secret` defaults to `""`, not to a required field.** A required
+  field would fail `settings = Settings()` at import time (`settings.py:88`) and take the whole
+  worker — and all 465 tests — down with it. "No usable default" is therefore delivered as *an
+  empty default that is loudly unusable*: the field holds no secret, and every consumer rejects
+  it. The alternative (a required field plus a separate dev/test settings object) trades a real
+  fail-closed property for a boot-order one.
+- **Deviation — the secret is instance state on the base class, with an empty default.** Required
+  by the wording but wrong for `CompositePIIDetector`, which contributes no category and
+  fingerprints nothing; requiring a key there would assert a guarantee the container cannot keep.
+  So the base takes `fingerprint_secret=""` (no key, and `fingerprint()` fails closed), the
+  factory passes the real one to each member, and the composite accepts and ignores it. The
+  secret is private, absent from `repr`, and there is a test that no public attribute exposes it.
+- **Chain order is `StructuredField` → `Pattern` → `Secret`,** not declaration order. Aggregation
+  breaks a confidence tie in favour of the first detector in the chain, so the *stronger* signal
+  (a value behind a known label, per its own M4 docstring) must come first or a tie resolves to
+  the weaker form. `Secret` last for visibility, not for effect: order cannot soften a `BLOCK`.
+  Pinned by a test, because Phase 9's confidence constants are what make this moot and Phase 16
+  will append to this tuple.
+- **Deviation — `hash_pii_value` (an M4 module, 37 tests) now rejects whitespace-only secrets**,
+  not just empty ones. A three-candidate key is an unkeyed digest wearing a smaller disguise, and
+  the check belongs at the one function that computes the digest. No M4 assertion changed: the
+  existing test covers `""`, and the secrets used elsewhere in that module are real strings.
+- **Deviation — `organization_id` is validated on the model, not in the factory**, so a directly
+  constructed context cannot bypass it. The value is stripped and blank is rejected with
+  `PIIPolicyError` — a domain error a caller can catch, rather than a `min_length` constraint
+  that would surface as a `ValidationError` about a field the caller never named. Pydantic
+  propagates the non-`ValueError` out of the validator unwrapped, matching the existing
+  `PIIPolicy._require_full_coverage`.
+- **`DEFAULT_DESTINATION = PIIDestination.INTERNAL_LLM` added as a named constant.** Phase 8 must
+  not add the LLM-destination setting — §4.9 assigns that to Phase 15 — but the value still needs
+  one home, so Phase 15's change is a single line plus a settings read rather than a hunt through
+  call sites. The docstring names the phase that replaces it, and a test asserts it still does.
+- **Deviation — `.env.example` gained the variable.** Not in §4.9's touch list, but a setting no
+  operator can discover is a setting that stays unset, and "unset" now means the worker refuses to
+  start its PII gate. The comment carries the `secrets.token_urlsafe(32)` recipe and the "treat it
+  as config, not ephemeral env" note from §7 R5.
+- **Neither version constant moved.** `DETECTOR_VERSION` stays `1.0.0` and `PII_POLICY_VERSION`
+  stays `1.0.0`: the roadmap in §7 reserves `1.1.0` for Phase 9's additive `detect_text` and
+  `2.0.0` for Phase 14's decision change, and Phase 8 changes no decision and produces no finding.
+  The argument for leaving the detector version alone: it stamps *findings*, and there are none.
+  Bumping here would have pushed the locked roadmap's NER step to `1.3.0`.
+- **Verification recap:** `uv run pytest tests/unit/pii` → 292 passed (262 M4 + 30 Phase 8);
+  `uv run pytest` → 466 passed; `uvx ruff check app/pii app/config tests/unit/pii tests/support`
+  and `ruff format --check` on the touched files → clean. Root `make lint` still reports only the
+  4 pre-existing `packages/storage` errors; `packages/storage` suite 15 passed. Still uncommitted.
+- **Next step:** Phase 9 (Pattern detector → aggregator → policy → gate) — the first vertical
+  slice, and the first phase where the gate returns a verdict instead of raising.
+
+### Phase 9 — Pattern detector → aggregator → policy → gate [x] · **VS#1**
+
+`detect_text(text) -> list[PIIFinding]` added to the `PIIDetector` protocol; `detect(NormalizedDocument)`
+demoted to a wrapper that calls it on `document.raw_text` and aggregates once
+(`DETECTOR_VERSION` 1.0.0→**1.1.0**, additive). `PatternPIIDetector` implemented — Cyrillic ФИО
+(including declined forms, §7 gotcha G1), СНИЛС, полис ОМС, phone, email, дата рождения, талон.
+`PIIAggregator.aggregate` dedups on `(category, value_fingerprint)` and is **only ever called on
+one leaf's findings**. `PolicyEngine.evaluate` implements §4.4. `PIIGate.inspect` composes
+detect → aggregate → policy → project into `PIIScanResult`. `CompositePIIDetector` fans out.
+Tests: per-category patterns, declined-name regression, dedup-within-a-leaf, policy table row per
+category, decision precedence, boundary-safety of the projected result.
+Deps: Phase 8. (§45.03–06)
+**Accept:** `await gate.inspect(document, context)` returns a `PIIScanResult` for the
+`synthetic-consultation-01` fixture with the manifest's `expected_decision`/`expected_risk_level`,
+and the result dumps with no `value` key at any depth.
+
+#### Phase 9 Implementation Status
+
+**Changes.**
+
+```text
+apps/ai-worker/app/pii/detectors.py  PIIDetector.detect_text in the protocol, _Pattern.group,
+                                      PatternPIIDetector (11 rules), _MD_DECOR, case-folded
+                                      contour's after-label name rule, CompositePIIDetector
+                                      fan-out + empty-chain guard, DETECTOR_VERSION 1.1.0
+apps/ai-worker/app/pii/aggregation.py  DefaultPIIAggregator
+apps/ai-worker/app/pii/policy.py        RISK_ORDER + DefaultPolicyEngine
+apps/ai-worker/app/pii/gate.py          PolicyContextBuilder + DefaultPIIGate
+apps/ai-worker/app/pii/__init__.py      +5 exports (73 total)
+apps/ai-worker/tests/unit/pii/test_detectors_behaviour.py        31 tests
+apps/ai-worker/tests/unit/pii/test_aggregation_behaviour.py     16 tests
+apps/ai-worker/tests/unit/pii/test_policy_behaviour.py          21 tests
+apps/ai-worker/tests/unit/pii/test_gate_behaviour.py            11 tests
+apps/ai-worker/tests/unit/pii/test_detectors.py                 M4 contract guards updated
+apps/ai-worker/tests/unit/pii/test_policy_gate.py               M4 contract guards updated
+apps/ai-worker/tests/unit/pii/test_persistence_contract.py      detector version 1.1.0
+```
+
+- **`detect_text` is the real API and `detect` is a wrapper.** The plan's wording demotes
+  `detect(NormalizedDocument)` to "call it on `document.raw_text`", and that is what it does —
+  but the gate passes the text through anyway rather than taking the document, because the gate
+  aggregates **per leaf** and Phase 10 needs a gate that can scan one string at a time. The
+  document-shaped method stays because M4's contract named it and the interface guard tests it.
+- **Deviation — four bare-digit rules were deleted, and the accept criterion is why one came back.**
+  The fixture's own `Номер карты: 0000001234` was being claimed simultaneously as a `national_id`,
+  a `ticket_number` and (separately) a `medical_record_number` — three guesses, one of them right.
+  A pattern cannot distinguish a passport, an INN, a card and a ticket by length. Surviving:
+  СНИЛС (11 digits **plus** a check-digit algorithm, which is why its confidence is 0.9 and not
+  0.7), полис ОМС (16 digits, and the 12-digit overlap with a passport is a *disjoint* pair of
+  boundaries so the first rule wins), passport (**with** separators — a form, not a length), and
+  `medical_record_number.labelled_card`, which requires the label. The last one is an explicit
+  deviation from the plan's seven-rule list: the manifest's `expected_risk_level` of `high` for
+  this fixture is only reproducible if a `HIGH` category is found, and the labelled card is the
+  one high-risk value the document actually contains. A label is the only evidence that turns a
+  length into an identity; Phase 13's structured detector supersedes this rule with more of the
+  same evidence. Left as a known false positive: the `malicious/synthetic-injection-01`
+  fixture's 28-digit API key, which this layer claims as a `ticket_number` and Phase 13's secret
+  detector will claim as a credential — the one case where a later detector should *outrank* an
+  earlier one on the same span, which the chain order and the tie-break do not yet express.
+- **Deviation — the case-folded contour got its own name rule, and it is the phase's real content.**
+  §7's gotcha G1 anticipated a *declined* form («к Шадеркину Д.С.»); the actual failure was upstream
+  of declension. `NormalizedDocument.raw_text` is `str.casefold()`ed, so «Смирнова Ольга Ивановна»
+  reaches the detector as «смирнова ольга ивановна» and a title-case rule cannot fire — on the
+  fixture in the repository, and on every real document. Two rules now exist:
+  `person_name.three_token` (title-case, for unfolded input) and `person_name.after_label`, which
+  anchors on a name-introducing word and captures the three tokens **after** it, so the label never
+  lands in the masked value. The folded rule is a recall-over-precision trade and it is documented
+  as one: «сдан анализ крови» matches. That false positive is a `MEDIUM` reviewable risk and M6's
+  calibration problem; the alternative is a name detector that never fires in production.
+- **`_MD_DECOR` exists because emphasis markers are not cosmetic.** `raw_text` keeps markdown, so
+  the fixture's real text is `**пациент:** смирнова ольга ивановна`. A rule allowing only a colon
+  and a space after the label matched the file on disk and found **nothing** in the document the
+  pipeline actually hands the gate — the same blind spot as case-folding, one layer down, and found
+  only because the acceptance test runs the real normalizer over the real fixture. Without it the
+  phase would have shipped "green" against a rule that never fires.
+- **`_LONG_DIGIT_RUN` is 12 digits, matching the real marker** (22) with room below it, not 9. At
+  9 the rule claimed the fixture's 10-digit card as a `ticket_number`; at 12 the 10-digit run
+  claims nothing and the 16-digit policy number still claims both itself and the overlapping
+  ticket-shaped span, with the specific rule winning.
+- **`RISK_ORDER` is exported, because `max()` on a `str` enum is wrong.** `PIIRiskLevel` is a
+  `str` enum, so `max(findings, key=lambda f: f.risk_level)` orders `"low" > "high"` and returns
+  the *lowest* risk in the document. The engine takes the maximum by explicit rank instead, and
+  `RISK_ORDER` is public so a caller aggregating its own results cannot reintroduce the bug.
+- **`PolicyContextBuilder` is a parameter of `DefaultPIIGate`, not a lookup inside it.** The gate
+  needs `organization_id` (from settings), `destination` (Phase 15) and `redaction_available` (the
+  pipeline, which owns the redactor) — three sources, two of them outside `app/pii`. A builder
+  passed in at construction is the only way to keep the gate a pure function of its inputs; the
+  alternative (policy inputs in `ProcessingContext.attributes`, or `document.metadata`) would make
+  the verdict depend on ambient state that no type describes, and `metadata` is exactly where a raw
+  value could reappear. The builder is required, not defaulted: `None` raises.
+- **Redaction-unavailable escalation is what the acceptance test actually exercises.** Phase 9 has
+  no redactor, so at `EXTERNAL_LLM` the fixture's `REVIEW` is the *escalation* path, not a plain
+  verdict. The same document at `INTERNAL_LLM` returns `ALLOW` with **identical findings** — a test
+  asserts the destination changes the verdict and not the evidence, because a gate that dropped
+  evidence at the permissive destination would be a gate with a memory problem.
+- **Boundary safety is asserted by walking the serialized JSON**, not by reading attributes: a
+  recursive `_walk_keys` over `result.model_dump_json()` fails on any `value` or `value_fingerprint`
+  key at any depth. Reading attributes would not catch a value nested inside a future container.
+- **No pipeline wiring, and none is claimed.** `app/pipeline` still does not call the gate
+  (Phase 11), nothing is persisted (Phase 10), and `build_detector_chain` still returns the
+  `StructuredField`/`Secret` stubs, which raise — so a chain-built gate raises on the first
+  document. The acceptance test therefore composes `PatternPIIDetector` directly, which is the
+  honest reading of a phase that says "pattern detector → …".
+- **Verification recap:** `uv run pytest tests/unit/pii` → 372 passed (292 + 80); `uv run pytest` →
+  546 passed; `uvx ruff check`/`format --check` on `app/pii` and `tests/unit/pii` → clean. Root
+  `make lint` still reports only the 4 pre-existing `packages/storage` errors; `packages/storage`
+  15 passed. Still uncommitted.
+- **Next step:** Phase 10 (persistence surface) — `PIIMeta`, `build_pii_artifact`, the storage
+  keys — which turns this in-memory verdict into something an operator can read after the fact.
+
+### Phase 10 — Persistence surface [ ]
+
+`packages/storage`: `"pii": "pii_result.json"` in `MARKDOWN_ARTIFACTS` + `MARKDOWN_KIND_PII` in
+`storage/__init__.py` (`__all__`, alphabetical) + `tests/test_keys.py`. `apps/ai-worker`:
+`app/artifacts/{models,__init__}.py` re-export, `app/pii/artifact.py` gains `build_pii_artifact(...)`
+mirroring `app/classification/artifact.py:18-50`. `packages/canonical`: `PIIMeta` +
+`FrontmatterMeta.pii` in `canonical/metadata.py`, re-exported from `canonical/__init__.py`;
+`app/canonical/rendering.py:36-72` gains `pii=` on `build_frontmatter_meta`. No new event, no DB
+table, no migration, **no account-api change** (PII metadata is internal, IMPL_ARCH §26).
+Tests: `test_keys.py` known-kinds; `PIIMeta` rejects unknown keys; `to_dict()` emits the §4.7
+block; `build_pii_artifact` writes `PII_SCAN_RESULT_SCHEMA`-conformant JSON.
+Deps: Phase 9. (§45.07–09)
+**Accept:** `build_pii_artifact` output validates against `PII_SCAN_RESULT_SCHEMA` structurally and
+contains no raw value; `build_frontmatter_meta(pii=...)` round-trips through `render_frontmatter`.
+
+### Phase 11 — Contour 1 wiring [ ]
+
+`PIIGate` constructed in `DocumentPipeline.__init__` (`:60-77`); `inspect` called after
+classification and **before** extraction (`:147`). `ALLOW`/`ALLOW_WITH_WARNING` continue;
+`REVIEW` → halt with `processing_status='needs_review'`; `BLOCK` → processing failure. The
+`pii_result.json` artifact is uploaded **before** the event is published — the M2 Phase 4 ordering
+invariant, and the reason account-api can never see an event whose artifact is missing. Frontmatter
+`pii:` block and `event data["pii"]` populated. Tests: `test_pipeline.py` covers each decision's
+outcome, the artifact-before-publish ordering, and that `BLOCK` never reaches extraction.
+Deps: Phases 9, 10. (§45.10–11)
+**Accept:** with a `SECRET` fixture, `handle_structuring` raises the failure path and **zero**
+artifacts for the analysis stage are published; with a clean fixture the pipeline is byte-identical
+to the pre-M5 output apart from the new `pii` keys.
+
+### Phase 12 — Markdown redaction [ ]
+
+`PIIRedactor.redact(markdown, findings)` implemented over `(start, end)` spans, applied
+**right-to-left** so earlier offsets stay valid, replacing each with `placeholder_for(category)`.
+`redaction_available` is set `True` in the constructed context. The redacted markdown is a
+**new** artifact string; `marker.md` and the upload are never rewritten. Tests: span replacement
+correctness, right-to-left offset stability, non-overlapping and adjacent spans, no-op on empty
+findings, `SECRET` placeholder reveals nothing, idempotence.
+Deps: Phase 9. (§45.12)
+**Accept:** redacting the `synthetic-consultation-01` fixture removes every
+`expected_categories` value from the output while leaving all other characters byte-identical.
+
+### Phase 13 — Marker-shape fixture + structured & secret detectors [ ]
+
+`StructuredFieldPIIDetector` (labelled fields: `ФИО:`, `СНИЛС:`, `Полис №:`, `Дата рождения:`,
+`Номер талона:`) and `SecretPIIDetector` (credentials only — the sole source of `BLOCK`). One
+dataset entry reproducing the **shape** of the real `2b8fdd0d` marker, synthetically instantiated
+(ORDER §13.3 forbids committing real patient data — see §7 decision 9), with `expected_*` now
+**confirmed against a real detector** rather than declared, which is the whole point of the entry.
+Tests: the manifest's `expected_*` are asserted against actual `PIIGate` output, so a detector
+regression fails the manifest test.
+Deps: Phase 9. (§45.13–14)
+**Accept:** every `expected_*` in `manifest.json` is machine-verified; the declined-name marker
+shape yields `person_name` + `ticket_number` and nothing else.
+
+### Phase 14 — Canonical guard [ ] · **VS#2**
+
+`CanonicalPIIInspector.inspect` implemented: `walk_string_leaves(payload)` → `detect_text` per leaf
+→ `aggregate` **per leaf** → violations carrying `field_path`. **Escalation policy** (§4.11):
+identity / contact / government / medical_id at `stage=canonical, destination=persistence` →
+`REDACT`, bumping `PII_POLICY_VERSION` 1.0.0→**2.0.0**. **Per-category sanitizer** (§4.12):
+`sanitize_canonical_payload(payload, violations, actions)` masks only violations whose
+`actions[category] == REDACT`. Guard runs after `build_canonical` (`:164`); the **sanitized object
+replaces `canonical` before all three consumers** — S3 `canonical.json` (`:199`), `render_document`
+(`:203`), event `data` (`:236`). Sanitization is a rebuild, not an in-place mutation: dump →
+sanitize by path → `type(canonical).model_validate(...)`; a re-validation failure **fails closed**
+rather than persisting the unsanitized object. `BLOCK`/`REVIEW` halts before any persistence.
+Tests: both real leaks as fixtures, asserted clean at **all three** dump points separately; the
+clinical facts in the note (`М, 39 лет`) survive; the same value at two paths is masked at both;
+`doctor_name` survives a `person_name` redaction; policy version is 2.0.0; fail-closed on
+re-validation failure.
+Deps: Phases 9, 10, 11. (§45.15–16)
+**Accept:** `2b8fdd0d` and `fbbcb675` payloads produce a `canonical.json` and `structured.md` with
+no patient name, and an event `data` with no patient name — three tests, not one.
+
+### Phase 15 — `EXTERNAL_LLM` destination + redaction on the extraction path [ ] · **VS#3**
+
+`destination` for the extraction step resolved from settings (trusted vs external) instead of
+hard-coded `INTERNAL_LLM` (§7 decision 12). When `EXTERNAL_LLM` **and** `redaction_available`, the
+extraction call receives redacted text; the canonical guard still sees the original so nothing is
+lost from the internal record. The OCR call at `pipeline.py:92` is recorded as a **documented
+trusted boundary** — the gate consumes `marker.md`, which OCR *produces*, so this design cannot gate
+it (§7 risk R1). Tests: trusted provider → original text reaches the extraction prompt; external
+provider → redacted text reaches it and the verdict is `ALLOW_WITH_WARNING`; redaction unavailable
++ external → escalation to `REVIEW` per §4.11.
+Deps: Phases 11, 12, 14. (§45.17)
+**Accept:** flipping the provider setting changes the text the extraction call sees, and the test
+asserts the redacted text contains no `expected_categories` value.
+
+### Phase 16 — NER detector [ ] · P1
+
+`PIISource.NER` populated by a detector behind the existing protocol, added **after** the
+deterministic detectors so it can only widen coverage, never override a `BLOCK`. A graceful no-op
+when no model is configured — M6 may decide to leave it off entirely. Tests: protocol conformance,
+it composes through `CompositePIIDetector`, absence of a model changes nothing.
+Deps: Phase 9. (§45.18)
+**Accept:** the NER detector is never the sole control — a `SECRET` detected only by NER still
+yields `BLOCK`, and a document NER finds nothing in still passes.
+
+### Phase 17 — `REVIEW` combination threshold [ ] · P1
+
+The §13.1 "unknown limitation" closed: unexpected high-risk **combinations** (e.g. ≥2 distinct HIGH
+categories, or identity + government ID in one free-text leaf) escalate to `REVIEW` instead of
+`ALLOW`. Policy data, not code (IMPL_ARCH §17). `PII_POLICY_VERSION` 2.0.0→**2.1.0**. `REVIEW`
+still never auto-redacts (§7 open decision, M4). Tests: the combination table, both sides of every
+threshold, and that a single HIGH category alone stays `ALLOW`.
+Deps: Phase 14. (§45.19)
+**Accept:** a leaf with `SNILS` + `INSURANCE_NUMBER` + `PERSON_NAME` is `REVIEW`; the same leaf with
+only `PERSON_NAME` is `ALLOW`.
+
+---
 
 ## 4. Locked design reference (condensed)
 
@@ -1007,7 +1365,7 @@ carries `document_id`, `document_version_id`, `patient_id`, `client_type`, `proc
 `attributes` — the gate needs no context change in M5. The gate result is *not* added to
 `ProcessingContext` as a field: classification isn't either, and both ride in the event/metadata.
 
-### 4.7 Persistence shape (locked for M5)
+### 4.7 Persistence shape (locked — implemented in M5 Phase 10)
 
 Mirrors Classification 2.0 exactly — artifact + frontmatter block + event `data` key, **no new
 event, no new DB table, no new migration**:
@@ -1022,8 +1380,8 @@ event, no new DB table, no new migration**:
   "category_counts": { "person_name": 1, "date_of_birth": 1, "medical_record_number": 1,
                        "doctor_name": 1, "organization_name": 1, "address": 2 },
   "categories": ["person_name", "date_of_birth", "medical_record_number"],
-  "detector_version": "1.0.0",
-  "policy_version": "1.0.0",
+  "detector_version": "1.1.0",
+  "policy_version": "2.0.0",
   "reasons": ["expected_medical_identity"],
   "warnings": []
 }
@@ -1034,7 +1392,9 @@ same `extra="forbid"`, `reasons`/`warnings` lists, `*_version` string — `PIIMe
 sibling in the same file, and `FrontmatterMeta.pii` its optional field (`:93` has
 `classification: ClassificationMeta | None = None`). Full findings (masked) live only in
 `pii_result.json`, mirroring `classification_result.json`. `categories` is a convenience list for
-UI/metrics; `category_counts` is authoritative.
+UI/metrics; `category_counts` is authoritative. The versions above are the end-of-M5 values from
+the §7 roadmap; Phase 10 emits whatever is current at the time, and a test asserts the block
+carries the live constants rather than a copy.
 
 **Audit events** (IMPL_ARCH Phase 9, no values): `pii.scan.completed`, `pii.blocked`,
 `pii.review.required`, `pii.redacted`. Audit must be written (IMPL_ARCH §22) but must never carry
@@ -1048,8 +1408,10 @@ docs/comments; minor = additive (new optional fields, new `PIICategory` values) 
 category also requires a policy row, or it inherits no action**; major = breaking (required field
 changes, enum removals, decision-rule changes). Any change that alters a decision bumps the
 policy version, so a stored `PIIScanResult` can always be interpreted by the policy that produced it.
+The M5 roadmap that moves both constants — `1.0.0 → 1.1.0 → 1.2.0` and `1.0.0 → 2.0.0 → 2.1.0` —
+is in §7 (Versioning policy).
 
-### 4.9 M5 touch lists (documented here, executed in M5)
+### 4.9 M5 touch lists (documented in M4, executed in M5 — Phases 10, 11, 14)
 
 `packages/storage`: `storage/keys.py:10-15` add `"pii": "pii_result.json"` to
 `MARKDOWN_ARTIFACTS` + update the docstring at `:38-47`; `storage/__init__.py:9-12` add
@@ -1067,30 +1429,101 @@ re-export the new kind; `app/pii/artifact.py` gains `build_pii_artifact(...)` mi
 `canonical/__init__.py` re-exports; `apps/ai-worker/app/canonical/rendering.py:36-72` gains a
 `pii=` parameter on `build_frontmatter_meta`.
 
+**Phase 14 additionally, in `apps/ai-worker/app/pipeline/pipeline.py`:** the guard call sits
+immediately after `build_canonical` (`:164`), and its output **replaces** the `canonical`
+binding so all three consumers — `canonical.json` (`:199`), `render_document` (`:203`) and event
+`data` (`:236`) — read the sanitized object. Sanitizing a local copy, or moving the guard after
+the dump, leaves at least one surface leaking; this is the single most important ordering
+constraint in M5.
+
+**Phase 8 additionally, in `apps/ai-worker/app/config/settings.py`:** `pii_fingerprint_secret`
+(Phase 8) and the LLM destination (Phase 15). No other settings change.
+
 `apps/account-api`: if account-api ever reads the artifact, its hard-coded kind allow-list
 (`app/services/storage.py:80-85`) must gain the new kind — it currently omits even
 `classification`, so this is a pre-existing gap, not a PII regression. PII metadata is internal
 (IMPL_ARCH §26), so **no API surface and no event are added** in M5.
 
-### 4.10 Fixture manifest shape (M4 seeds it, M5 fills it)
+### 4.10 Fixture manifest shape (M4 seeded it, M5 Phase 13 confirms it)
 
 `tests/fixtures/pii/manifest.json` mirrors the classification manifest (loader shape in
 `app/classification/fixtures.py:52-67`): top-level `version` + `notes` + `fixtures[]` where each
 entry has `file`, `source` (`real`|`synthetic`), `expected_categories` (list),
 `expected_decision`, `expected_risk_level`, and optionally `contains_secret` (bool).
 Directories per IMPL_ARCH Phase 10: `clean/ patient/ laboratory/ appointment/ prescription/ mixed/
-malicious/`. M4 seeds `clean/`, `patient/` and `malicious/` synthetically to prove the shape; the
-real-marker sweep (copying `.dev/flow_upload_test/`) is M5.
+malicious/`. M4 seeds `clean/`, `patient/` and `malicious/` synthetically to prove the shape.
+
+**Correction to the M4 text here:** this section originally said the M5 sweep would consist of
+*copies of `.dev/flow_upload_test/`*. It does not, and must not — ORDER §13.3 forbids committing
+real patient data, because duplicating the leak into the repo creates the second copy this
+milestone exists to prevent. M5 Phase 13 adds a **synthetic** file reproducing the real marker's
+label/value shape, and its `expected_*` are confirmed against a real detector for the first
+time. See §7 decision 9.
+
+
+### 4.11 Persistence escalation policy (new in M5, Phase 14)
+
+ORDER §13.4's finding: the §4.4 default table makes identity / contact / government / medical_id
+`ALLOW` at every destination, so a canonical document persists a patient's name — which is exactly
+the observed leak. The M4 table is correct for the *source* contour (IMPL_ARCH §2: PII presence
+never blocks) and wrong for *persistence*, where the question is not "is this document sensitive"
+but "does this artifact need to carry the identifier".
+
+```text
+override: stage=canonical AND destination=persistence
+  identity     PERSON_NAME DATE_OF_BIRTH
+  contact      EMAIL PHONE ADDRESS
+  government   PASSPORT NATIONAL_ID INSURANCE_NUMBER SNILS INN
+  medical id   PATIENT_ID MEDICAL_RECORD_NUMBER LAB_ORDER_ID ENCOUNTER_ID TICKET_NUMBER
+    -> action REDACT (was ALLOW)
+
+unchanged at persistence:
+  SECRET                    -> BLOCK   (unchanged, and the only BLOCK source)
+  AGE GENDER NATIONALITY    -> ALLOW   (clinical facts, ORDER §13.7 - masking them destroys the note)
+  DOCTOR_* ORGANIZATION_*   -> ALLOW   (not patient PII, IMPL_ARCH §3.1)
+```
+
+`REDACT` with a working sanitizer resolves to `ALLOW_WITH_WARNING` + `PIIRemediation.SANITIZE`; the
+document is saved with a mask and the run continues. `REDACT` with `redaction_available=False`
+escalates to `REVIEW` (§4.4) — which is why Phase 8 must fail closed on a missing secret rather than
+silently producing unmaskable findings. Precedence stays `block > review > allow_with_warning >
+allow`, so a single `SECRET` still fails the document even when everything else is redacted.
+
+This is **policy data, not code** (IMPL_ARCH §17): it is a row set in `DEFAULT_POLICY`, versioned
+by `PII_POLICY_VERSION` 1.0.0 -> 2.0.0 (§7), and reversible without touching the guard.
+
+### 4.12 Per-category remediation (new in M5, Phase 14)
+
+`PIIDecision` decides **halt vs continue** for the document. It does not decide what to mask.
+Masking is driven by `PIIDecisionResult.actions[category]`, which exists for exactly this purpose
+and is dropped from the persisted `PIIScanResult`.
+
+```text
+decision (document level)  --> halt | continue        <- PIIGate, DECISION_REMEDIATION
+actions[category]          --> which leaves to mask   <- sanitize_canonical_payload
+```
+
+Mask a canonical leaf iff `actions[violation.category] == PIIAction.REDACT`. Consequences that
+matter: a `PERSON_NAME` redaction leaves `DOCTOR_NAME` and `ORGANIZATION_NAME` intact, so
+`render_document` and the future `AppointmentCanonical` keep working; and an `ALLOW`-but-recorded
+category stays legible to a human reviewing the canonical. Masking on the document-level decision
+instead would blank every finding in a run that happened to contain one redaction.
+
+`PIIDecisionResult` is in-process only and carries no values, so passing `actions` to the sanitizer
+does not widen the boundary — the sanitizer needs the *category*, and already holds the value it is
+replacing, in the same process, on the same string.
 
 ---
 
 ## 5. Tests
 
-**Approach (M4): contract-level only** — importability, enum values, field shapes, schema keys,
-protocol conformance on stubs, policy table values, mask rules, and boundary assertions. No
-detection-logic tests (nothing detects yet), mirroring M1's approach.
+**Approach, in two layers.** M4 asserted **contracts** — importability, enum values, field shapes,
+schema keys, protocol conformance on stubs, policy table values, mask rules, boundary assertions.
+M5 asserts **behaviour and outcomes** — that a pattern fires, that a name is masked in the right
+path, that a document with a secret halts, and that the three persistence surfaces are clean. The M4
+contract tests are kept, not replaced: they are what makes the refactor safe.
 
-The three assertions that carry the security value:
+The three assertions that carry the security value (M4, still enforced):
 
 ```text
 1. "value" not in PIIFindingSummary.model_fields / PIIScanResult.model_fields
@@ -1099,35 +1532,63 @@ The three assertions that carry the security value:
 3. no "value"/"value_fingerprint" in PIIAuditRecord.model_fields
 ```
 
-Plus two import guards: no `s3`/`rabbit`/`storage` import in `app/pii/*` (mirrors
-`test_service.py:184-195`), and no `app.classification` domain import in `app/pii/*` — the
-architectural boundary from ORDER §8. A runtime "no PII in logs" test needs an implementation and
-lands in M5; in M4 it is asserted structurally on the models.
+Plus two import guards: no `s3`/`rabbit`/`storage` import in `app/pii/*`, and no
+`app.classification` domain import in `app/pii/*` — the architectural boundary from ORDER §8. M5
+adds the third guard this milestone makes possible: **no `packages.canonical` import in
+`app/pii/*`**, asserted so the guard keeps operating on plain dicts and stays reusable.
 
-**Files:** `tests/unit/pii/{test_models,test_schemas,test_detectors,test_masking_redaction,test_policy_gate,test_canonical_guard,test_persistence_contract,test_fixture_manifest}.py`.
-No `__init__.py` in test dirs (matches `tests/unit/classification/`).
+**The M5 acceptance test (the one that matters).** For each of the two real leak payloads, three
+separate assertions, one per dump point:
+
+| # | Surface | Assertion |
+|---|---|---|
+| 1 | S3 `canonical.json` body | no patient name, no ticket number |
+| 2 | S3 `structured.md` body | no patient name, no ticket number |
+| 3 | `DocumentAnalysisCompleted.data["canonical"]` | no patient name, no ticket number |
+
+A single test that greps one serialized blob would pass while the other two surfaces still leak,
+which is precisely how the current bug survived: the leak is in `fields.note`, and `fields.note`
+reaches three consumers from one object. Three tests, or the milestone is not done.
+
+Supporting M5 tests: per-leaf aggregation (same value, two paths, both masked), per-category
+remediation (`doctor_name` survives a `person_name` redaction), clinical-fact preservation
+(`М, 39 лет` survives), declined-Cyrillic-name regression, fail-closed on an empty HMAC secret,
+fail-closed on re-validation failure, artifact-uploaded-before-publish ordering, every decision's
+pipeline outcome, `EXTERNAL_LLM` redaction, and manifest `expected_*` verified against real
+detector output.
+
+**Files (new in M5).** `tests/unit/pii/{test_detectors_behaviour,test_aggregation_behaviour,test_policy_behaviour,test_redactor_behaviour,test_guard_behaviour,test_artifact,test_settings_boundary}.py`;
+`tests/unit/pipeline/test_pipeline_pii.py`; extended `tests/fixtures/pii/manifest.json` + the
+`laboratory/`, `appointment/`, `prescription/`, `mixed/` directories (declared in
+`PII_FIXTURE_DIRECTORIES` but not yet created); `tests/support/pii_fixtures.py` delegate once the
+dataset grows past the trio. `packages/storage/tests/test_keys.py` extended in Phase 10.
 
 **Commands:**
 
 ```bash
 cd apps/ai-worker && uv run pytest tests/unit/pii -v          # focused
-cd apps/ai-worker && uv run pytest                            # full: 174 baseline, must stay green
-uv run --project packages/storage pytest packages/storage     # only after M5 touches keys.py
+cd apps/ai-worker && uv run pytest                            # full: 436 baseline, must stay green
+cd apps/ai-worker && uv run pytest tests/unit/pipeline -v      # contour wiring, Phases 11/14/15
+uvx ruff check apps/ai-worker/app/pii apps/ai-worker/tests/unit/pii apps/ai-worker/app/pipeline
+uvx ruff format --check apps/ai-worker/app/pii
+uv run --project packages/storage pytest packages/storage     # required from Phase 10 on
 make lint                                                      # uvx ruff check apps packages tests
 ```
 
 **Acceptance smoke check (from `apps/ai-worker`):**
 
 ```bash
-uv run python -c "from app.pii import PIICategory, PIIScanResult, PIIGate, DETECTOR_VERSION, PII_POLICY_VERSION; print('ok')"
+uv run python -c "from app.pii import PIICategory, PIIScanResult, PIIGate, DETECTOR_VERSION, PII_POLICY_VERSION; print(DETECTOR_VERSION, PII_POLICY_VERSION)"
 ```
 
-M4 introduces **no** new runtime dependency (stdlib `re`/`hmac`/`hashlib` + Pydantic only) and
-**no** migration.
+Expected after Phase 14: `1.1.0 2.0.0`. M5 introduces **no** new runtime dependency (stdlib
+`re`/`hmac`/`hashlib` + Pydantic only) and **no** migration.
 
 ---
 
 ## 6. Implementation order
+
+M4 (all done, retained for history — see §2 for the per-phase record):
 
 1. **Phase 1 — Domain contract** [x] — enums, models, exceptions. Everything else depends on it.
 2. **Phase 2 — Schemas** [x] — derives from Phase 1, so the "no `value` in schema" proof lands early.
@@ -1139,11 +1600,31 @@ M4 introduces **no** new runtime dependency (stdlib `re`/`hmac`/`hashlib` + Pyda
 6. **Phase 6 — Canonical-output guard** [x] — needs the policy engine it reuses.
 7. **Phase 7 — Persistence, provenance & versioning** [x] — last: it projects the frozen shapes.
 
-Author in parallel with phases 3–4: the `tests/fixtures/pii/` synthetic trio (do early so Phase 5
-policy tests have ground truth, as M2 Phase 5's dataset preceded its verification phase).
+M5 (pending — the numbering is IMPL_ARCH §45's 19-step sequence folded into phases):
 
-Each phase: implement → update status in all three places (§1 table, §3 heading, §6 list) → pause
-for confirmation. Deviations labeled `Deviation:` in the phase's Implementation Status block.
+8. **Phase 8 — HMAC secret + policy context boundary** [x] — first, because nothing can fingerprint
+   without it and dedup depends on fingerprints (§45.01–02).
+9. **Phase 9 — Pattern detector → aggregator → policy → gate** [x] — VS#1: the smallest end-to-end
+   gate. Stopping point if the milestone ships partially (§45.03–06).
+10. **Phase 10 — Persistence surface** [ ] — the artifact must exist before the pipeline can
+    upload it (§45.07–09).
+11. **Phase 11 — Contour 1 wiring** [ ] — turns VS#1 into a real control. Contour 1 works here
+    (§45.10–11).
+12. **Phase 12 — Markdown redaction** [ ] — needs the gate's findings; independent of the guard
+    (§45.12).
+13. **Phase 13 — Marker-shape fixture + structured & secret detectors** [ ] — `SECRET` detection is
+    the only `BLOCK` source, so it must exist before the guard is trusted (§45.13–14).
+14. **Phase 14 — Canonical guard** [ ] · VS#2 — the phase that closes the observed leak. After
+    this, the milestone's purpose is met even if 15–17 slip (§45.15–16).
+15. **Phase 15 — `EXTERNAL_LLM` destination + redaction** [ ] · VS#3 — dormant until a second
+    provider exists; safe to defer without regressing anything (§45.17).
+16. **Phase 16 — NER detector** [ ] · P1 — widens coverage, never overrides (§45.18).
+17. **Phase 17 — `REVIEW` combination threshold** [ ] · P1 — policy data on top of Phase 14 (§45.19).
+
+Phases 12 and 13 are independent of each other and can run in either order. Phase 16 is
+independent of everything after 9. Each phase: implement → update status in all three places
+(§1 table, §3 heading, §6 list) → pause for confirmation. Deviations labeled `Deviation:` in the
+phase's Implementation Status block.
 
 ---
 
@@ -1151,118 +1632,215 @@ for confirmation. Deviations labeled `Deviation:` in the phase's Implementation 
 
 ### Gotchas (verified)
 
+- **G1 — the live leak is a *declined* Cyrillic name, and a naive pattern misses it.** The canonical
+  text is `"...для пациента Шадеркина Дениса Сергеевича"` — genitive, mid-sentence, lowercase-initial
+  words. A `Фамилия Имя Отчество` nominative pattern does not match it, and neither does a
+  "capitalised word at start of string" heuristic. `PatternPIIDetector` must match capitalised
+  three-word runs anywhere in the string, and Phase 9/13 carry a regression test on the exact string.
+  This is the single most likely way a green Phase 9 still leaves the leak open.
 - **The leak is live, not hypothetical.** Both `2b8fdd0d.../canonical.json` and
   `fbbcb675.../canonical.json` contain the patient's full name; the first also carries the ticket
-  number and address. `2b8fdd0d` is already a permanent classification fixture
+  number. `2b8fdd0d` is already a permanent classification fixture
   (`tests/fixtures/classification/appointment/2b8fdd0d.md:16-25`), so the same real PII is already
-  in the repo's test data — the PII dataset should reuse copies, not `.dev` references (M2's
-  convention).
+  in the repo's test data — the PII dataset reuses **shapes**, and the name is instantiated
+  synthetically (see decision 9).
 - **`BaseCanonical.fields` is `Any`** (`packages/canonical/canonical/schemas/__init__.py:67-89`),
-  and `GenericCanonical` is the current default model (`:124-139`). There is no field list to
-  guard — hence the free-form payload walk in Phase 6. Prompting alone cannot hold this line,
-  which is precisely why `canonical.yaml:100` failed.
-- **Nested PII also persists to PostgreSQL.** `DocumentAnalysisCompleted.data` is written
-  verbatim into `document_extractions.data` (`apps/account-api/app/services/documents.py:536`),
-  so an event-level `data["pii"]` block is how account-api learns the verdict without a new table.
+  and `GenericCanonical` is the current default model. There is no field list to guard — hence the
+  free-form payload walk. Prompting alone cannot hold this line, which is precisely why
+  `canonical.yaml:100` failed.
+- **One canonical object feeds three consumers.** `canonical.json` (S3 `:199`), `structured.md`
+  (`:203`) and event `data` (`:236`) are all derived from the same `canonical`. Sanitizing a
+  *copy* sanitizes whichever copy that call site held; the fix has to replace the object, which is
+  why Phase 14 rebuilds rather than mutates.
+- **Nested PII also persists to PostgreSQL.** `DocumentAnalysisCompleted.data` is written verbatim
+  into `document_extractions.data` (`apps/account-api/app/services/documents.py:536`), so an
+  event-level `data["pii"]` block is how account-api learns the verdict without a new table — and
+  why the event is a third leak surface the guard must reach.
+- **`PIIFinding` is frozen but not hashable** (`metadata` is a `dict`, observed in M4 Phase 1). The
+  aggregator dedups on the `(category, value_fingerprint)` tuple, not on the model.
+- **`Field(exclude=True)` does not remove a field from `model_json_schema()`.** `exclude` is a
+  serialization concern only. M4 derives `PII_FINDING_SCHEMA` from `PIIFindingSummary` and pins it
+  with `test_schemas_never_derived_from_pii_finding`, so nobody re-derives it from the wrong model.
+- **`GenericCanonical` is the default model and `BaseCanonical` is `extra="forbid"`, not frozen.**
+  The Phase 14 round-trip (`model_dump(by_alias=True)` → sanitize → `model_validate`) depends on
+  both: `extra="forbid"` means an unrecognized key after sanitization is a hard failure rather than
+  a silent pass, and mutability is irrelevant because the plan rebuilds rather than mutates.
 - **account-api's storage allow-list is already behind** — `app/services/storage.py:80-85` omits
   `MARKDOWN_KIND_CLASSIFICATION`, so account-api cannot read the classification artifact today.
-  Pre-existing gap; leave it alone unless M5 needs account-api to read the PII artifact (it
-  should not — PII metadata is internal, IMPL_ARCH §26).
+  Pre-existing gap; M5 does **not** fix it, because PII metadata is internal (IMPL_ARCH §26).
 - **Existing masking helpers are not reusable.** `apps/account-api/app/middleware/request_logging.py:387-566`
   has header/body maskers, but they are methods on a FastAPI middleware, match field names by
   *substring* (so `"name"` also matches `"schema_name"`/`"filename"`), and live in account-api
   where ai-worker cannot import them. `packages/observability` is declared by all six apps but is a
-  0-byte stub. M4 therefore defines its own small, typed masker in `app/pii/masking.py`; extracting
-  the middleware helpers to a shared module is a separate cleanup, not an M4 dependency.
+  0-byte stub. M4 therefore defined its own small, typed masker in `app/pii/masking.py`; extracting
+  the middleware helpers to a shared module is a separate cleanup.
 - **No feature flags exist** in `Settings` (only `prompts_dir`, `pdf_dpi`, `pdf_format`,
-  `ai_model`). M5 needs one new setting for the fingerprint secret (§4.3); M4 does not touch
-  settings. A fingerprint secret must not fall back to a hard-coded default.
-- **No mypy/pyright in the repo**; type errors surface as Pydantic/import failures. This is the
-  existing convention from M1, not a new gap — `ruff` + Pydantic + import smoke checks are the gate.
-- **Test subdirs have no `__init__.py`** (`tests/unit/classification/`), but
-  `tests/support/__init__.py` exists. `tests/unit/pii/` is the exception and **does** have one:
-  `tests/unit/classification/` already owns `test_models.py`, `test_schemas.py` and
-  `test_fixture_manifest.py`, and without a package marker pytest's prepend import mode makes
-  same-named siblings collide ("import file mismatch") — observed during Phase 1. A
-  `tests/support/pii_fixtures.py` delegate (mirroring `tests/support/classification_fixtures.py:1-21`)
-  is the place to put manifest iteration once the dataset grows.
+  `ai_model`). M5 adds two (§4.8): the fingerprint secret and the LLM destination. Neither may
+  hard-code a default secret.
+- **No mypy/pyright in the repo**; type errors surface as Pydantic/import failures. Existing
+  convention from M1, not a new gap — `ruff` + Pydantic + import smoke checks are the gate.
+- **Test subdirs have no `__init__.py`** (`tests/unit/classification/`), but `tests/support/__init__.py`
+  exists. `tests/unit/pii/` is the exception and **does** have one: without a package marker
+  pytest's prepend import mode makes same-named siblings collide ("import file mismatch") — observed
+  during M4 Phase 1.
 - **Fixture-manifest tests are strict.** `test_fixture_manifest.py:66-72` asserts the `.md` set on
   disk equals the manifest set, so the PII manifest must be complete in the same commit that adds
   a fixture file.
 - **Ruff is repo-root only** (`pyproject.toml:29-37`, line-length 100, `select = ["E","F","I","UP","B","SIM"]`).
-  `I` sorting matters: `__all__` lists and import blocks must stay alphabetical.
+  `I` sorting matters: `__all__` lists and import blocks must stay alphabetical — and Phase 10 adds
+  two `__all__` entries that must be placed correctly.
 
 ### Open decisions (defaults chosen)
 
-- **Raw value handling:** in-memory-only `value` (`Field(exclude=True)`) + `masked_value` +
-  salted `value_fingerprint`; serialized summary carries `masked_value` only. Chosen over
-  dropping `value` entirely because redaction needs the real text in-process, and over IMPL_ARCH §5's
-  literal shape because relying on call-site discipline is not a control.
-- **Persistence surface:** mirror Classification 2.0 (artifact + frontmatter block + event `data`
-  key; no new event, no new table, no migration). Chosen for contract consistency and zero churn
-  in `packages/contracts` + `account-api`. A dedicated `document.pii-checked` event is the natural
-  later step *if* PII ever needs to be consumed independently of analysis (e.g. bulk upload
-  screening before extraction); it is explicitly out of M4.
-- **Current provider is trusted:** `destination` defaults to `INTERNAL_LLM`, so no pre-extraction
-  redaction today; `REDACT` is fully specified but unreachable. Reversible by a one-line default
-  change once an external provider is added, which is the point of making it data.
-- **M4 includes the canonical-output guard.** It is the only contract that stops the leak that was
-  actually observed; a document-only gate would have left `fields.note` unguarded.
-- **NER/LLM detectors are deferred** (IMPL_ARCH §10/§11): contract stubs only for pattern,
-  structured-field, secret and composite. Rationale: deterministic detectors are testable and
-  reviewable; NER/LLM detectors get added in M5+ behind the same protocol, and the LLM detector
-  is explicitly never the sole control.
-- **`value_fingerprint` is not logged and not persisted** in the frontmatter/event block. If
-  cross-scan correlation is later needed, the `document_id` + `category` + offset triple is the
-  sanctioned join key.
-- **`age`/`gender` as PII categories:** kept (IMPL_ARCH §3 identity group) at LOW risk, masked to `**`.
-  They appear in the real lab note (`"(М, 39 лет)"`), so ignoring them would leave a real channel open.
-- **`document_type` in policy context** is a plain `str | None`, deliberately not `DocumentType`,
-  to keep `app/pii/` free of any `app.classification` import.
-- **Risk/action in policy, not detection.** `PIIDetector.detect()` never returns risk or action;
-  only the engine assigns them. This is what makes org-specific policy data rather than code (IMPL_ARCH §17, §25).
+- **1. Scope: IMPL_ARCH §45 full order, not ORDER §13.8's contour-2-only limit.** The two documents
+  disagree. Chosen: full order — both contours, `PIIRedactor`, `EXTERNAL_LLM` redaction, and the
+  `REVIEW` threshold. Rationale: §45 is the design spec's own conclusion and the only ordering whose
+  dependencies are argued; §13.8 is a scoping note written while the leak was still open, and it
+  predates the recognition that the canonical guard is *strictly harder* than the source contour
+  (free-form `fields`, no schema, declined-name calibration). Consequence: M5 is ten phases, not
+  six, and the source contour lands before the guard — so a partial shipment still leaves contour 1
+  protecting the pipeline. **Reversible:** Phases 15–17 can be deferred without regressing anything.
+- **2. Remediation is per-category (`actions[category] == REDACT`), not per-decision.** A
+  document-level `ALLOW_WITH_WARNING` → "sanitize everything" rule would also mask `DOCTOR_NAME` and
+  `ORGANIZATION_NAME`, which IMPL_ARCH §3.1 excludes from patient PII and which
+  `render_document` / the future `AppointmentCanonical` need. `PIIDecisionResult.actions` exists
+  precisely so M5 can act on a `REDACT` without re-deriving it from the decision. See §4.12.
+- **3. Escalate to `REDACT` at `canonical`+`persistence`, not `BLOCK`.** ORDER §13.4 offered
+  `REDACT`+sanitizer (A, chosen) or `BLOCK`+retry (B, rejected): under B, every legitimate note
+  naming a patient would fail permanently. A note naming a patient is not an attack; it is the
+  normal shape of free-form clinical text, and the clinical facts are explicitly not PII
+  (ORDER §13.7). `BLOCK` stays reserved for `SECRET` and fail-closed conditions.
+- **4. `organization_id` ← `settings.s3_tenant_id`.** `PIIPolicyContext.organization_id` is required,
+  but neither `ProcessingContext` nor any event contract carries a tenant (ORDER §13.6).
+  `s3_tenant_id` is a placeholder that is always populated, so the field is real and auditable
+  today; threading a real tenant through `packages/contracts` is a separate change with a schema
+  version bump, explicitly out of M5. Flagged in the artifact as the tenant identity, not
+  documented as authoritative.
+- **5. `detect_text()` on the protocol, `detect()` as a wrapper.** The guard walks string leaves, so
+  a protocol whose only entry point takes a `NormalizedDocument` is unusable by contour 2. Additive
+  → `DETECTOR_VERSION` 1.1.0. The guard passes a leaf, not a document; it cannot pass a
+  `NormalizedDocument` because it runs on a canonical payload, not the source.
+- **6. Aggregation is per-leaf, never across leaves.** Two paths holding the same value must stay
+  two findings (ORDER §13.6): merging them lets a remediation fix one path while the second keeps
+  leaking. Cost: a name in a header and a name in `fields.note` are reported twice. Accepted —
+  `category_counts` makes the duplication visible, and under-counting a leak is not an acceptable
+  trade.
+- **7. Sanitize by rebuild, not in-place mutation.** `canonical = type(canonical).model_validate(
+  sanitize(canonical.model_dump(mode="json", by_alias=True)))`. In-place attribute walking would
+  need a per-schema path setter and would couple the guard to every `fields` model. A re-validation
+  failure is a **fail-closed** error, never a fall back to the unsanitized object.
+- **8. OCR at `pipeline.py:92` is a documented trusted boundary, not a gap to close in M5.** The
+  gate consumes `marker.md`, which OCR *produces*; gating it would require a pre-OCR gate over the
+  image, which is a different control with a different threat model. The call is therefore recorded
+  as trusted in the pipeline docstring and in §7 risk R1. This is the honest resolution: the gate
+  does not cover it, and the plan says so rather than implying full coverage.
+- **9. "Real marker" means the real marker's *shape*, instantiated synthetically.** ORDER §13.3 and
+  the manifest's own notes forbid committing real patient data: a second copy of the leak would be
+  created by the fix for the leak. The dataset gets a synthetic file reproducing `2b8fdd0d`'s
+  label/value structure (ФИО / Полис / СНИЛС / Дата рождения / Номер талона) and the *declined*
+  name form from gotcha G1. `source` stays `"synthetic"`; the manifest `notes` record which real
+  document the shape came from, without its contents.
+- **10. Raw value handling** (carried from M4): in-memory-only `value` + `masked_value` + salted
+  `value_fingerprint`; the serialized summary carries `masked_value` only.
+- **11. `value_fingerprint` is not logged and not persisted** in the frontmatter/event block. If
+  cross-scan correlation is later needed, `document_id` + `category` + offset is the sanctioned
+  join key.
+- **12. `PIIDestination` for the extraction step becomes a setting** in Phase 15, defaulting to
+  `INTERNAL_LLM` (the current provider, §0 invariant). Same reasoning as M4: making the destination
+  data is the point, so switching providers is a config change and not a code change.
+- **13. `age`/`gender` as PII categories** (carried from M4): kept at LOW risk, masked to `**`. They
+  appear in the real note (`"(М, 39 лет)"`), so ignoring them would leave a channel open — but per
+  ORDER §13.7 the age itself is a clinical fact and must survive sanitization. Masking the
+  `GENDER`/`AGE` *tokens* while preserving the clinical sentence is the intended behaviour, and
+  Phase 14's tests assert it.
+- **14. `REVIEW` never auto-redacts.** A threshold that both flags and rewrites would make a
+  calibration guess destructive. `REVIEW` halts for a human.
+- **15. NER is P1 and may stay off.** It is the least deterministic detector and the most expensive;
+  M6 may decide the pattern + structured coverage is sufficient. Nothing else in M5 depends on it.
 
 ### Risks (mitigations in place)
 
-- **Contract over-specification.** 22 categories and 7 enums in a contract-only milestone could
-  turn into an unmaintainable surface. Mitigated by: all values are used by at least one real
-  fixture or by IMPL_ARCH, the policy table is data, and additions are minor-version events.
-- **False positives degrading extraction** (IMPL_ARCH §34): e.g. `Москва` as address vs clinic address.
-  Mitigated by `ALLOW` being the default for identity/contact, by `masked_value` + offsets +
-  `detector` in every finding (so M6 can triage), and by `REVIEW` never auto-redacting.
-- **Fingerprint treated as a safe hash.** A plain digest here would be a re-identification channel
-  for low-entropy IDs. Mitigated by locking HMAC+salt, keeping fingerprints out of logs and the
-  persisted block, and asserting both in Phase 4/7 tests.
-- **Gate wired in the wrong place** — after extraction, where it cannot help. Mitigated by
-  ORDER §23/§24 (parallel with classification) plus the lock that the guard *also* exists post-
-  extraction; the pipeline diagram in §0 shows both, and M5 acceptance requires the guard.
-- **Compliance misreading.** Someone cites this gate as HIPAA/152-ФЗ/GDPR proof. Mitigated by the
-  explicit invariant in §0 and IMPL_ARCH §37.
-- **No type-check in CI.** Same as every prior contour; mitigated by Pydantic + import smoke
+- **R1 — OCR sends the document to an external LLM before any gate runs.** `pipeline.py:92` is
+  upstream of both contours; §7 decision 8 documents it as trusted, and §0's diagram marks it
+  `UNGATED`. Not a defect of M5 — a property of the ordering — but the single largest remaining
+  exposure, and it must be stated in every report of this milestone's coverage. Mitigation when it
+  is addressed properly: a pre-OCR control over the image, or a trusted OCR deployment.
+- **R2 — the guard is only as good as the pattern set on free-form text.** `fields.note` is `Any`;
+  there is no schema to lean on. Mitigated by: the declined-name regression (G1), the per-leaf walk
+  that inspects *every* string leaf rather than a fixed field list, and M6's calibration pass over
+  `.dev/flow_upload_test/`. A guard that finds nothing on the real payloads is a failed milestone
+  even with a green suite — hence the three-surface acceptance test.
+- **R3 — sanitizing a category the render depends on.** Masking `DOCTOR_NAME` would degrade every
+  prescription. Mitigated by per-category remediation (decision 2) and by a test that asserts
+  `doctor_name` survives a `person_name` redaction.
+- **R4 — sanitization breaks schema validation.** Masking a typed field (e.g. a `ResultItem.value`
+  that is `str | float`) can produce a value the model rejects. Mitigated by fail-closed rebuild
+  (decision 7) — a loud failure in Phase 14's tests, not a silent leak in production.
+- **R5 — fingerprint secret rotation invalidates stored fingerprints.** A rotated secret changes
+  every fingerprint, so pre-rotation `value_fingerprint` values no longer match. Contained: nothing
+  reads or persists fingerprints (decision 11), and dedup is within a single scan, so there is no
+  cross-scan comparison to break. Mitigated by keeping them out of the artifact — the decision that
+  makes rotation a non-event. The secret must still be stable, because changing it changes
+  `PIIScanResult` output; treat it as config, not ephemeral env.
+- **R6 — `policy_version` in already-stored data goes stale.** Phase 14 writes `2.0.0`; the seeded
+  `document_extractions` rows from the dev runs carry no `pii` block at all, and pre-M5 artifacts
+  carry `1.0.0`. Nothing reads either yet, so **no migration is written and none is needed** — but
+  any future consumer must treat a missing or older `policy_version` as "not evaluated under current
+  policy" rather than "allowed". Recorded here so the assumption is explicit rather than
+  discovered.
+- **R7 — false positives degrading extraction** (IMPL_ARCH §34): e.g. `Москва` as address vs clinic
+  address; a three-word capitalised run as a ФИО. Mitigated by `ALLOW` being the default for
+  identity/contact, by `masked_value` + offsets + `detector` in every finding (so M6 can triage),
+  and by `REVIEW` never auto-redacting.
+- **R8 — fingerprint treated as a safe hash.** Mitigated by locking HMAC+salt, keeping fingerprints
+  out of logs and the persisted block, and asserting both.
+- **R9 — a `REVIEW` decision with no consumer.** `REVIEW` sets `processing_status='needs_review'`
+  and there is no human UI yet (IMPL_ARCH §2.1, ORDER §2). A document in `needs_review` stalls
+  silently. Mitigated by writing the `pii.review.required` audit event, which is the only signal
+  available; the UI is out of M5 and flagged rather than hidden.
+- **R10 — compliance misreading.** Someone cites this gate as HIPAA/152-ФЗ/GDPR proof. Mitigated by
+  the explicit invariant in §0 and IMPL_ARCH §37.
+- **R11 — `EVENTS.md` staleness.** No new event in M5, so the catalog at `EVENTS.md:8-18` does not
+  change. But `data["pii"]` and `data["classification"]` are new keys on an existing event; if
+  M6 formalizes the `data` shape, the catalog must be updated in the same commit.
+- **R12 — no type-check in CI.** Same as every prior contour; mitigated by Pydantic + import smoke
   checks + ruff, per existing convention.
-- **`docs/messaging/EVENTS.md` staleness.** Not touched in M4 (no new event); if the surface ever
-  changes, the catalog at `EVENTS.md:8-18` must be updated in the same commit.
 
 ### Versioning policy (locked)
 
 `DETECTOR_VERSION = "1.0.0"`, `PII_POLICY_VERSION = "1.0.0"` at M4. Patch = docs/comments only.
 Minor = additive (new optional field, new `PIICategory` with a matching policy row) and
-backward-compatible. Major = breaking (required field change, enum removal, decision-rule
-change) — any change that alters a decision for any input bumps the policy version, so a stored
+backward-compatible. Major = breaking (required field change, enum removal, **decision-rule
+change**) — any change that alters a decision for any input bumps the policy version, so a stored
 `PIIScanResult` always names the policy that produced it. Detector and policy versions move
 independently, mirroring `classifier_version` (currently `2.1.0`).
 
+M5 version roadmap:
+
+```text
+DETECTOR_VERSION    1.0.0 ──(Ph 9, additive detect_text)──▶ 1.1.0 ──(Ph 16, NER)──▶ 1.2.0
+PII_POLICY_VERSION  1.0.0 ──(Ph 14, persistence escalation)▶ 2.0.0 ──(Ph 17, thresholds)▶ 2.1.0
+```
+
+`1.0.0 → 2.0.0` is **major** because it changes a decision: at `stage=canonical,
+destination=persistence`, identity/contact/government/medical_id move from `allow` to `redact`
+(§4.11). A document that would previously have been persisted with a name in it is now masked. That
+is the milestone's entire point, and it is exactly the change a stored `policy_version` exists to
+make interpretable.
+
 ### Conventions
 
-- Follow `docs/development/operational/CONTRIBUTING.md`. M4 changes are localized to
-  `apps/ai-worker/app/pii/**` and `apps/ai-worker/tests/unit/pii/**` plus
-  `apps/ai-worker/tests/fixtures/pii/**`; no pipeline, package or migration edits.
-- Reuse the existing placeholder files rather than renaming: `detectors.py`, `gate.py`,
-  `models.py`, `policy.py`, `exceptions.py` already exist. New files: `schemas.py`,
-  `aggregation.py`, `masking.py`, `redaction.py`, `canonical_guard.py` (+ `artifact.py` in M5).
+- Follow `docs/development/operational/CONTRIBUTING.md`. M4 changes were localized to
+  `apps/ai-worker/app/pii/**` and `tests/unit/pii/**` plus `tests/fixtures/pii/**`. **M5 is the
+  first contour to leave that footprint**: `app/pipeline/pipeline.py`, `app/config/settings.py`,
+  `app/artifacts/`, `app/canonical/rendering.py`, `packages/storage/storage/keys.py` and
+  `packages/canonical/canonical/metadata.py` are all in scope, exactly as §4.9 recorded.
+- Reuse the existing files rather than renaming: `detectors.py`, `gate.py`, `models.py`,
+  `policy.py`, `exceptions.py`, `aggregation.py`, `masking.py`, `redaction.py`,
+  `canonical_guard.py` all exist. New in M5: `artifact.py` only.
 - Flat layout, mirroring `app/classification/` and STRUCTURE §5 — not IMPL_ARCH Phase 1's
-  `pii/domain/` subpackage. Same deviation as the Classification M1 plan; recorded here so M5
-  doesn't re-litigate it.
+  `pii/domain/` subpackage. Same deviation as the Classification M1 plan; recorded so M5 doesn't
+  re-litigate it.
 - Pydantic v2, `extra="forbid"` on every boundary model, `model_json_schema()` for schemas,
   `str, Enum` for enums, `Protocol` for interfaces, string annotations + `TYPE_CHECKING` for
   cross-package types.

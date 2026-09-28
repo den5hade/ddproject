@@ -8,6 +8,7 @@ capability independent of classification.
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.pii import (
@@ -24,10 +25,13 @@ from app.pii import (
     StructuredFieldPIIDetector,
     aggregation,
 )
+from app.pii import detectors as detectors_module
 from app.pii.aggregation import PIIAggregator, PIIAggregatorBase
 from tests.support.pii_imports import (
+    ALLOWED_TYPE_ONLY_IMPORTS,
     imports_forbidden_domains,
     imports_forbidden_infrastructure,
+    module_names,
     runtime_imports,
     type_only_imports,
     unexpected_type_only_imports,
@@ -35,6 +39,7 @@ from tests.support.pii_imports import (
 
 _DETECTORS_PATH = Path(__file__).resolve().parents[3] / "app" / "pii" / "detectors.py"
 _AGGREGATION_PATH = Path(__file__).resolve().parents[3] / "app" / "pii" / "aggregation.py"
+_SECRET = "phase-9-test-secret-not-a-real-key"
 _ALL_STUBS = (
     PatternPIIDetector,
     StructuredFieldPIIDetector,
@@ -46,6 +51,11 @@ _ALL_STUBS = (
 def _document():
     """A minimal stand-in; detectors only ever consume a ``NormalizedDocument``."""
     return object()
+
+
+def _text_document(text: str):
+    """A document stand-in exposing only ``raw_text``, which is all §7 reads."""
+    return SimpleNamespace(raw_text=text)
 
 
 # --- protocol contract ------------------------------------------------------
@@ -81,20 +91,34 @@ def test_stubs_detect_is_sync_with_the_protocol_signature():
 # --- fail-loud stubs --------------------------------------------------------
 
 
-def test_base_and_stubs_raise_not_implemented():
-    """An unimplemented detector must fail loudly, never report "no PII found"."""
+def test_base_and_the_two_remaining_stubs_raise_not_implemented():
+    """An unimplemented detector must fail loudly, never report "no PII found".
+
+    Phase 9 implemented the pattern detector and gave the composite a real
+    ``detect_text``, so the pair is asserted separately below. The structured
+    and secret detectors stay stubs through Phase 9 and must still raise — a
+    silent stub in either would mean a document's medical record number is
+    never examined.
+    """
     instances = (
         PIIDetectorBase(),
-        PatternPIIDetector(),
         StructuredFieldPIIDetector(),
         SecretPIIDetector(),
-        CompositePIIDetector([PatternPIIDetector()]),
     )
     for instance in instances:
         with pytest.raises(NotImplementedError) as excinfo:
             instance.detect(_document())
         assert type(excinfo.value) is NotImplementedError
         assert "M5" in str(excinfo.value)
+
+
+def test_phase_9_detectors_no_longer_raise_not_implemented():
+    """The pattern layer and the composite are live as of M5 Phase 9."""
+    pattern = PatternPIIDetector(fingerprint_secret=_SECRET)
+    composite = CompositePIIDetector([pattern])
+    for detector in (pattern, composite):
+        assert detector.detect_text("плановая проверка сети") == []
+        assert detector.detect(_text_document("плановая проверка сети")) == []
 
 
 def test_aggregator_base_raises_not_implemented():
@@ -142,7 +166,14 @@ def test_composite_accepts_any_detector_count():
 
 
 def test_detector_version_is_the_locked_baseline():
-    assert DETECTOR_VERSION == "1.0.0"
+    """``1.1.0`` from M5 Phase 9 — the minor line, for a contract addition.
+
+    The bump added ``detect_text`` to the protocol and gave the pattern layer an
+    implementation. It did not add, remove or re-label a category, so the major
+    line — "which findings are produced changed" — does not apply, and asserting
+    ``1.0.0`` here again would only re-freeze the constant.
+    """
+    assert DETECTOR_VERSION == "1.1.0"
 
 
 def test_finding_carries_the_detector_version_it_was_stamped_with():
@@ -174,13 +205,22 @@ def test_detectors_module_has_no_runtime_classification_import():
     assert not any(m.startswith("app.classification") for m in classification_modules)
 
 
-def test_detectors_module_borrows_only_normalized_document_type_only():
+def test_detectors_module_borrows_only_approved_types_type_only():
+    """Widened in M5 Phase 8: the chain factory takes ``Settings``, type-only.
+
+    The property under test is unchanged — every cross-package borrow is
+    type-only and drawn from the allowlist — but the allowlist itself grew by
+    one symbol, so an exact-equality assertion against the M4 pair would now be
+    asserting the wrong thing. What must stay true is that ``app.config`` is
+    *never* a runtime import: a runtime one would make ``app.pii`` unimportable
+    without an environment, and would drag ``messaging.topology`` in with it.
+    """
     borrowed = type_only_imports(_DETECTORS_PATH)
-    assert borrowed == {("app.classification.normalize", "NormalizedDocument")}
+    assert borrowed <= ALLOWED_TYPE_ONLY_IMPORTS
+    assert ("app.config.settings", "Settings") in borrowed
     assert not unexpected_type_only_imports(_DETECTORS_PATH)
-    for module, name in borrowed:
-        assert module == "app.classification.normalize"
-        assert name == "NormalizedDocument"
+    assert "app.config.settings" not in module_names(_DETECTORS_PATH)
+    assert not any(m.startswith("app.config") for m in module_names(_DETECTORS_PATH))
 
 
 def test_aggregation_module_imports_nothing_from_other_packages():
@@ -193,17 +233,31 @@ def test_aggregation_module_imports_nothing_from_other_packages():
     assert project_imports == {"app.pii.models"}
 
 
-def test_detector_documentation_names_its_intended_categories():
-    """Category assignment is docstring-only in M4 but must not be vague."""
-    for stub in _ALL_STUBS:
+def test_stub_documentation_names_its_intended_categories():
+    """Category assignment for an *unimplemented* detector must not be vague.
+
+    The M4 rule survives for the two detectors that are still stubs. It is
+    retired for ``PatternPIIDetector``, because a prose list of "intended
+    categories" is a worse artifact than the rule table it would describe, and
+    drifts from it silently. The replacement check is stronger: every row of the
+    table must name a real category, so a typo in a rule is a test failure
+    rather than a category nobody will ever see.
+    """
+    for stub in (StructuredFieldPIIDetector, SecretPIIDetector):
         doc = inspect.getdoc(stub) or ""
         assert doc, f"{stub.__name__} needs a docstring"
-        if stub is CompositePIIDetector:
-            continue
         named = {c.value for c in PIICategory if f"``{c.name}``" in doc}
         assert named, f"{stub.__name__} must name its intended categories"
         for category in named:
             assert category in PIICategory.__members__.values()
+
+    rows = detectors_module._PATTERNS
+    assert rows
+    for row in rows:
+        assert row.category in set(PIICategory)
+        assert 0.0 < row.confidence <= 1.0
+        assert row.name == f"{row.category.value}.{row.name.split('.', 1)[1]}"
+        assert row.regex.search("") is None
 
 
 def test_aggregation_documentation_locks_the_dedup_rule():

@@ -254,8 +254,16 @@ def test_version_constants_are_importable_from_their_home_modules():
     assert from_policy == PII_POLICY_VERSION
 
 
-def test_versions_are_both_1_0_0_at_m4():
-    assert DETECTOR_VERSION == "1.0.0"
+def test_versions_are_the_m4_baseline_and_the_phase_9_minor_bump():
+    """Detector 1.1.0 (M5 Phase 9), policy 1.0.0 — the two lines move apart.
+
+    Phase 9 changed the *detector* contract (``detect_text`` added, pattern
+    layer implemented) and left the policy table byte-identical, so pinning both
+    back to ``1.0.0`` would be asserting that nothing happened. The policy
+    constant staying at ``1.0.0`` is the load-bearing half: it proves Phase 9
+    touched no rule.
+    """
+    assert DETECTOR_VERSION == "1.1.0"
     assert PII_POLICY_VERSION == "1.0.0"
 
 

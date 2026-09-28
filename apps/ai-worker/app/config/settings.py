@@ -42,6 +42,24 @@ class Settings(BaseSettings):
     pdf_dpi: int = 300
     pdf_format: Literal["png", "jpeg"] = "png"
 
+    pii_fingerprint_secret: str = ""
+    """HMAC key for PII value fingerprints (env ``PII_FINGERPRINT_SECRET``).
+
+    The default is empty on purpose — there is **no usable default**, because a
+    default secret is a hard-coded secret and a hard-coded secret is no secret
+    at all (plan Phase 8). An empty or whitespace-only value is rejected by
+    ``app.pii.detectors.build_detector_chain`` with ``InvalidPIIInputError``
+    rather than degrading to a plain, brute-forceable digest, so a deployment
+    that forgets this variable fails closed at worker start-up instead of
+    shipping unkeyed fingerprints.
+
+    Generate one with ``python -c "import secrets;
+    print(secrets.token_urlsafe(32))"`` and treat it as config, not as an
+    ephemeral value: rotating it changes every fingerprint, so the pipeline's
+    output changes with it (plan §7 R5). Nothing reads or persists a
+    fingerprint, which is what keeps rotation a non-event for stored data.
+    """
+
     @cached_property
     def rabbitmq_dsn(self) -> str:
         if self.rabbitmq_url:

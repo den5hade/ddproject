@@ -65,7 +65,7 @@ Consequences for the phases that consume this rule
 
 from typing import Protocol
 
-from app.pii.models import PIIFinding
+from app.pii.models import PIICategory, PIIFinding
 
 
 class PIIAggregator(Protocol):
@@ -101,4 +101,61 @@ class PIIAggregatorBase(PIIAggregator):
         )
 
 
-__all__ = ["PIIAggregator", "PIIAggregatorBase"]
+class DefaultPIIAggregator(PIIAggregatorBase):
+    """Collapses duplicate findings — the M5 Phase 9 implementation.
+
+    Three properties, all of them load-bearing for the artifacts the pipeline
+    later persists:
+
+    - **Identity is ``(category, value_fingerprint)``.** Not the value itself, and
+      not the offsets: the same patient name written twice in one note is one
+      entity found twice, while a 9-digit СНИЛС and a 9-digit medical record
+      number are two different entities that happen to be numerically equal.
+      Category is in the key precisely so a *mislabelled* second sighting is kept
+      rather than silently merged into the first.
+    - **The survivor is the most confident sighting**, because that is the one
+      that produced the winner's fingerprint and mask. A ``SNILS`` at 0.95
+      detected in the labelled field beats a bare 11-digit run guessed at 0.6.
+    - **Ties keep the earliest sighting**, which makes the winner depend only on
+      detector chain order — the deterministic behaviour a test can assert and
+      M6 calibration can reason about.
+    """
+
+    def aggregate(self, findings: list[PIIFinding]) -> list[PIIFinding]:
+        """Return one finding per ``(category, value_fingerprint)``.
+
+        A finding with an empty ``value_fingerprint`` bypasses dedup entirely
+        and passes through untouched: a fingerprint-less sighting carries no
+        evidence that it is the *same* entity as anything, and merging on
+        position instead would silently drop a real finding. Detector versions
+        that could not fingerprint (Phase 1 anticipated this) therefore
+        over-report rather than under-report.
+
+        The input list is never mutated, and the output preserves first-appearance
+        order of the surviving keys so the artifact lists categories in the order
+        a reader would meet them in the document.
+        """
+        survivors: dict[tuple[PIICategory, str], PIIFinding] = {}
+        for finding in findings:
+            if not finding.value_fingerprint:
+                continue
+            key = (finding.category, finding.value_fingerprint)
+            current = survivors.get(key)
+            if current is None or finding.confidence > current.confidence:
+                survivors[key] = finding
+
+        merged: list[PIIFinding] = []
+        emitted: set[tuple[PIICategory, str]] = set()
+        for finding in findings:
+            if not finding.value_fingerprint:
+                merged.append(finding)
+                continue
+            key = (finding.category, finding.value_fingerprint)
+            if key in emitted:
+                continue
+            emitted.add(key)
+            merged.append(survivors[key])
+        return merged
+
+
+__all__ = ["DefaultPIIAggregator", "PIIAggregator", "PIIAggregatorBase"]

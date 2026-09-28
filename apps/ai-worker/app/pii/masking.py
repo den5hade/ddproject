@@ -24,8 +24,12 @@ Three rules the callers must honour, all enforced here:
 
 1. **The secret is a required keyword argument.** There is no module constant
    and no default, because a default is a hard-coded secret and a hard-coded
-   secret is no secret at all. An empty secret is rejected: HMAC with an empty
-   key is an unkeyed digest wearing the same disguise as ``sha256``.
+   secret is no secret at all. A blank secret is rejected — empty *and*
+   whitespace-only, since HMAC with an empty key is an unkeyed digest wearing
+   the same disguise as ``sha256`` and a whitespace key is that with a
+   three-candidate space. M5 Phase 8 sources the value from
+   ``settings.pii_fingerprint_secret`` and refuses to build a detector chain
+   without one.
 2. **The fingerprint is never logged and never persisted** (plan §7). It rides
    ``PIIFinding.value_fingerprint`` in-process only; ``document_id`` +
    ``category`` + offset is the sanctioned join key if cross-scan correlation is
@@ -321,21 +325,22 @@ def hash_pii_value(value: str, *, secret: str) -> str:
             :func:`_normalize_for_fingerprint`); never logged, never persisted.
         secret: High-entropy secret supplied by the caller. Keyword-only and
             required: there is deliberately no module constant and no default.
-            M5 sources it from settings; it must never fall back to a
-            hard-coded value.
+            M5 sources it from settings (``PII_FINGERPRINT_SECRET``); it must
+            never fall back to a hard-coded value.
 
     Returns:
         ``"hmac-sha256:"`` followed by the lowercase hex digest.
 
     Raises:
-        InvalidPIIInputError: If ``secret`` is empty. HMAC with an empty key is
-            an unkeyed digest, which is the exact disguise this function exists
-            to avoid.
+        InvalidPIIInputError: If ``secret`` is empty or whitespace-only. HMAC
+        with an empty key is an unkeyed digest, and a whitespace-only key is
+        the same disguise with a smaller candidate space — both are the exact
+        failure this function exists to prevent.
     """
-    if not secret:
+    if not secret.strip():
         raise InvalidPIIInputError(
-            "hash_pii_value requires a non-empty secret; an empty key makes the "
-            "fingerprint an unkeyed digest."
+            "hash_pii_value requires a non-empty secret; an empty or whitespace-only "
+            "key makes the fingerprint an unkeyed digest."
         )
     message = _normalize_for_fingerprint(value).encode("utf-8")
     digest = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()

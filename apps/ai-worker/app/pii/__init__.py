@@ -13,7 +13,7 @@ The gate is a document-level capability and stays free of any runtime
 ``NormalizedDocument`` is borrowed type-only.
 """
 
-from app.pii.aggregation import PIIAggregator, PIIAggregatorBase
+from app.pii.aggregation import DefaultPIIAggregator, PIIAggregator, PIIAggregatorBase
 from app.pii.canonical_guard import (
     CANONICAL_POLICY_DESTINATION,
     CANONICAL_POLICY_STAGE,
@@ -26,12 +26,14 @@ from app.pii.canonical_guard import (
 )
 from app.pii.detectors import (
     DETECTOR_VERSION,
+    PII_FINGERPRINT_SECRET_ENV,
     CompositePIIDetector,
     PatternPIIDetector,
     PIIDetector,
     PIIDetectorBase,
     SecretPIIDetector,
     StructuredFieldPIIDetector,
+    build_detector_chain,
 )
 from app.pii.exceptions import (
     InvalidPIIInputError,
@@ -41,7 +43,13 @@ from app.pii.exceptions import (
     PIIPolicyError,
     PIIRedactionError,
 )
-from app.pii.gate import DECISION_OUTCOMES, PIIGate, PIIGateBase
+from app.pii.gate import (
+    DECISION_OUTCOMES,
+    DefaultPIIGate,
+    PIIGate,
+    PIIGateBase,
+    PolicyContextBuilder,
+)
 from app.pii.masking import (
     FINGERPRINT_PREFIX,
     FIXED_MASKS,
@@ -74,15 +82,19 @@ from app.pii.persistence import (
 )
 from app.pii.policy import (
     CATEGORY_RISK,
+    DEFAULT_DESTINATION,
     DEFAULT_POLICY,
     PII_CATEGORY_GROUPS,
     PII_POLICY_VERSION,
     REDACT_ON_EXTERNAL,
+    RISK_ORDER,
+    DefaultPolicyEngine,
     PIIPolicy,
     PIIPolicyContext,
     PIIRule,
     PolicyEngine,
     PolicyEngineBase,
+    build_policy_context,
 )
 from app.pii.redaction import (
     PIIRedactor,
@@ -102,8 +114,12 @@ __all__ = [
     "DECISION_AUDIT_EVENTS",
     "DECISION_OUTCOMES",
     "DECISION_REMEDIATION",
+    "DEFAULT_DESTINATION",
     "DEFAULT_POLICY",
     "DETECTOR_VERSION",
+    "DefaultPIIAggregator",
+    "DefaultPIIGate",
+    "DefaultPolicyEngine",
     "FINGERPRINT_PREFIX",
     "FIXED_MASKS",
     "InvalidPIIInputError",
@@ -139,6 +155,7 @@ __all__ = [
     "PII_ARTIFACT_FILENAME",
     "PII_AUDIT_EVENTS",
     "PII_CATEGORY_GROUPS",
+    "PII_FINGERPRINT_SECRET_ENV",
     "PII_META_BLOCK_KEY",
     "PII_META_OPTIONAL_KEYS",
     "PII_META_REQUIRED_KEYS",
@@ -146,12 +163,16 @@ __all__ = [
     "PII_REDACTED_EVENT",
     "PatternPIIDetector",
     "PlaceholderRedactor",
+    "PolicyContextBuilder",
     "PolicyEngine",
     "PolicyEngineBase",
     "REDACT_ON_EXTERNAL",
+    "RISK_ORDER",
     "RedactorBase",
     "SecretPIIDetector",
     "StructuredFieldPIIDetector",
+    "build_detector_chain",
+    "build_policy_context",
     "hash_pii_value",
     "mask_pii_value",
     "placeholder_for",

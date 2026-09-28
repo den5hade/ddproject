@@ -377,10 +377,23 @@ def test_gate_base_implements_the_protocol():
 
 
 def test_gate_does_not_actually_take_a_schema_specific_gate():
-    """The base is generic: no appointment/laboratory specialisation leaks in."""
+    """The base is generic: no appointment/laboratory specialisation leaks in.
+
+    M5 Phase 9 added ``DefaultPIIGate`` — the document-level gate ORDER §8 calls
+    for. The guard is about *schema-specific* subclasses, so the concrete
+    document-level gate is named explicitly rather than allowed by suffix: a
+    future ``AppointmentPIIGate`` is the thing that must fail here, and it would
+    also fail if the allowlist were not being maintained.
+    """
     from app.pii import gate
 
-    assert not [n for n in dir(gate) if n.endswith("PIIGate") and n != "PIIGate"]
+    concrete = [
+        name
+        for name in dir(gate)
+        if name.endswith("PIIGate") and name not in {"PIIGate", "PIIGateBase", "DefaultPIIGate"}
+    ]
+    assert not concrete
+    assert "DefaultPIIGate" in dir(gate)
 
 
 # --- import boundary ---------------------------------------------------------
@@ -401,7 +414,15 @@ def test_gate_has_no_runtime_classification_or_pipeline_dependency():
 
 
 def test_policy_and_gate_import_nothing_outside_the_package():
-    allowed = {"__future__", "typing", "pydantic"}
+    """Only ``app.pii`` and the stdlib may be imported at runtime.
+
+    Widened in M5 Phase 9 for ``collections``/``datetime``: the concrete gate
+    counts categories and stamps a UTC timestamp, and treating the stdlib as a
+    boundary would be theatre — the concern of this guard is a *project*
+    dependency, which is what the separate infrastructure and domain guards
+    above and in ``test_detectors.py`` are for.
+    """
+    allowed = {"__future__", "typing", "pydantic", "collections", "collections.abc", "datetime"}
     for name in ("policy.py", "gate.py"):
         outside = {
             module
@@ -411,11 +432,19 @@ def test_policy_and_gate_import_nothing_outside_the_package():
         assert outside == set(), f"{name} imports outside the boundary: {outside}"
 
 
-def test_processing_context_borrow_is_narrowed_to_the_one_symbol():
-    """Guards the Phase 3 guard itself against being widened wholesale."""
+def test_type_only_borrows_stay_narrowed_to_the_three_approved_symbols():
+    """Guards the Phase 3 guard itself against being widened wholesale.
+
+    The third symbol is ``Settings``, added by M5 Phase 8 for
+    ``build_policy_context`` — a type-only borrow for the same reason the other
+    two are: a runtime import would make the PII package unimportable without
+    configuration. Asserted as a whole set so adding a fourth requires editing
+    this line deliberately.
+    """
     assert {
         ("app.classification.normalize", "NormalizedDocument"),
         ("app.pipeline.context", "ProcessingContext"),
+        ("app.config.settings", "Settings"),
     } == ALLOWED_TYPE_ONLY_IMPORTS
 
 
