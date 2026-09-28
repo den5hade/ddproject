@@ -18,6 +18,7 @@ from app.pii import (
     CATEGORY_RISK,
     DECISION_OUTCOMES,
     DEFAULT_POLICY,
+    HALTING_DECISIONS,
     PII_CATEGORY_GROUPS,
     PII_POLICY_VERSION,
     REDACT_ON_EXTERNAL,
@@ -503,6 +504,17 @@ def test_decision_outcomes_match_the_plan_table():
 def test_halting_decisions_are_exactly_review_and_block():
     halting = {d for d, outcome in DECISION_OUTCOMES.items() if "halt" in outcome}
     assert halting == {PIIDecision.REVIEW.value, PIIDecision.BLOCK.value}
+
+
+def test_halting_decisions_constant_is_derived_from_the_outcome_table():
+    """The pipeline switches on the constant; the table is the source of truth.
+
+    Without this, a fifth decision added to the enum with a "continue" outcome
+    and a new halting decision added to the constant would disagree silently.
+    """
+    halting = {d for d, outcome in DECISION_OUTCOMES.items() if "halt" in outcome}
+    assert {d.value for d in HALTING_DECISIONS} == halting
+    assert set(HALTING_DECISIONS) <= set(PIIDecision)
 
 
 def test_only_redaction_records_that_something_happened():

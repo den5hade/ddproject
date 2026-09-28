@@ -20,6 +20,7 @@ from contracts.events import (
 from storage import (
     MARKDOWN_KIND_CANONICAL,
     MARKDOWN_KIND_CLASSIFICATION,
+    MARKDOWN_KIND_PII,
     MARKDOWN_KIND_STRUCTURED,
     MARKDOWN_KIND_UNSTRUCTURED,
 )
@@ -51,10 +52,46 @@ from app.messaging import (
     ROUTING_KEY_CONVERTED,
     ROUTING_KEY_PROCESSING_FAILED,
 )
+from app.pii import (
+    HALTING_DECISIONS,
+    PIIDecision,
+    build_document_gate,
+    build_pii_artifact,
+    build_pii_meta_block,
+)
 from app.pipeline.context import ProcessingContext
 from app.prompts import PromptManager
 
 logger = logging.getLogger("ai_worker")
+
+
+PII_GATE_JOB_TYPE = "pii_gate"
+"""``job_type`` on the failure event a halting PII decision produces."""
+
+PII_DECISION_ERROR_CODES: dict[PIIDecision, str] = {
+    PIIDecision.REVIEW: "PII_REVIEW_REQUIRED",
+    PIIDecision.BLOCK: "PII_BLOCKED",
+}
+"""Why a document stopped, as an ``error_code``.
+
+The plan writes the two halting outcomes as ``processing_status =
+needs_review`` and ``processing failure`` (ORDER §0, IMPL_PLAN Phase 11). There
+is no ``processing_status`` field to carry either: ``DocumentAnalysisCompleted.status``
+is ``Literal["succeeded", "failed"]`` and ``DocumentProcessingFailed`` has no
+``data``, and M5 is explicitly forbidden from changing a cross-package event
+contract (ORDER §13.6). So the distinction is made in ``error_code``, which
+exists on the contract already and exists precisely to say *why* a job failed.
+
+``REVIEW`` and ``BLOCK`` need different codes because they are different events
+for whoever clears the queue: one is a document waiting for a person, the other
+is a document that must not be written down at all. Sharing one code would
+erase exactly the distinction the plan asks for.
+
+The key set is asserted in ``test_pipeline.py`` to equal
+:data:`~app.pii.gate.HALTING_DECISIONS`, so a new halting decision fails the
+suite instead of raising ``KeyError`` at the worst possible moment — on a real
+document, mid-request, after a scan that must be acted on.
+"""
 
 
 class DocumentPipeline:
@@ -75,6 +112,10 @@ class DocumentPipeline:
         self._normalizer = MarkdownNormalizer()
         self._classifier = RuleBasedClassificationService()
         self._resolver = RegistrySchemaResolver()
+        # Constructed here, at start-up, so a deployment with no
+        # PII_FINGERPRINT_SECRET raises before it consumes a single message
+        # rather than failing every document with the same exception.
+        self._pii_gate = build_document_gate(settings)
 
     async def handle_converting(self, event: DocumentUploaded) -> None:
         """Handle PDF/image -> unstructured markdown conversion."""
@@ -146,6 +187,46 @@ class DocumentPipeline:
             )
             classification = await self._classifier.classify(normalized, context)
 
+            pii_result = await self._pii_gate.inspect(normalized, context)
+            if pii_result.decision in HALTING_DECISIONS:
+                # No artifact, no event data, no extraction. The decision is
+                # logged and published as a failure; nothing derived from this
+                # document is written anywhere.
+                logger.warning(
+                    "pii_gate_halted document_id=%s decision=%s risk_level=%s "
+                    "findings_count=%s findings=%s reasons=%s",
+                    event.document_id,
+                    pii_result.decision.value,
+                    pii_result.risk_level.value,
+                    pii_result.findings_count,
+                    pii_result.category_counts,
+                    pii_result.reasons,
+                )
+                await self._fail(
+                    event.document_id,
+                    event.document_version_id,
+                    event.patient_id,
+                    PII_GATE_JOB_TYPE,
+                    f"PII gate {pii_result.decision.value}: {pii_result.reasons}",
+                    error_code=PII_DECISION_ERROR_CODES[pii_result.decision],
+                )
+                return
+
+            # Uploaded before the extraction call, not alongside the other
+            # artifacts at the end. The gate has already run and its verdict is
+            # the audit record of it; if the LLM call then fails, that verdict
+            # is still on disk instead of being lost with the failed request.
+            pii_key = self._build_key(event, MARKDOWN_KIND_PII)
+            await upload_text(
+                self._s3,
+                build_pii_artifact(result=pii_result),
+                pii_key,
+                "application/json",
+            )
+            logger.info(
+                "pii_result_uploaded key=%s decision=%s", pii_key, pii_result.decision.value
+            )
+
             prompt_key = "default"
             if classification.decision is not ClassificationDecision.AMBIGUOUS:
                 prompt_key = self._resolver.resolve(
@@ -165,6 +246,9 @@ class DocumentPipeline:
             page_count = count_pages(unstructured_markdown)
 
             classification_meta = self._build_classification_meta(classification)
+            # One build, used for the frontmatter *and* the event payload, so
+            # the two surfaces cannot disagree about what the gate decided.
+            pii_meta = build_pii_meta_block(result=pii_result)
             meta = self._build_frontmatter(
                 event,
                 canonical,
@@ -173,6 +257,7 @@ class DocumentPipeline:
                 client_type=client_type,
                 page_count=page_count,
                 classification=classification_meta,
+                pii=pii_meta,
             )
 
             classification_key = self._build_key(event, MARKDOWN_KIND_CLASSIFICATION)
@@ -238,6 +323,8 @@ class DocumentPipeline:
                         "structured_key": structured_key,
                         "classification_key": classification_key,
                         "classification": classification_meta.model_dump(mode="json"),
+                        "pii": pii_meta,
+                        "pii_key": pii_key,
                     },
                 ),
             )
@@ -262,6 +349,7 @@ class DocumentPipeline:
         client_type: str | None = None,
         page_count: int | None = None,
         classification: ClassificationMeta | None = None,
+        pii: dict | None = None,
     ):
         """Compose the Python-built YAML metadata envelope around a canonical doc."""
         model = prompt.get("model", self._settings.ai_model)
@@ -277,6 +365,7 @@ class DocumentPipeline:
             tokens=usage,
             validation=build_validation_meta(),
             classification=classification,
+            pii=pii,
         )
 
     def _build_classification_meta(self, classification) -> ClassificationMeta:
@@ -349,11 +438,13 @@ class DocumentPipeline:
         patient_id: UUID,
         job_type: str,
         error_message: str,
+        error_code: str = "PROCESSING_ERROR",
     ) -> None:
         logger.warning(
-            "processing_failed document_id=%s job_type=%s message=%s",
+            "processing_failed document_id=%s job_type=%s error_code=%s message=%s",
             document_id,
             job_type,
+            error_code,
             error_message,
         )
         await self._publish(
@@ -364,7 +455,7 @@ class DocumentPipeline:
                 document_version_id=version_id,
                 patient_id=patient_id,
                 job_type=job_type,
-                error_code="PROCESSING_ERROR",
+                error_code=error_code,
                 error_message=error_message,
             ),
         )

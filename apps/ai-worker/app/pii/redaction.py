@@ -52,8 +52,13 @@ It does not decide whether to run. ``PIIAction.REDACT`` is a policy verdict
 result is PII-free — only that the spans it was given are gone.
 """
 
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
 from typing import Protocol
 
+from app.pii.exceptions import PIIRedactionError
 from app.pii.models import PIICategory, PIIFinding
 
 __all__ = [
@@ -108,7 +113,7 @@ class RedactorBase(PIIRedactor):
 
 
 class PlaceholderRedactor(RedactorBase):
-    """Replaces each span with its ``[CATEGORY_UPPER]`` token — implements in M5.
+    """Replaces each span with its ``[CATEGORY_UPPER]`` token — M5 Phase 12.
 
     Named and specified now because the token format is a contract that
     reviewers and M6 calibration read: a redacted artifact should be
@@ -118,4 +123,199 @@ class PlaceholderRedactor(RedactorBase):
     ``detect``-style fallbacks are not its concern — it receives findings, and
     :class:`PIIDetector` implementations are the only component that reads raw
     text to decide what a span is.
+
+    **The offset is verified before it is trusted, and this is the one place
+    Phase 12 deviates from the module docstring's wording.** The docstring says
+    to prefer ``start``/``end`` "when both are present and lie within the
+    markdown". That test is not sufficient, and on the real caller it is
+    actively wrong. Findings produced by :meth:`app.pii.gate.PIIGate.inspect`
+    index ``document.raw_text``, which is *canonicalised* — case-folded,
+    punctuation-mapped, whitespace-collapsed — while the markdown is none of
+    those things. Measured on the ``synthetic-consultation-01`` fixture, all six
+    findings return offsets that are comfortably **in range** and point at
+    unrelated text:
+
+    .. code-block:: text
+
+        person_name  (117, 140) -> "* Смирнова Ольга Иванов"   (value: "смирнова ольга ивановна")
+        date_of_birth (142, 152) -> ", 1974-03-"               (value: "1974-03-12")
+        phone        (166, 184) -> "* +7 (495) 000-11-"        (value: "+7 (495) 000-11-22")
+
+    Honouring those offsets would replace the wrong characters *and* leave the
+    real value in the document: corruption and leak in one step, and the
+    artifact would attest to having removed a value it never touched. So this
+    implementation treats the offset as a **hint** and accepts it only when the
+    text it selects actually matches the finding's value; otherwise it locates
+    the value in the markdown. Both halves of the deviation tighten the locked
+    algorithm — they only change behaviour for offsets that were wrong, and for
+    well-formed findings (the canonical-guard contour, where the caller walks
+    the exact string it scanned) the hint still wins and the fast path is kept.
+    The docstring's intent — "never skip a finding, because a silently skipped
+    redaction is a leak" — is served better by this than by the literal reading,
+    which leaks while appearing to succeed.
+
+    Case-insensitive location is required, not a convenience: the canonicaliser
+    case-folds, so a value the detector saw as ``смирнова ольга ивановна``
+    appears in the markdown as ``Смирнова Ольга Ивановна``. Matching is done
+    with a case-insensitive regex over the *original* string rather than
+    ``str.casefold()`` on both sides, because ``casefold`` can change a string's
+    length (``"ß".casefold() == "ss"``) and a length-changing search returns
+    offsets into the wrong string.
     """
+
+    def redact(self, markdown: str, findings: list[PIIFinding]) -> str:
+        """Return a new string with every finding's span replaced.
+
+        Steps 1–4 of the module docstring, in order: resolve, merge, replace
+        right-to-left, mutate nothing.
+
+        Args:
+            markdown: The text to redact. Never modified — ``str`` is immutable
+                and the returned string is built by slicing.
+            findings: The findings to remove. Read-only; no
+                :class:`~app.pii.models.PIIFinding` is annotated or sorted in
+                place, because the finding list is the caller's and the same
+                list is what the gate will project into the audit artifact.
+
+        Returns:
+            A new string with each finding's span replaced by
+            :func:`placeholder_for`. With no findings, ``markdown`` unchanged —
+            a no-op is the correct answer, not a missed replacement.
+
+        Raises:
+            PIIRedactionError: If a finding resolves to no span at all. The
+                failure is deliberate and total: a partially redacted document
+                is a leak wearing the costume of a success, so this redactor
+                would rather produce nothing than produce a lie.
+        """
+        if not findings:
+            return markdown
+
+        spans = sorted(
+            (self._resolve(markdown, finding) for finding in findings),
+            key=lambda span: (span.start, span.end, -span.confidence, span.placeholder),
+        )
+        merged = _merge_overlapping(spans)
+
+        redacted = markdown
+        for span in reversed(merged):  # right-to-left: earlier offsets stay valid
+            redacted = redacted[: span.start] + span.placeholder + redacted[span.end :]
+        return redacted
+
+    def _resolve(self, markdown: str, finding: PIIFinding) -> _Span:
+        """Locate one finding in ``markdown`` — the offset hint, then the value.
+
+        Raises:
+            PIIRedactionError: If neither the hint nor the value locates.
+        """
+        from_offset = self._span_from_offset(markdown, finding)
+        if from_offset is not None:
+            return from_offset
+
+        value = finding.value
+        if value:
+            located = _locate(markdown, value)
+            if located is not None:
+                return _Span(
+                    start=located[0],
+                    end=located[1],
+                    placeholder=placeholder_for(finding.category),
+                    confidence=finding.confidence,
+                )
+
+        raise PIIRedactionError(
+            f"cannot redact a {finding.category.value} finding from the text: neither its "
+            f"({finding.start}, {finding.end}) offsets nor its value select it. The finding's "
+            f"offsets index a different string than the one being redacted, and redaction "
+            f"refuses to guess: a value left in place and an artifact claiming it was removed "
+            f"is the failure this gate exists to prevent."
+        )
+
+    @staticmethod
+    def _span_from_offset(markdown: str, finding: PIIFinding) -> _Span | None:
+        """Accept the offset hint only if the text it selects *is* the finding's value.
+
+        Returns ``None`` — meaning "use the value instead" — for an absent,
+        inverted, out-of-range or merely *wrong* offset. An unverified offset is
+        never used: see the class docstring for the measured case.
+        """
+        start, end = finding.start, finding.end
+        if start is None or end is None or not 0 <= start < end <= len(markdown):
+            return None
+        if not finding.value or not _same_text(markdown[start:end], finding.value):
+            return None
+        return _Span(
+            start=start,
+            end=end,
+            placeholder=placeholder_for(finding.category),
+            confidence=finding.confidence,
+        )
+
+
+@dataclass(frozen=True)
+class _Span:
+    """One located replacement: where, with what, and whose confidence won."""
+
+    start: int
+    end: int
+    placeholder: str
+    confidence: float
+
+
+def _same_text(left: str, right: str) -> bool:
+    """Compare two strings ignoring case and whitespace runs.
+
+    The canonicaliser case-folds and collapses whitespace before detection, so
+    the text at a *correct* offset differs from the finding's ``value`` in
+    exactly those two ways. Anything else differing means the offset is wrong.
+    """
+    normalise = lambda text: " ".join(text.split()).casefold()  # noqa: E731
+    return normalise(left) == normalise(right)
+
+
+def _locate(markdown: str, value: str) -> tuple[int, int] | None:
+    """Leftmost case-insensitive occurrence of ``value``, or ``None``.
+
+    A case-insensitive *regex* rather than ``casefold()`` on both strings
+    because ``casefold`` is not length-preserving (``"ß"`` → ``"ss"``); searching
+    a transformed copy would return offsets into the wrong string and splice it
+    at the wrong place.
+    """
+    match = re.search(re.escape(value), markdown, re.IGNORECASE)
+    return (match.start(), match.end()) if match else None
+
+
+def _merge_overlapping(spans: list[_Span]) -> list[_Span]:
+    """Union intersecting spans so no character is replaced twice.
+
+    Two overlapping spans applied right-to-left would corrupt the text, and
+    dropping the second would leave part of a value in place — a partial leak.
+    Merging makes both outcomes unrepresentable.
+
+    Touching spans are **not** merged: ``[0, 5)`` and ``[5, 10)`` do not
+    intersect, they are two adjacent values, and collapsing them into one
+    placeholder would destroy the fact that two different things were removed.
+
+    The merged span's placeholder comes from the highest-confidence finding in
+    the group. Confidence alone is not enough to make the output deterministic:
+    two findings can share a confidence *and* a span, and then "first one seen"
+    would put the caller's ordering into the artifact — the same document
+    redacted twice could produce two different files. So the sort key carries
+    ``(start, end, confidence, placeholder)``: position dominates (so a tie is
+    always the leftmost span), and the placeholder is the final tiebreaker, which
+    is intrinsic to the finding rather than to when it arrived.
+    """
+    merged: list[_Span] = []
+    for span in spans:
+        if merged and span.start < merged[-1].end:
+            previous = merged[-1]
+            winner = span if span.confidence > previous.confidence else previous
+            merged[-1] = _Span(
+                start=previous.start,
+                end=max(previous.end, span.end),
+                placeholder=winner.placeholder,
+                confidence=winner.confidence,
+            )
+        else:
+            merged.append(span)
+    return merged

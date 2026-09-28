@@ -74,23 +74,44 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from app.pii.aggregation import PIIAggregator
-from app.pii.detectors import DETECTOR_VERSION, PIIDetector
+from app.pii.aggregation import DefaultPIIAggregator, PIIAggregator
+from app.pii.detectors import (
+    DETECTOR_VERSION,
+    PIIDetector,
+    build_available_detector_chain,
+)
 from app.pii.exceptions import PIIDecisionError
-from app.pii.models import PIIDecisionResult, PIIFinding, PIIFindingSummary, PIIScanResult
-from app.pii.policy import PII_POLICY_VERSION, PIIPolicyContext, PolicyEngine
+from app.pii.models import (
+    PIIDecision,
+    PIIDecisionResult,
+    PIIFinding,
+    PIIFindingSummary,
+    PIIScanResult,
+    PIIScanStage,
+)
+from app.pii.policy import (
+    DEFAULT_POLICY,
+    PII_POLICY_VERSION,
+    DefaultPolicyEngine,
+    PIIPolicyContext,
+    PolicyEngine,
+    build_policy_context,
+)
 
 if TYPE_CHECKING:
     from app.classification.normalize import NormalizedDocument
+    from app.config.settings import Settings
     from app.pipeline.context import ProcessingContext
 
 
 __all__ = [
     "DECISION_OUTCOMES",
+    "HALTING_DECISIONS",
     "PolicyContextBuilder",
     "DefaultPIIGate",
     "PIIGate",
     "PIIGateBase",
+    "build_document_gate",
 ]
 
 
@@ -319,3 +340,107 @@ failure path. A test asserts the key set equals the set of ``PIIDecision``
 values, so adding a decision without an outcome fails the suite rather than
 reaching production as an unhandled case.
 """
+
+REDACTION_AVAILABLE: bool = True
+"""Whether a working redactor exists — M5 Phase 12.
+
+A module constant rather than a settings read because it is not an operational
+choice: it is a fact about *this codebase* (``PlaceholderRedactor.redact`` is
+implemented and tested), and it is the one input to
+:class:`~app.pii.policy.PIIPolicyContext` that configuration cannot honestly
+change. A deployment cannot acquire a redactor by setting an environment
+variable, so exposing one as config would be an operator's way to declare
+"redaction is available" and have the platform believe it while no redactor
+exists — the exact fail-open the flag's ``False`` default was chosen to prevent.
+
+The consequence of ``True`` today is nil, and deliberately so: the default policy
+issues ``ALLOW`` for every category but ``SECRET``, and the ``REDACT`` override
+fires only for ``EXTERNAL_LLM``, so no action is escalated to ``REVIEW`` for
+lack of a redactor. Phase 15 makes ``destination`` configurable; when it does,
+this flag is already telling the truth.
+"""
+
+HALTING_DECISIONS: frozenset[PIIDecision] = frozenset({PIIDecision.REVIEW, PIIDecision.BLOCK})
+"""The decisions that stop a document — the pipeline's only branch on the verdict.
+
+``DECISION_OUTCOMES`` above is *prose*; a caller cannot switch on prose, so
+anything branching on halt-vs-continue had to re-type the set, and a second copy
+of a security-relevant set is a second copy to forget when a decision is added.
+
+Deriving it here keeps one source of truth in the module that owns the decision
+vocabulary, and ``test_policy_gate.py`` asserts it is exactly the decisions
+whose :data:`DECISION_OUTCOMES` entry says "halt" — so the two cannot drift, and
+adding a halting decision fails the suite rather than letting the pipeline fall
+through to the extraction call with it.
+
+``REVIEW`` and ``BLOCK`` both halt, but they are not the same event downstream;
+the pipeline maps them to distinct ``error_code`` values because ``REVIEW`` is a
+document that needs a person and ``BLOCK`` is a document that must not be
+written down at all.
+"""
+
+
+def build_document_gate(settings: Settings) -> DefaultPIIGate:
+    """Construct the contour-1 gate — the pipeline's one call, M5 Phase 11.
+
+    Everything M4 left as a collaborator is resolved here, from ``settings``,
+    in one place: the detector chain, the aggregator, the policy engine and the
+    policy-context closure. The pipeline's ``__init__`` is then a single line
+    with no ``app.pii`` vocabulary in it, which means the security-relevant
+    choices (which detectors run, which stage, which destination) are all
+    auditable in this file rather than scattered across a call site.
+
+    Fail-closed properties, all inherited and none re-decided here:
+
+    * A missing ``pii_fingerprint_secret`` raises out of the chain constructor,
+      so a misconfigured deployment refuses to start rather than scanning
+      anything with a brute-forceable digest.
+    * ``redaction_available=True`` (Phase 12): a ``REDACT`` action now has a
+      working redactor behind it, so the policy stops escalating to ``REVIEW``
+      and starts reporting ``ALLOW_WITH_WARNING`` with "value must be redacted
+      before leaving the boundary". Note that this changes nothing observable at
+      today's destination — the default policy issues ``ALLOW`` for every
+      category except ``SECRET``, and the ``REDACT`` override only fires for
+      ``EXTERNAL_LLM`` — so the redactor stays dormant until Phase 15 makes
+      ``destination`` a settings read. Setting the flag now means the policy is
+      already honest about the redactor's existence when that switch is flipped,
+      instead of needing a code change at the same moment the boundary moves.
+    * ``destination`` is left at :data:`~app.pii.policy.DEFAULT_DESTINATION`
+      rather than named here, so Phase 15 changes one default instead of this
+      call.
+
+    ``document_type`` is read from the *normalized* document's metadata, which
+    is what :data:`PolicyContextBuilder` documents. Today the pipeline
+    normalizes with ``{"client_type": ...}``, so this is ``None`` in practice —
+    honest, because the baseline policy ignores it. A type-specific policy
+    would need the *classification* verdict plumbed in, and
+    :data:`PolicyContextBuilder`'s locked signature does not carry it; that is
+    a Phase 12+ change to the builder's inputs, not something to smuggle through
+    ``attributes``.
+
+    Args:
+        settings: Application settings. ``pii_fingerprint_secret`` is read by
+            the chain constructor; nothing else is consulted.
+
+    Returns:
+        A wired :class:`DefaultPIIGate` for the document stage.
+
+    Raises:
+        InvalidPIIInputError: If the fingerprint secret is missing or blank.
+    """
+
+    def build_context(document: NormalizedDocument, context: ProcessingContext) -> PIIPolicyContext:
+        """Close over settings to supply the inputs the locked signature omits."""
+        return build_policy_context(
+            settings,
+            stage=PIIScanStage.DOCUMENT,
+            document_type=document.metadata.get("document_type"),
+            redaction_available=REDACTION_AVAILABLE,
+        )
+
+    return DefaultPIIGate(
+        detector=build_available_detector_chain(settings),
+        aggregator=DefaultPIIAggregator(),
+        policy_engine=DefaultPolicyEngine(DEFAULT_POLICY),
+        policy_context_builder=build_context,
+    )

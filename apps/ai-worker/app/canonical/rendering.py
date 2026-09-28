@@ -44,8 +44,19 @@ def build_frontmatter_meta(
     tokens: dict[str, Any],
     validation: dict[str, Any],
     classification: Any | None = None,
+    pii: Any | None = None,
 ) -> FrontmatterMeta:
-    """Compose the full YAML metadata envelope around a rendered canonical doc."""
+    """Compose the full YAML metadata envelope around a rendered canonical doc.
+
+    ``classification`` and ``pii`` are the two Python-determined verdicts and
+    are optional: both default to ``None``, which ``FrontmatterMeta.to_dict()``
+    drops, so a document that predates either control keeps the frontmatter it
+    had rather than gaining a ``null`` block every consumer would have to
+    special-case. The ``pii`` block is accepted as a plain ``dict`` — built by
+    ``app.pii.build_pii_meta_block``, which may not import ``packages.canonical``
+    — and validated into ``PIIMeta`` here, so a block that drifts from the
+    shape fails loudly instead of rendering something the gate never produced.
+    """
     return FrontmatterMeta(
         doc_id=str(document_id),
         type=canonical.type,
@@ -69,4 +80,5 @@ def build_frontmatter_meta(
         },
         validation=validation,
         classification=classification,
+        pii=pii,
     )

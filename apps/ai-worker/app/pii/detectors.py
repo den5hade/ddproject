@@ -623,6 +623,27 @@ class CompositePIIDetector(PIIDetectorBase):
         return found
 
 
+def _require_fingerprint_secret(settings: Settings) -> str:
+    """Resolve the HMAC key every detector is constructed with, or refuse.
+
+    Shared by both chain constructors so the start-up choke point is one
+    function: a second copy of this check is a second place for the
+    fail-closed behaviour to be quietly dropped from.
+
+    Raises:
+        InvalidPIIInputError: If the secret is missing, empty or whitespace-only.
+    """
+    secret = settings.pii_fingerprint_secret
+    if not secret.strip():
+        raise InvalidPIIInputError(
+            "PII detectors require a fingerprint secret; set "
+            f"{PII_FINGERPRINT_SECRET_ENV} to a high-entropy value. Refusing to fall back "
+            "to a keyless digest, which would be brute-forceable for low-entropy "
+            "identifiers such as СНИЛС or дата рождения."
+        )
+    return secret
+
+
 def build_detector_chain(settings: Settings) -> CompositePIIDetector:
     """Assemble the detector chain from configuration — the only sanctioned constructor.
 
@@ -646,14 +667,7 @@ def build_detector_chain(settings: Settings) -> CompositePIIDetector:
             the identifiers this gate exists to catch (СНИЛС, полис ОМС, дата
             рождения) are enumerable, so an unkeyed fingerprint is a disclosure.
     """
-    secret = settings.pii_fingerprint_secret
-    if not secret.strip():
-        raise InvalidPIIInputError(
-            "PII detectors require a fingerprint secret; set "
-            f"{PII_FINGERPRINT_SECRET_ENV} to a high-entropy value. Refusing to fall back "
-            "to a keyless digest, which would be brute-forceable for low-entropy "
-            "identifiers such as СНИЛС or дата рождения."
-        )
+    secret = _require_fingerprint_secret(settings)
     return CompositePIIDetector(
         (
             # Strongest signal first: aggregation breaks a confidence tie in
@@ -669,6 +683,45 @@ def build_detector_chain(settings: Settings) -> CompositePIIDetector:
     )
 
 
+def build_available_detector_chain(settings: Settings) -> CompositePIIDetector:
+    """The chain of detectors that are actually implemented — M5 Phase 11 wiring.
+
+    :func:`build_detector_chain` is the complete inventory and the right
+    target, but two of its three members raise ``NotImplementedError`` in
+    ``detect_text`` until Phase 13 writes them. A pipeline that used it today
+    would not degrade to a weaker control, it would fail *every* document with
+    an exception — the fail-closed posture taken past the point of being
+    useful, which in practice gets "fixed" by commenting the call out.
+
+    So the pipeline gets the implemented subset instead, and the missing
+    coverage is loud rather than silent:
+
+    * ``build_detector_chain`` is left exactly as M4/Phase 8 pinned it. Nothing
+      about the full inventory is softened, reordered or defaulted.
+    * The chain returned here is a *strict subset* in the same relative order,
+      and ``test_detector_chain.py`` asserts that subset relation — so when
+      Phase 13 lands, the failing test says "delete this function and call
+      :func:`build_detector_chain`" instead of leaving two inventories to drift.
+    * The one consequence that matters is a *narrower* gate, not a laxer one:
+      ``SecretPIIDetector`` is the only ``BLOCK`` source, so nothing reaches
+      ``BLOCK`` until Phase 13, and a document carrying a credential gets
+      ``ALLOW`` rather than being stopped. That is a real gap, it is the gap
+      Phase 13 exists to close, and it is not papered over here.
+
+    Args:
+        settings: Application settings carrying ``pii_fingerprint_secret``,
+            validated exactly as :func:`build_detector_chain` validates it.
+
+    Returns:
+        A :class:`CompositePIIDetector` over the implemented detectors.
+
+    Raises:
+        InvalidPIIInputError: If the secret is missing, empty or whitespace-only.
+    """
+    secret = _require_fingerprint_secret(settings)
+    return CompositePIIDetector((PatternPIIDetector(fingerprint_secret=secret),))
+
+
 __all__ = [
     "DETECTOR_VERSION",
     "PII_FINGERPRINT_SECRET_ENV",
@@ -678,5 +731,6 @@ __all__ = [
     "PIIDetectorBase",
     "SecretPIIDetector",
     "StructuredFieldPIIDetector",
+    "build_available_detector_chain",
     "build_detector_chain",
 ]

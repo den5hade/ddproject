@@ -14,6 +14,7 @@ The gate is a document-level capability and stays free of any runtime
 """
 
 from app.pii.aggregation import DefaultPIIAggregator, PIIAggregator, PIIAggregatorBase
+from app.pii.artifact import build_pii_artifact, build_pii_meta_block
 from app.pii.canonical_guard import (
     CANONICAL_POLICY_DESTINATION,
     CANONICAL_POLICY_STAGE,
@@ -33,6 +34,7 @@ from app.pii.detectors import (
     PIIDetectorBase,
     SecretPIIDetector,
     StructuredFieldPIIDetector,
+    build_available_detector_chain,
     build_detector_chain,
 )
 from app.pii.exceptions import (
@@ -45,10 +47,12 @@ from app.pii.exceptions import (
 )
 from app.pii.gate import (
     DECISION_OUTCOMES,
+    HALTING_DECISIONS,
     DefaultPIIGate,
     PIIGate,
     PIIGateBase,
     PolicyContextBuilder,
+    build_document_gate,
 )
 from app.pii.masking import (
     FINGERPRINT_PREFIX,
@@ -122,6 +126,7 @@ __all__ = [
     "DefaultPolicyEngine",
     "FINGERPRINT_PREFIX",
     "FIXED_MASKS",
+    "HALTING_DECISIONS",
     "InvalidPIIInputError",
     "MASK_RULES",
     "PIIAction",
@@ -171,7 +176,11 @@ __all__ = [
     "RedactorBase",
     "SecretPIIDetector",
     "StructuredFieldPIIDetector",
+    "build_available_detector_chain",
     "build_detector_chain",
+    "build_document_gate",
+    "build_pii_artifact",
+    "build_pii_meta_block",
     "build_policy_context",
     "hash_pii_value",
     "mask_pii_value",

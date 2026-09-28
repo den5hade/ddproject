@@ -405,11 +405,25 @@ def test_redactor_is_a_protocol_with_the_locked_signature():
     assert parameters == ["self", "markdown", "findings"]
 
 
-def test_redactor_stubs_raise_not_implemented():
-    for stub in (RedactorBase, PlaceholderRedactor):
-        with pytest.raises(NotImplementedError) as excinfo:
-            stub().redact("markdown", [])
-        assert "M5" in str(excinfo.value)
+def test_base_redactor_still_raises_not_implemented():
+    """``RedactorBase`` stays a marker: the base never becomes a usable redactor.
+
+    ``PlaceholderRedactor`` left this state in M5 Phase 12, but the base keeps
+    it deliberately. A collaborator chain that can be built from the base class
+    would let a deployment "fix" a missing redactor by pointing at the marker,
+    and the marker returns nothing useful — the caller would persist the
+    *unredacted* text believing it had been redacted, which is the one outcome
+    this component exists to make impossible.
+    """
+    with pytest.raises(NotImplementedError) as excinfo:
+        RedactorBase().redact("markdown", [])
+    assert "M5" in str(excinfo.value)
+
+
+def test_placeholder_redactor_is_implemented_as_of_phase_12():
+    """The interim stub is gone; an empty finding list is a no-op, not a raise."""
+    assert issubclass(PlaceholderRedactor, RedactorBase)
+    assert PlaceholderRedactor().redact("markdown", []) == "markdown"
 
 
 def test_placeholder_token_format():
@@ -451,10 +465,27 @@ def test_phase_four_modules_import_only_stdlib_and_the_pii_package():
     The package-wide guards in ``test_models.py`` already enforce this, but
     asserting it here too means an edit that makes Phase 4 the first place a
     forbidden import appears fails in the file that introduced it.
+
+    ``re`` and ``dataclasses`` joined the allowlist in M5 Phase 12, when
+    ``PlaceholderRedactor.redact`` was implemented. ``re`` is required because
+    case-insensitive value location must run as a *regex over the original
+    string* rather than ``str.casefold()`` on both sides — ``casefold`` is not
+    length-preserving (``"ß"`` → ``"ss"``), so searching a transformed copy
+    returns offsets into the wrong string. ``dataclasses`` backs the frozen
+    ``_Span`` record, frozen so the merge step cannot annotate a finding and
+    non-mutation is a property of the type rather than of reviewer vigilance.
     """
     from tests.support.pii_imports import PII_PACKAGE_DIR, module_names
 
-    allowed_stdlib = {"hashlib", "hmac", "unicodedata", "typing", "__future__"}
+    allowed_stdlib = {
+        "dataclasses",
+        "hashlib",
+        "hmac",
+        "re",
+        "unicodedata",
+        "typing",
+        "__future__",
+    }
     for name in ("masking.py", "redaction.py"):
         outside = {
             module

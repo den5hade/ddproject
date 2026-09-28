@@ -74,6 +74,42 @@ class ClassificationMeta(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class PIIMeta(BaseModel):
+    """PII-gate verdict recorded alongside a canonical document.
+
+    The Python-determined outcome of the PII gate; the block appears in the YAML
+    frontmatter and the ``analysis-completed`` event ``data``, mirroring
+    :class:`ClassificationMeta` exactly. The verbatim ``PIIScanResult`` lives in
+    the versioned ``pii_result.json`` artifact — the only surface masked findings
+    are persisted to in full.
+
+    Every enum-valued field is a plain ``str``, not an enum, for the same reason
+    ``ClassificationMeta``'s are: the taxonomy lives in ``app/pii`` and
+    ``packages.canonical`` must not depend on the worker app (``PII GATE``
+    plan §0, ORDER §8). The gate serialises the members; this model only records
+    what it was told.
+
+    ``category_counts`` is authoritative and ``categories`` is the convenience
+    list derived from it for UI and metrics. Both are required, so a consumer
+    that renders the list never has to recompute the tally and get the duplicate
+    findings aggregation removes wrong.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str
+    risk_level: str
+    stage: str
+    destination: str
+    findings_count: int
+    category_counts: dict[str, int]
+    categories: list[str]
+    detector_version: str
+    policy_version: str
+    reasons: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FrontmatterMeta(BaseModel):
     """Full YAML-frontmatter metadata envelope rendered around a document.
 
@@ -91,6 +127,7 @@ class FrontmatterMeta(BaseModel):
     processing: ProcessingMeta = Field(default_factory=ProcessingMeta)
     validation: ValidationMeta = Field(default_factory=ValidationMeta)
     classification: ClassificationMeta | None = None
+    pii: PIIMeta | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude_none=True, by_alias=True)

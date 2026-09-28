@@ -1,12 +1,20 @@
 from uuid import uuid4
 
-from storage import ALLOWED_MIME_TYPES
+from storage import ALLOWED_MIME_TYPES, MARKDOWN_KIND_PII
 from storage.keys import (
+    MARKDOWN_ARTIFACTS,
     build_key,
     markdown_artifact_filename,
     markdown_key,
     original_filename_for,
 )
+
+# The filename the ai-worker's PII gate writes. Duplicated as a literal on
+# purpose: ``app/pii/persistence.py`` cannot be imported from this package (it
+# depends on the worker app), so this is the only place the two can be pinned
+# against each other, and a plain constant comparison beats asserting the
+# package's own dict against itself.
+PII_ARTIFACT_NAME = "pii_result.json"
 
 
 def test_build_key_uses_immutable_ids():
@@ -48,6 +56,7 @@ def test_markdown_artifact_filename_known_kinds():
     assert markdown_artifact_filename("structured") == "structured.md"
     assert markdown_artifact_filename("canonical") == "canonical.json"
     assert markdown_artifact_filename("classification") == "classification_result.json"
+    assert markdown_artifact_filename("pii") == "pii_result.json"
 
 
 def test_markdown_artifact_filename_unknown_kind_raises():
@@ -108,3 +117,34 @@ def test_markdown_key_classification_builds_full_immutable_path():
         f"/documents/{document_id}/versions/{version_id}/classification_result.json"
     )
     assert key == expected
+
+
+def test_markdown_key_pii_builds_full_immutable_path():
+    tenant = "acme"
+    patient_id, document_id, version_id = uuid4(), uuid4(), uuid4()
+    key = markdown_key(
+        tenant_id=tenant,
+        patient_id=patient_id,
+        document_id=document_id,
+        version_id=version_id,
+        kind="pii",
+    )
+    expected = (
+        f"tenants/{tenant}/patients/{patient_id}"
+        f"/documents/{document_id}/versions/{version_id}/pii_result.json"
+    )
+    assert key == expected
+
+
+def test_pii_kind_constant_is_in_sync_with_the_filename_table():
+    # The two live in the same package but in different modules, and a kind
+    # constant that disagrees with the dict it indexes is a KeyError at the first
+    # upload of a document — a production-time failure for a data-layer typo.
+    assert MARKDOWN_KIND_PII in MARKDOWN_ARTIFACTS
+    assert markdown_artifact_filename(MARKDOWN_KIND_PII) == PII_ARTIFACT_NAME
+
+
+def test_every_markdown_artifact_filename_is_unique():
+    # Two kinds mapping to one filename would make the second upload silently
+    # overwrite the first, and the loser is whichever wrote last.
+    assert len(set(MARKDOWN_ARTIFACTS.values())) == len(MARKDOWN_ARTIFACTS)

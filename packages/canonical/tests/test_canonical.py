@@ -5,6 +5,7 @@ from canonical import (
     FrontmatterMeta,
     GenericCanonical,
     LaboratoryCanonical,
+    PIIMeta,
     PrescriptionCanonical,
     build_canonical,
     render_document,
@@ -187,3 +188,100 @@ def test_render_document_combines_frontmatter_and_body():
     assert doc.startswith("---")
     assert "Ибупрофен" in doc
     assert "---" in doc
+
+
+# --- PIIMeta (PII GATE plan §4.7) -----------------------------------------
+#
+# The block is written by ``app/pii`` and rendered here, so the contract that
+# matters is the one at the seam: the model accepts exactly the gate's block and
+# rejects anything else. A widened model is a second, silently-diverging
+# definition of the same shape; a missing one is a frontmatter that renders with
+# no verdict on a document that was scanned.
+
+PII_BLOCK = {
+    "decision": "allow",
+    "risk_level": "medium",
+    "stage": "document",
+    "destination": "internal_llm",
+    "findings_count": 7,
+    "category_counts": {"person_name": 1, "date_of_birth": 1, "address": 2},
+    "categories": ["person_name", "date_of_birth", "address"],
+    "detector_version": "1.1.0",
+    "policy_version": "1.0.0",
+    "reasons": ["expected_medical_identity"],
+    "warnings": [],
+}
+
+
+def test_pii_meta_accepts_the_gate_block_verbatim():
+    assert PIIMeta(**PII_BLOCK).model_dump(mode="json") == PII_BLOCK
+
+
+def test_pii_meta_rejects_unknown_keys():
+    # extra="forbid", mirroring ClassificationMeta: a block key the renderer
+    # does not know about is a gate/model drift, and silently dropping it would
+    # render a verdict missing the field that drifted.
+    with pytest.raises(ValidationError):
+        PIIMeta(**{**PII_BLOCK, "raw_value": "пациент"})
+
+
+def test_pii_meta_rejects_a_block_missing_a_required_key():
+    for key in PII_BLOCK:
+        if key in {"reasons", "warnings"}:
+            continue
+        with pytest.raises(ValidationError):
+            PIIMeta(**{k: v for k, v in PII_BLOCK.items() if k != key})
+
+
+def test_pii_meta_reasons_and_warnings_default_empty():
+    block = {k: v for k, v in PII_BLOCK.items() if k not in {"reasons", "warnings"}}
+    dumped = PIIMeta(**block).model_dump(mode="json")
+    assert dumped["reasons"] == []
+    assert dumped["warnings"] == []
+
+
+def test_pii_meta_has_no_field_for_a_value_or_a_fingerprint():
+    fields = set(PIIMeta.model_fields)
+    assert fields & {"value", "masked_value", "value_fingerprint", "findings"} == set()
+    assert set(PIIMeta(**PII_BLOCK).model_dump(mode="json")) == set(PII_BLOCK)
+
+
+def test_frontmatter_omits_the_pii_block_when_absent():
+    # to_dict() is exclude_none=True, so a document scanned before the gate was
+    # wired keeps the pre-M5 frontmatter byte-for-byte rather than growing a
+    # "pii: null" that a consumer would have to special-case.
+    meta = FrontmatterMeta(doc_id="doc-1", type="generic", subtype="generic")
+    assert "pii" not in meta.to_dict()
+    assert "pii" not in render_frontmatter(meta)
+
+
+def test_frontmatter_renders_the_pii_block_and_round_trips():
+    meta = FrontmatterMeta(
+        doc_id="doc-1",
+        type="generic",
+        subtype="generic",
+        pii=PII_BLOCK,
+    )
+    block = meta.to_dict()["pii"]
+    assert block == PII_BLOCK
+
+    text = render_frontmatter(meta)
+    assert "pii:" in text
+    assert "person_name" in text
+    assert "1.1.0" in text
+    # ...and a parsed copy validates back into the same model, so a renderer
+    # change (a renamed key, a stringified mapping) cannot pass unnoticed.
+    import yaml
+
+    body = text.removeprefix("---\n").removesuffix("---")
+    assert PIIMeta(**yaml.safe_load(body)["pii"]).model_dump(mode="json") == PII_BLOCK
+
+
+def test_pii_block_sits_beside_classification_not_inside_it():
+    # Two sibling blocks, mirroring §4.7. Nesting the verdict under
+    # ``classification`` would make a document with a classification and no PII
+    # indistinguishable from one that was never scanned.
+    meta = FrontmatterMeta(doc_id="doc-1", type="generic", subtype="generic", pii=PII_BLOCK)
+    dumped = meta.to_dict()
+    assert "classification" not in dumped
+    assert dumped["pii"]["decision"] == "allow"
