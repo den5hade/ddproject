@@ -162,7 +162,7 @@ change — which is exactly why Phase 14 costs a version bump and not a refactor
 | 12 | M5 | Markdown redaction (`PIIRedactor.redact`) | [ ] |
 | 13 | M5 | Marker-shape fixture + structured-field and secret detectors | [x] |
 | 14 | M5 | Canonical guard — escalation policy, per-category sanitizer, both dump points | [ ] |
-| 15 | M5 | `EXTERNAL_LLM` destination + redaction on the extraction path | [ ] |
+| 15 | M5 | `EXTERNAL_LLM` destination + redaction on the extraction path | [x] |
 | 16 | M5 | NER detector (P1) | [ ] |
 | 17 | M5 | `REVIEW` combination threshold (P1) | [ ] |
 
@@ -1634,7 +1634,7 @@ no patient name, and an event `data` with no patient name — three tests, not o
    date by construction of `BaseCanonical` and `render_document` writes it into the frontmatter, so
    it is the field a `DATE_OF_BIRTH` false positive destroys first.
 
-### Phase 15 — `EXTERNAL_LLM` destination + redaction on the extraction path [ ] · **VS#3**
+### Phase 15 — `EXTERNAL_LLM` destination + redaction on the extraction path [x] · **VS#3**
 
 `destination` for the extraction step resolved from settings (trusted vs external) instead of
 hard-coded `INTERNAL_LLM` (§7 decision 12). When `EXTERNAL_LLM` **and** `redaction_available`, the
@@ -1647,6 +1647,98 @@ provider → redacted text reaches it and the verdict is `ALLOW_WITH_WARNING`; r
 Deps: Phases 11, 12, 14. (§45.17)
 **Accept:** flipping the provider setting changes the text the extraction call sees, and the test
 asserts the redacted text contains no `expected_categories` value.
+
+#### Phase 15 Implementation Status
+
+**Status: implemented**, with one hotfix in front of it. `apps/ai-worker/app/config/settings.py`,
+`app/pii/policy.py`, `app/pii/gate.py`, `app/pii/__init__.py`, `app/pipeline/pipeline.py`,
+`app/artifacts/`, `packages/storage/storage/`, `.env.example`; tests in
+`tests/unit/pii/test_external_boundary.py` (new, 30), `tests/unit/pipeline/test_pipeline.py` (+14),
+`packages/storage/tests/test_keys.py` (+1). Suite: **770 passed** (was 726, +44 — 30 new, 14 in
+`test_pipeline.py`). `test_settings_boundary.py` stays at 33: its tripwire is *replaced* by live
+assertions rather than added to. Storage: 19 passed (+1). `DETECTOR_VERSION` **1.2.0** and `PII_POLICY_VERSION`
+**2.0.0** — both unmoved, for the reason in deviation 3.
+
+**Files.** `app/config/settings.py` (`llm_mode`), `app/pii/policy.py` (`TRUSTED_INTERNAL_URLS`,
+`resolve_destination`, `DEFAULT_DESTINATION` docstring), `app/pii/gate.py`
+(`DocumentPIIGateResult`, `evaluate_document`, `redact`, redactor injection, destination wiring),
+`app/pii/__init__.py`, `app/pipeline/pipeline.py` (`_redact`, the `redacted.md` upload, the
+`PIIRedactionError` branch, the OCR boundary section and the start-up warning),
+`app/artifacts/{models,__init__}.py`, `packages/storage/storage/{keys,__init__}.py`,
+`packages/storage/tests/test_keys.py`, `.env.example`, `tests/unit/pii/test_external_boundary.py`
+(new), `tests/unit/pipeline/test_pipeline.py`, `tests/unit/pii/test_settings_boundary.py`,
+`tests/unit/pii/test_manifest_verification.py`, `tests/unit/pii/test_{artifact,gate_behaviour}.py`
+(constructor call sites).
+
+**The gate could not redact, and that is the phase's real finding.** `PIIScanResult.findings` are
+`PIIFindingSummary`, which has no `value` field at all (Phase 1 structural rule), so the pipeline
+held nothing a redactor could consume. `DocumentPIIGateResult` now returns the projection *and* the
+raw findings beside it, in the same shape `CanonicalPIIGuardResult` established for contour 2:
+`scan_result` plus `findings` and `actions`, both `Field(exclude=True)`. `inspect()` is now the
+projection of `evaluate_document()` — ORDER §8's signature and its `None`-context
+`PIIDecisionError` are unchanged, so the locked contract did not move, only what is available
+beside it. `DefaultPIIGate.redact` masks iff `actions[category] is REDACT` and returns `markdown`
+**by identity** when nothing is, which is how the pipeline decides whether an artifact is
+warranted without re-deriving the policy condition in a second place.
+
+**Hotfix H-1, committed first (`bfaf89d`).** While writing this phase, §7 R14 was found to be
+wrong about its own severity: the repeated-value leak it filed as "becomes a real leak the moment
+Phase 15 makes `EXTERNAL_LLM` reachable" is **already live** in the shipped contour 2. The
+aggregator dedups on `(category, value_fingerprint)` and the M4 redaction algorithm resolved a
+finding to *a* span, so N occurrences of one value produced N−1 leaks — reproduced against the
+shipped guard and closed in a separate commit, per the standalone-hotfix decision. Its own
+deviation (a finding resolves to *every* span it occupies) is recorded in `redaction.py`.
+
+**Deviations from the plan as written**, all decided during implementation:
+
+1. **The guard formulation is corrected; the fidelity cost is accepted.** The plan's Phase 15 text
+   says "the canonical guard still sees the original so nothing is lost from the internal record".
+   That cannot be true: the canonical is built from the *redacted* LLM output, so the LLM never
+   sees the original. The guard is **not** disabled — it still runs at
+   `stage=canonical, destination=persistence` — but on this path it inspects a canonical built from
+   placeholders, and `[PERSON_NAME]` inside `canonical.json` is correct behaviour, not a defect.
+   `build_canonical_guard` was given no `llm_mode` awareness at all, and a test says so.
+2. **`redacted.md` is a new storage kind**, not a log line and not a new event. The record of what
+   crossed the boundary is mandatory evidence, a log line is rotated and holds no text, and
+   Phase 14's "no new storage kind" precedent does not apply — Phase 14 sanitized an existing
+   object, this creates a new entity. Written **only** when `redact` returned a different object
+   (identity, not a re-derived policy condition), placeholders only, uploaded before the model
+   call so a provider failure leaves both the verdict and the text on disk. `data["redacted_key"]`
+   is **optional** rather than a permanent nullable key: at the trusted destination — the default,
+   and essentially every run — there is nothing to point at, and a null key on 99% of documents
+   would be a cross-package contract change (R11) for a non-event.
+3. **Neither version moves.** `DETECTOR_VERSION` stays 1.2.0 and `PII_POLICY_VERSION` stays 2.0.0:
+   the `EXTERNAL_LLM` override already existed in the table, and this phase changes which
+   destination is *supplied*, not any decision rule, so §4.8's "any change that alters a decision"
+   does not fire. A stored `pii_result.json` records `destination: external_llm`, which is what
+   makes such a verdict interpretable without a bump. **Recorded gap:** the redaction mechanism has
+   no version constant, so a stored artifact cannot be re-derived to prove *what* was removed —
+   filed for M6, as is the missing `REDACTOR_VERSION`.
+4. **The refusal raises `InvalidPIIInputError`, not a new `ConfigurationError`**, and is resolved
+   from `build_document_gate`, so the worker has one start-up failure mode rather than two. A single
+   trailing `/` is ignored on both sides: without it a correct configuration fails for a cosmetic
+   reason, and the comparison is otherwise exact, so a slash still cannot launder an untrusted host
+   (tested against `169.254.169.254`, `localhost`, and a suffix-confusion host).
+5. **`pii.redacted` is a log line, not an event.** The policy already appends one warning per
+   `REDACT` action, and those reach `pii_result.json` and the §4.7 block in both the frontmatter
+   and the event `data`. One structured `pii_redacted` line joins them. The audit *sink* stays
+   deferred to M6, as it has since M4.
+6. **OCR is documented, not gated.** A "Boundaries this pipeline does not gate" section in
+   `app/pipeline/pipeline.py` names `handle_converting`'s `self._ocr.to_markdown(...)`, states that
+   the same `ai_*` settings drive it so `llm_mode` moves the extraction call and leaves the image
+   exposure untouched, and records the pre-OCR control as out of scope. `__init__` warns at
+   start-up when `external_llm` is selected, and a test asserts the docstring still names the call
+   so a refactor cannot quietly delete the claim.
+
+**Unplanned change, and the one worth reading.** Two of the tests the plan asked for could not be
+written as specified. `AGE`/`GENDER`/`NATIONALITY` **are** in `REDACT_ON_EXTERNAL` — they are
+demographics and demographics identify — so an external provider sees `(Ж, [AGE])` where the
+persistence contour deliberately preserves `(М, 39 лет)`. The plan's "the note stays legible"
+carve-out belongs to the guard, and the text sent across a boundary is not a note anyone reads.
+`test_the_external_boundary_masks_the_age_and_the_persistence_one_does_not` pins the shipped
+behaviour, because the alternative is a reader assuming a survival guarantee that does not hold
+here. Whether masking an age is the right trade on an external boundary is M6 calibration with real
+findings, and that test is where the argument starts.
 
 ### Phase 16 — NER detector [ ] · P1
 
@@ -2082,8 +2174,10 @@ M5 (pending — the numbering is IMPL_ARCH §45's 19-step sequence folded into p
     this, the milestone's purpose is met even if 15–17 slip (§45.15–16). Shipped with six recorded
     deviations, one of them unplanned: `date_of_birth.numeric` removed and `DETECTOR_VERSION` at
     **1.2.0** because §4.11's escalation made its recall claim load-bearing (R7, decision 17).
-15. **Phase 15 — `EXTERNAL_LLM` destination + redaction** [ ] · VS#3 — dormant until a second
-    provider exists; safe to defer without regressing anything (§45.17).
+15. **Phase 15 — `EXTERNAL_LLM` destination + redaction** [x] · VS#3 — shipped behind an
+    operator switch, with a hotfix in front of it: a repeated-value leak in contour 2 was found
+    **live** while writing the phase and closed as a separate commit (H-1, `bfaf89d`) rather than
+    left as the dormancy the plan had filed it as (§45.17).
 16. **Phase 16 — NER detector** [ ] · P1 — widens coverage, never overrides (§45.18).
 17. **Phase 17 — `REVIEW` combination threshold** [ ] · P1 — policy data on top of Phase 14 (§45.19).
 

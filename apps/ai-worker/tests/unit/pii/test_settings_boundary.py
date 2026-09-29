@@ -367,14 +367,27 @@ def test_policy_context_passes_the_document_type_through():
     assert context.document_type == "appointment"
 
 
-def test_default_destination_documents_the_phase_15_replacement():
-    """The default is deliberate and dated: Phase 15 makes it a settings read."""
+def test_the_destination_is_a_settings_read_not_a_constant():
+    """Phase 15 closed the gap this test used to *predict*.
+
+    It was a tripwire: it asserted the module still said "a constant today, a
+    setting in M5 Phase 15", so the claim could not be quietly dropped while the
+    gap was open. The gap is closed, so the tripwire is replaced by what it was
+    standing in for — the behaviour, asserted live. The full
+    ``resolve_destination`` matrix lives in ``test_external_boundary.py``; this
+    is the boundary-level statement: the worker reads its destination from
+    configuration, and the constant is no longer what production uses.
+    """
     from app.pii import policy
 
     assert DEFAULT_DESTINATION is PIIDestination.INTERNAL_LLM
+    assert policy.resolve_destination(_settings()) is PIIDestination.INTERNAL_LLM
+    external = policy.resolve_destination(_settings(llm_mode="external_llm"))
+    assert external is PIIDestination.EXTERNAL_LLM
+
     module_doc = inspect.getdoc(policy) or ""
     assert "DEFAULT_DESTINATION" in module_doc
-    assert "Phase 15" in module_doc
+    assert "a settings read in M5 Phase 15" not in module_doc
     assert "build_policy_context" in module_doc
     assert "type-only" in module_doc
 

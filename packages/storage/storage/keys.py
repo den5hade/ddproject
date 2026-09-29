@@ -13,6 +13,10 @@ MARKDOWN_ARTIFACTS = {
     "canonical": "canonical.json",
     "classification": "classification_result.json",
     "pii": "pii_result.json",
+    # Written only when the gate actually redacted something (M5 Phase 15):
+    # the text that crossed an untrusted boundary, in placeholders. The sole
+    # record of what left; a no-op redaction writes nothing.
+    "redacted": "redacted.md",
 }
 
 
@@ -40,8 +44,9 @@ def markdown_artifact_filename(kind: str) -> str:
 
     ``kind`` is one of ``"unstructured"`` (marker.md), ``"structured"``
     (structured.md), ``"canonical"`` (canonical.json), ``"classification"``
-    (classification_result.json), or ``"pii"`` (pii_result.json). Unknown kinds
-    raise ``ValueError``.
+    (classification_result.json), ``"pii"`` (pii_result.json), or ``"redacted"``
+    (redacted.md — only ever written when a redaction actually happened).
+    Unknown kinds raise ``ValueError``.
     """
     try:
         return MARKDOWN_ARTIFACTS[kind]

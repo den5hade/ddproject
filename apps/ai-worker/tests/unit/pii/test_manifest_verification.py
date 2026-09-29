@@ -58,7 +58,7 @@ from app.pii.models import (
     PIIRiskLevel,
     PIIScanStage,
 )
-from app.pii.policy import build_policy_context
+from app.pii.policy import build_policy_context, resolve_destination
 
 FIXTURES = iter_pii_fixtures()
 SETTINGS = Settings(_env_file=None, pii_fingerprint_secret="manifest-verification-secret")
@@ -72,10 +72,14 @@ MANIFEST_CONTEXT = build_policy_context(
     destination=PIIDestination.EXTERNAL_LLM,
     redaction_available=False,
 )
+# Derived, not restated: the pipeline resolves its destination from
+# `Settings.llm_mode` (Phase 15), so the "production boundary" is a fact about
+# configuration. Pinning the literal here would let the two drift and this
+# fixture suite would keep passing against a boundary the worker no longer uses.
 PRODUCTION_CONTEXT = build_policy_context(
     SETTINGS,
     stage=PIIScanStage.DOCUMENT,
-    destination=PIIDestination.INTERNAL_LLM,
+    destination=resolve_destination(SETTINGS),
     redaction_available=REDACTION_AVAILABLE,
 )
 

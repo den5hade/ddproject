@@ -99,9 +99,10 @@ input is one auditable line. ``Settings`` is imported type-only for the same
 reason the gate's other cross-package types are: ``app/pii`` must remain
 importable with no configuration present.
 
-``destination`` defaults to :data:`DEFAULT_DESTINATION` — ``INTERNAL_LLM``
-today, a settings read in M5 Phase 15, so that switching to an untrusted
-provider is a configuration change rather than a code change.
+``destination`` defaults to :data:`DEFAULT_DESTINATION` — ``INTERNAL_LLM``.
+The worker does not read that default: it resolves the destination from
+``Settings.llm_mode`` through :func:`resolve_destination`, so switching to
+an untrusted provider is a configuration change rather than a code change.
 
 Why no working engine
 ---------------------
@@ -120,7 +121,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from app.pii.exceptions import PIIPolicyError
+from app.pii.exceptions import InvalidPIIInputError, PIIPolicyError
 from app.pii.models import (
     PIIAction,
     PIICategory,
@@ -146,6 +147,7 @@ __all__ = [
     "REDACT_ON_EXTERNAL",
     "REDACT_ON_PERSIST",
     "RISK_ORDER",
+    "TRUSTED_INTERNAL_URLS",
     "DefaultPolicyEngine",
     "PolicyEngine",
     "PolicyEngineBase",
@@ -153,6 +155,7 @@ __all__ = [
     "PIIPolicyContext",
     "PIIRule",
     "build_policy_context",
+    "resolve_destination",
 ]
 
 DEFAULT_POLICY_VERSION = "2.0.0"
@@ -433,16 +436,81 @@ Declared after :data:`DEFAULT_POLICY` so it cannot drift from the table it names
 
 
 DEFAULT_DESTINATION = PIIDestination.INTERNAL_LLM
-"""The destination every gate call uses unless configuration says otherwise.
+"""The destination used when no context says otherwise.
 
-A constant today, a setting in M5 Phase 15. The current provider is trusted
-and named in §0 (``ai_base_url`` is an external vendor, but the only one
-available), so pre-extraction redaction is dormant: nothing must leave the
-trusted boundary unmasked while that is true. Phase 15 replaces this
-assignment with a settings read, which is what makes switching providers a
-config change instead of a code change (§7 decision 12) — the one line to
-change, and the one test to update.
+Not a deployment decision: :func:`build_policy_context` takes ``destination``
+from :func:`resolve_destination` as of Phase 15, so the worker resolves it from
+``Settings.llm_mode`` and this constant only serves contexts constructed
+directly in tests. The current provider is trusted and named in §0
+(``ai_base_url``), so pre-extraction redaction stays dormant: nothing must leave
+the trusted boundary unmasked while that is true.
 """
+
+
+TRUSTED_INTERNAL_URLS: frozenset[str] = frozenset({"https://foundation-models.api.cloud.ru/v1"})
+"""The providers ``llm_mode="internal_llm"`` is allowed to name (§0).
+
+Explicit and by name, not "anything that looks internal": a check that accepts
+any private-looking host is a check that passes for an exfiltration URL pointed
+at a cloud metadata service, which is the opposite of what it is for. Add a
+provider here deliberately, with the same weight as adding a row to the policy
+table.
+"""
+
+
+def resolve_destination(settings: Settings) -> PIIDestination:
+    """Map :attr:`Settings.llm_mode` onto a :class:`PIIDestination`.
+
+    The single sanctioned way to learn where the document is going. Called from
+    ``build_document_gate`` so the refusal below happens at worker start-up
+    (Phase 15 decision 3), which is the only point at which a misconfiguration
+    can be reported before a document is in flight.
+
+    Args:
+        settings: The worker settings. ``llm_mode`` selects the boundary;
+            ``ai_base_url`` is only read to check the ``internal_llm`` claim.
+
+    Returns:
+        ``EXTERNAL_LLM`` for ``llm_mode="external_llm"``, ``INTERNAL_LLM``
+        otherwise.
+
+    Raises:
+        InvalidPIIInputError: If ``llm_mode`` is ``internal_llm`` and
+            ``ai_base_url`` is not in :data:`TRUSTED_INTERNAL_URLS`. The pair
+            means "I am only sending documents I would send to myself" while
+            the configuration sends them somewhere else, and the pipeline
+            believes the operator: PII is neither redacted nor blocked. A
+            comment claiming the provider is trusted (plan §0) is an
+            intention, not a control, and this is the control.
+
+    Note:
+        A single trailing ``/`` is ignored on both sides. Without it a correct
+        configuration fails for a cosmetic reason, which is how operators learn
+        to distrust the check; with it, a trailing slash still cannot turn an
+        untrusted host into a trusted one, because the comparison is otherwise
+        exact.
+    """
+    if settings.llm_mode == "external_llm":
+        return PIIDestination.EXTERNAL_LLM
+
+    base_url = _normalise_url(settings.ai_base_url)
+    trusted = {_normalise_url(url) for url in TRUSTED_INTERNAL_URLS}
+    if base_url not in trusted:
+        raise InvalidPIIInputError(
+            f"llm_mode={settings.llm_mode!r} declares the provider trusted, but "
+            f"ai_base_url={settings.ai_base_url!r} is not in TRUSTED_INTERNAL_URLS "
+            f"({', '.join(sorted(TRUSTED_INTERNAL_URLS))}). The worker refuses to start: "
+            f"this pairing sends documents unredacted to a boundary the configuration "
+            f"does not name, and nothing downstream would notice. Either point "
+            f"ai_base_url at a trusted provider, or set llm_mode=external_llm so the "
+            f"gate redacts what leaves."
+        )
+    return PIIDestination.INTERNAL_LLM
+
+
+def _normalise_url(url: str) -> str:
+    """Return ``url`` without one trailing slash; nothing else is normalised."""
+    return url.rstrip("/") if url.rstrip("/") else url
 
 
 class PIIPolicyContext(BaseModel):

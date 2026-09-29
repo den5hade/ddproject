@@ -13,6 +13,7 @@ from app.pii import (
     PII_META_OPTIONAL_KEYS,
     PII_META_REQUIRED_KEYS,
     PII_POLICY_VERSION,
+    DocumentPIIGateResult,
     InvalidPIIInputError,
     PIIDecision,
     PIIDestination,
@@ -985,18 +986,368 @@ class _StubGate:
     def __init__(self, decision: PIIDecision) -> None:
         self._decision = decision
 
-    async def inspect(self, document, context) -> PIIScanResult:
-        return PIIScanResult(
-            decision=self._decision,
-            risk_level=PIIRiskLevel.HIGH,
-            stage=PIIScanStage.DOCUMENT,
-            destination=PIIDestination.INTERNAL_LLM,
+    async def evaluate_document(self, document, context) -> DocumentPIIGateResult:
+        # Phase 15: the pipeline calls evaluate_document, not inspect, and needs
+        # the in-process `redact` beside it. Both halting decisions have no
+        # REDACT action, so the empty action map is faithful rather than lazy.
+        return DocumentPIIGateResult(
+            scan_result=PIIScanResult(
+                decision=self._decision,
+                risk_level=PIIRiskLevel.HIGH,
+                stage=PIIScanStage.DOCUMENT,
+                destination=PIIDestination.INTERNAL_LLM,
+                findings=[],
+                findings_count=0,
+                detector_version=DETECTOR_VERSION,
+                policy_version=PII_POLICY_VERSION,
+                processed_at=datetime.now(UTC),
+                category_counts={},
+                reasons=[f"stubbed {self._decision.value}"],
+                warnings=[],
+            ),
             findings=[],
-            findings_count=0,
-            detector_version=DETECTOR_VERSION,
-            policy_version=PII_POLICY_VERSION,
-            processed_at=datetime.now(UTC),
-            category_counts={},
-            reasons=[f"stubbed {self._decision.value}"],
-            warnings=[],
+            actions={},
         )
+
+    def redact(self, markdown: str, result: DocumentPIIGateResult) -> str:
+        # No action is REDACT, so the identity return is the honest one.
+        return markdown
+
+
+# --- 15. the untrusted-LLM boundary, end to end -------------------------------
+
+
+def _external_pipeline(mock_s3, mock_publisher) -> DocumentPipeline:
+    """The real pipeline with ``llm_mode=external_llm`` and a non-trusted URL.
+
+    Nothing is stubbed: this is the configuration the phase exists for, and the
+    point of these tests is that the *production* wiring redacts, uploads the
+    record, and reports the artifact — not that a stub can be made to.
+    """
+    settings = _settings(llm_mode="external_llm", ai_base_url="https://provider.example/v1")
+    pipeline = DocumentPipeline(mock_s3, mock_publisher, settings)
+    pipeline._ai_client.extract_canonical = AsyncMock(
+        return_value=ExtractionResult(
+            content='{"type": "generic", "subtype": "generic", "language": "ru", '
+            '"document_date": null, "fields": {"note": "some text"}}',
+            usage={"input": 10, "output": 5, "total": 15},
+        )
+    )
+    return pipeline
+
+
+@pytest.mark.asyncio
+async def test_the_trusted_provider_receives_the_marker_byte_for_byte(
+    mock_s3, mock_publisher
+):
+    """The default must not change a single character sent to the model.
+
+    The regression this guards is the expensive kind: "make redaction
+    unconditional" would pass every external test and quietly destroy the
+    fidelity of every document the platform processes.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    sent = pipeline._ai_client.extract_canonical.call_args.kwargs["markdown"]
+    assert sent == IDENTIFIER_MARKER
+    assert "Шадеркин Денис Сергеевич" in sent
+
+
+@pytest.mark.asyncio
+async def test_the_external_provider_receives_redacted_markdown(mock_s3, mock_publisher):
+    """**Phase 15's accept criterion.** The model must not see what leaves.
+
+    Asserted on the kwarg the client was actually called with, not on an
+    artifact: the artifact could be right while the call sends the original, and
+    that is the leak this milestone was assembled to close.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    sent = pipeline._ai_client.extract_canonical.call_args.kwargs["markdown"]
+    assert "Шадеркин Денис Сергеевич" not in sent
+    assert "123-456-789 00" not in sent
+    assert "[PERSON_NAME]" in sent
+    assert sent != IDENTIFIER_MARKER
+
+
+@pytest.mark.asyncio
+async def test_the_redacted_artifact_is_uploaded_and_named_in_the_event(
+    mock_s3, mock_publisher
+):
+    """The record of what crossed the boundary, on the same run that crossed it."""
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert any(key.endswith("/redacted.md") for key in keys)
+
+    body = _uploaded_body(mock_s3, "redacted.md").decode()
+    assert "Шадеркин Денис Сергеевич" not in body
+    assert "[PERSON_NAME]" in body
+
+    completed = _published(mock_publisher, "document.analysis.completed")
+    assert completed.data["redacted_key"].endswith("/redacted.md")
+
+
+@pytest.mark.asyncio
+async def test_no_redacted_artifact_and_no_event_key_on_the_trusted_path(
+    mock_s3, mock_publisher
+):
+    """A key that is null on every default run is a schema change for a non-event.
+
+    ``DocumentAnalysisCompleted.data`` is a cross-package contract (R11), so an
+    optional key that appears only when a redaction happened is the honest shape
+    of the change: at the trusted destination there is nothing to point at.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert not any(key.endswith("/redacted.md") for key in _uploaded_keys(mock_s3))
+    completed = _published(mock_publisher, "document.analysis.completed")
+    assert "redacted_key" not in completed.data
+
+
+@pytest.mark.asyncio
+async def test_the_redacted_artifact_is_uploaded_before_the_model_is_called(
+    mock_s3, mock_publisher
+):
+    """Ordering, asserted by the order the mocks were called in.
+
+    Phase 11's invariant — a verdict uploaded before the extraction call so it
+    survives an LLM failure — now covers the *text* as well as the verdict. If
+    the model call raises, the question "what would have been sent?" must still
+    have an answer on disk.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    uploads = [c.args[1] for c in mock_s3.upload_bytes.call_args_list]
+    # pii_result.json, then redacted.md, and both before canonical.json.
+    pii_index = next(i for i, key in enumerate(uploads) if key.endswith("pii_result.json"))
+    redacted_index = next(i for i, key in enumerate(uploads) if key.endswith("redacted.md"))
+    canonical_index = next(i for i, key in enumerate(uploads) if key.endswith("canonical.json"))
+    assert pii_index < redacted_index < canonical_index
+
+
+@pytest.mark.asyncio
+async def test_a_model_failure_leaves_both_the_verdict_and_the_text_on_disk(
+    mock_s3, mock_publisher
+):
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    pipeline._ai_client.extract_canonical = AsyncMock(side_effect=RuntimeError("provider down"))
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert any(key.endswith("pii_result.json") for key in keys)
+    assert any(key.endswith("redacted.md") for key in keys)
+    assert not any(key.endswith("canonical.json") for key in keys)
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_failure_stops_the_document_before_the_model(
+    mock_s3, mock_publisher
+):
+    """A document whose PII could not be removed must not be sent at all.
+
+    Without this branch the handler's blanket ``except`` would report the
+    failure as ``markdown_structuring``, which reads as a provider problem and
+    loses the fact that a security control stopped the document.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    pipeline._pii_gate.redact = MagicMock(
+        side_effect=PIIRedactionError("cannot redact a snils finding from the text: neither")
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert pipeline._ai_client.extract_canonical.called is False
+    published_keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+    assert published_keys == ["document.processing.failed"]
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_GATE_JOB_TYPE
+    assert failure.error_code == "PII_REDACTION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_failure_message_carries_no_patient_value(
+    mock_s3, mock_publisher
+):
+    """The failure is published to a queue operators read.
+
+    ``PIIRedactionError``'s message names the category and the offsets, never
+    the value, by construction — asserted here because "by construction" is a
+    claim about a message that a future edit could widen.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    pipeline._pii_gate.redact = MagicMock(
+        side_effect=PIIRedactionError("cannot redact a snils finding from the text: neither")
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert "Шадеркин" not in failure.error_message
+    assert "123-456-789 00" not in failure.error_message
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_failure_writes_no_redacted_artifact(
+    mock_s3, mock_publisher
+):
+    """The artifact records what was sent, so it cannot exist for a document
+    whose text was never assembled."""
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    pipeline._pii_gate.redact = MagicMock(
+        side_effect=PIIRedactionError("cannot redact a snils finding from the text: neither")
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert not any(key.endswith("redacted.md") for key in _uploaded_keys(mock_s3))
+    # The scan's own audit record stays: it is the reason the redaction failed.
+    assert any(key.endswith("pii_result.json") for key in _uploaded_keys(mock_s3))
+
+
+@pytest.mark.asyncio
+async def test_the_page_count_describes_the_document_not_the_redacted_text(
+    mock_s3, mock_publisher
+):
+    """``## Page N`` markers are the input, and the input is untouched.
+
+    Counting the redacted text would still give the right number today — the
+    placeholders do not contain page markers — which is exactly why this is
+    pinned: it is the kind of substitution that is harmless until a redaction
+    rule starts touching a page marker, and then the frontmatter is wrong with
+    no test failing.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    structured = _uploaded_body(mock_s3, "structured.md").decode()
+    assert "page_count: 1" in structured
+
+
+@pytest.mark.asyncio
+async def test_the_worker_refuses_to_start_on_an_untrusted_url_at_the_default_mode():
+    """D3 at the choke point that matters: construction, not first document."""
+    settings = _settings(ai_base_url="https://provider.example/v1")
+
+    with pytest.raises(InvalidPIIInputError):
+        DocumentPipeline(MagicMock(), AsyncMock(), settings)
+
+
+@pytest.mark.asyncio
+async def test_the_canonical_is_built_from_redacted_output_so_it_carries_placeholders(
+    mock_s3, mock_publisher
+):
+    """D4's accepted fidelity cost, made observable.
+
+    The model echoes what it was sent, so a canonical built from redacted input
+    carries ``[PERSON_NAME]`` where the identifier was. That is **correct
+    behaviour** on this path, and a reader who does not know it will file it as
+    a defect. The guard is still running over it; it simply never sees the
+    original, because the LLM never did either.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    pipeline._ai_client.extract_canonical = AsyncMock(
+        return_value=ExtractionResult(
+            content=json.dumps(
+                {
+                    "type": "generic",
+                    "subtype": "generic",
+                    "language": "ru",
+                    "document_date": None,
+                    "fields": {"note": "Пациент [PERSON_NAME]"},
+                }
+            ),
+            usage={"input": 10, "output": 5, "total": 15},
+        )
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    canonical = _uploaded_body(mock_s3, "canonical.json").decode()
+    assert "[PERSON_NAME]" in canonical
+    assert "Шадеркин Денис Сергеевич" not in canonical
+
+
+@pytest.mark.asyncio
+async def test_redaction_available_false_escalates_to_review_not_to_a_rewrite(
+    mock_s3, mock_publisher
+):
+    """A construction-level test of the fail-closed path, on purpose.
+
+    ``REDACTION_AVAILABLE`` stays a module constant ``True`` (Phase 12 decision
+    2), so the escalation is unreachable in production and is exercised by
+    injecting a gate built without a working redactor. Phase 15 must **not** add
+    a settings flag to reach it — that would be the fail-open the constant was
+    chosen to prevent.
+    """
+    from app.pii import build_document_gate
+    from app.pii import gate as gate_module
+
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _external_pipeline(mock_s3, mock_publisher)
+    # The patch has to span the *scan*, not the construction: the constant is
+    # read by the policy-context builder each time it runs, which is what keeps
+    # it a constant about this codebase rather than a value frozen into a gate.
+    with patch.object(gate_module, "REDACTION_AVAILABLE", False):
+        pipeline._pii_gate = build_document_gate(
+            _settings(llm_mode="external_llm", ai_base_url="https://provider.example/v1")
+        )
+        await pipeline.handle_structuring(_converted(event))
+
+    published_keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+    assert published_keys == ["document.processing.failed"]
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.REVIEW]
+    assert pipeline._ai_client.extract_canonical.called is False
+
+
+def test_the_pipeline_docstring_still_names_the_ocr_boundary():
+    """A documented gap that a refactor can silently delete is not a gap.
+
+    Same reason as Phase 6's "a test asserts the module still claims to be
+    unlocked": the claim about OCR is the only thing standing between an
+    operator and the belief that ``llm_mode`` protects the image.
+    """
+    from app.pipeline import pipeline as pipeline_module
+
+    doc = pipeline_module.__doc__ or ""
+
+    assert "Boundaries this pipeline does not gate" in doc
+    assert "to_markdown" in doc
+    assert "llm_mode" in doc

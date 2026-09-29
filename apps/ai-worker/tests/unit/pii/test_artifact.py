@@ -49,6 +49,7 @@ from app.pii import (
     PIIDestination,
     PIIScanResult,
     PIIScanStage,
+    PlaceholderRedactor,
     build_pii_artifact,
     build_pii_meta_block,
     build_policy_context,
@@ -83,6 +84,7 @@ def _gate(destination: PIIDestination = PIIDestination.INTERNAL_LLM) -> DefaultP
         policy_context_builder=lambda document, context: build_policy_context(
             settings, stage=PIIScanStage.DOCUMENT, destination=destination
         ),
+        redactor=PlaceholderRedactor(),
     )
 
 

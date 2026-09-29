@@ -60,6 +60,34 @@ class Settings(BaseSettings):
     fingerprint, which is what keeps rotation a non-event for stored data.
     """
 
+    llm_mode: Literal["internal_llm", "external_llm"] = "internal_llm"
+    """Which trust boundary ``ai_base_url`` sits on (env ``LLM_MODE``).
+
+    ``internal_llm`` (the default) means the provider named in ``ai_base_url``
+    is on the trusted side, so PII is neither redacted nor blocked on the way
+    out — the whole of M5's dormancy so far. ``external_llm`` says the opposite
+    and switches on the ``REDACT_ON_EXTERNAL`` override
+    (:func:`app.pii.policy.resolve_destination`), which is the only way
+    ``destination`` stops being a constant (plan §7 decision 12).
+
+    Only the two boundaries the worker can be configured *for* are settable.
+    ``PIIDestination.PERSISTENCE`` is the canonical guard's own constant and
+    ``UNKNOWN`` is the fail-closed placeholder — neither is a state a
+    deployment may select, so ``Literal`` rather than a free string keeps a
+    typo a construction error instead of a silently unrecognised mode.
+
+    Read through :func:`app.pii.policy.resolve_destination` and never directly:
+    the pair ``internal_llm`` + an untrusted ``ai_base_url`` is a
+    misconfiguration that would send medical data off-boundary while the
+    operator believed the boundary was trusted, and the worker refuses to start
+    on it (plan Phase 15 decision 3).
+
+    This says nothing about OCR. The same ``ai_*`` settings drive the OCR call
+    in ``handle_converting``, which runs *before* the gate and consumes the
+    image; see the "Boundaries this pipeline does not gate" section in
+    ``app/pipeline/pipeline.py``.
+    """
+
     @cached_property
     def rabbitmq_dsn(self) -> str:
         if self.rabbitmq_url:

@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from storage import ALLOWED_MIME_TYPES, MARKDOWN_KIND_PII
+from storage import ALLOWED_MIME_TYPES, MARKDOWN_KIND_PII, MARKDOWN_KIND_REDACTED
 from storage.keys import (
     MARKDOWN_ARTIFACTS,
     build_key,
@@ -57,6 +57,7 @@ def test_markdown_artifact_filename_known_kinds():
     assert markdown_artifact_filename("canonical") == "canonical.json"
     assert markdown_artifact_filename("classification") == "classification_result.json"
     assert markdown_artifact_filename("pii") == "pii_result.json"
+    assert markdown_artifact_filename("redacted") == "redacted.md"
 
 
 def test_markdown_artifact_filename_unknown_kind_raises():
@@ -142,6 +143,14 @@ def test_pii_kind_constant_is_in_sync_with_the_filename_table():
     # upload of a document — a production-time failure for a data-layer typo.
     assert MARKDOWN_KIND_PII in MARKDOWN_ARTIFACTS
     assert markdown_artifact_filename(MARKDOWN_KIND_PII) == PII_ARTIFACT_NAME
+
+
+def test_redacted_kind_constant_is_in_sync_with_the_filename_table():
+    # Same reason as the PII kind constant: two modules, one table, and a
+    # disagreement is a KeyError on the first *external* upload — i.e. only in
+    # the configuration this artifact exists for.
+    assert MARKDOWN_KIND_REDACTED in MARKDOWN_ARTIFACTS
+    assert markdown_artifact_filename(MARKDOWN_KIND_REDACTED) == "redacted.md"
 
 
 def test_every_markdown_artifact_filename_is_unique():

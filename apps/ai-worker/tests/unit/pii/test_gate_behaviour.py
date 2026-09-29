@@ -44,6 +44,7 @@ from app.pii import (
     PIIRiskLevel,
     PIIScanResult,
     PIIScanStage,
+    PlaceholderRedactor,
     build_policy_context,
 )
 from app.pii.detectors import build_detector_chain
@@ -72,6 +73,7 @@ def _gate(destination: PIIDestination = PIIDestination.EXTERNAL_LLM) -> DefaultP
         aggregator=DefaultPIIAggregator(),
         policy_engine=DefaultPolicyEngine(),
         policy_context_builder=_context_builder(destination),
+        redactor=PlaceholderRedactor(),
     )
 
 
@@ -310,6 +312,7 @@ async def test_a_gate_without_a_policy_context_fails_closed():
         aggregator=DefaultPIIAggregator(),
         policy_engine=DefaultPolicyEngine(),
         policy_context_builder=lambda document, context: None,
+        redactor=PlaceholderRedactor(),
     )
     with pytest.raises(PIIDecisionError) as excinfo:
         await gate.inspect(_document("любой текст"), _processing_context())
@@ -324,6 +327,7 @@ async def test_a_detector_without_a_secret_fails_closed():
         aggregator=DefaultPIIAggregator(),
         policy_engine=DefaultPolicyEngine(),
         policy_context_builder=_context_builder(PIIDestination.EXTERNAL_LLM),
+        redactor=PlaceholderRedactor(),
     )
     with pytest.raises(Exception, match="(?i)fingerprint"):
         await gate.inspect(_document("СНИЛС 123-067-082 21"), _processing_context())  # noqa: B017

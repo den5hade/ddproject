@@ -4,6 +4,34 @@ Holds the two stage handlers currently wired to the worker queue:
 
 * ``handle_converting``  -> DocumentUploaded  -> unstructured markdown
 * ``handle_structuring`` -> DocumentConverted -> canonical JSON + render
+
+Boundaries this pipeline does not gate
+-------------------------------------
+
+**R1, stated here because it is the gap most likely to be read as covered.**
+The PII gate consumes ``marker.md`` and ``marker.md`` is what
+``handle_converting``'s ``self._ocr.to_markdown(images, ocr_prompt)``
+**produces**. The image is therefore handed to the provider *before* any gate
+has run, and no setting in this file changes that. This is not an oversight to
+be fixed by wiring the gate earlier: the gate has nothing to read until OCR has
+produced text, and a document that is only an image has no markdown at all.
+
+Three consequences worth stating rather than leaving implied:
+
+1. ``ai_base_url``, ``ai_model`` and the credentials are the *same* settings for
+   OCR and for extraction. Setting ``llm_mode=external_llm`` therefore moves the
+   extraction call to an untrusted boundary and leaves the OCR call exactly
+   where it was, still receiving the full page image. Phase 15 redacts the text;
+   it does not protect the image.
+2. The mitigation is a control *before* the OCR call — image classification, a
+   trusted in-house OCR deployment, or refusing image documents on an external
+   boundary. That is a different control with a different threat model, and it
+   is out of M5's scope rather than silently included in it.
+3. What this pipeline *can* say is that its text boundary is now real: with
+   ``llm_mode=external_llm`` the extraction call receives redacted markdown and
+   ``redacted.md`` records what crossed. ``DocumentPipeline.__init__`` warns at
+   start-up when that mode is selected, so an operator sees the limit next to
+   the switch rather than having to find it here.
 """
 
 import json
@@ -22,6 +50,7 @@ from storage import (
     MARKDOWN_KIND_CANONICAL,
     MARKDOWN_KIND_CLASSIFICATION,
     MARKDOWN_KIND_PII,
+    MARKDOWN_KIND_REDACTED,
     MARKDOWN_KIND_STRUCTURED,
     MARKDOWN_KIND_UNSTRUCTURED,
 )
@@ -150,6 +179,19 @@ class DocumentPipeline:
         # detectors run — the Phase 11 subset defect (risk R13) in the place
         # the observed leak actually is.
         self._pii_guard = build_canonical_guard(settings)
+        if settings.llm_mode == "external_llm":
+            # R1. The OCR call in handle_converting runs before every gate and
+            # consumes the page image; `llm_mode` moves the *extraction* call to
+            # an untrusted boundary and does nothing about that one. Said at
+            # start-up, where the operator is choosing the mode, because the
+            # alternative is discovering it from this file's docstring after a
+            # document has already been sent.
+            logger.warning(
+                "pii_boundary_warning document_id=- llm_mode=external_llm: extraction "
+                "redacts before the model call, but OCR (handle_converting) is upstream "
+                "of the gate and still sends the page image to the same ai_base_url. "
+                "See 'Boundaries this pipeline does not gate' in app/pipeline/pipeline.py."
+            )
 
     async def handle_converting(self, event: DocumentUploaded) -> None:
         """Handle PDF/image -> unstructured markdown conversion."""
@@ -221,7 +263,8 @@ class DocumentPipeline:
             )
             classification = await self._classifier.classify(normalized, context)
 
-            pii_result = await self._pii_gate.inspect(normalized, context)
+            gate_result = await self._pii_gate.evaluate_document(normalized, context)
+            pii_result = gate_result.scan_result
             if pii_result.decision in HALTING_DECISIONS:
                 # No artifact, no event data, no extraction. The decision is
                 # logged and published as a failure; nothing derived from this
@@ -261,6 +304,20 @@ class DocumentPipeline:
                 "pii_result_uploaded key=%s decision=%s", pii_key, pii_result.decision.value
             )
 
+            # Phase 15. Redact **before** the extraction call and upload the
+            # result before it too, so if the LLM call then fails, both the
+            # verdict and the text that would have been sent are on disk.
+            #
+            # `redact` returns `unstructured_markdown` *by identity* when no
+            # category is REDACT-actioned, and the pipeline observes that rather
+            # than re-deriving "was this redacted" from the categories: a second
+            # place deciding the same question is a second place able to answer
+            # it differently, and the difference would be a document sent
+            # unredacted to an untrusted provider.
+            redacted = await self._redact(event, unstructured_markdown, gate_result)
+            if redacted is None:
+                return
+            redacted_markdown, redacted_key = redacted
             prompt_key = "default"
             if classification.decision is not ClassificationDecision.AMBIGUOUS:
                 prompt_key = self._resolver.resolve(
@@ -270,13 +327,16 @@ class DocumentPipeline:
             canonical_prompt = self._prompt_manager.load_prompt("canonical", prompt_key)
 
             result = await self._ai_client.extract_canonical(
-                markdown=unstructured_markdown,
+                markdown=redacted_markdown,
                 system_prompt=canonical_prompt["system_prompt"],
                 model=canonical_prompt.get("model", self._settings.ai_model),
                 temperature=canonical_prompt.get("temperature", 0.0),
             )
             raw = json.loads(result.content)
             canonical = build_canonical(prompt_key, raw)
+            # The original, not the redacted text: the page count describes the
+            # document, and the document is what was uploaded and what the
+            # operator will compare `redacted.md` against.
             page_count = count_pages(unstructured_markdown)
 
             # Contour 2. Runs after build_canonical and **replaces** the binding
@@ -369,6 +429,13 @@ class DocumentPipeline:
                         "classification": classification_meta.model_dump(mode="json"),
                         "pii": pii_meta,
                         "pii_key": pii_key,
+                        # Optional, and deliberately not a permanent nullable
+                        # key: at the trusted destination — the default, and
+                        # essentially every run — nothing is redacted and there
+                        # is no artifact to point at. Adding a key that is null
+                        # on 99% of documents to a cross-package event contract
+                        # (R11) would be a schema change for a non-event.
+                        **({"redacted_key": redacted_key} if redacted_key else {}),
                     },
                 ),
             )
@@ -481,6 +548,81 @@ class DocumentPipeline:
                 f"canonical sanitization failed closed: {exc}",
                 error_code="PII_CANONICAL_GUARD_FAILED",
             )
+
+    async def _redact(self, event, markdown: str, gate_result) -> tuple[str, str | None] | None:
+        """Return ``(text_to_send, redacted_key)``, or ``None`` if the document stops.
+
+        The pre-extraction half of the gate, and the reason
+        :meth:`DefaultPIIGate.evaluate_document` exists. Three outcomes:
+
+        * **nothing is ``REDACT``-actioned** — the input string, returned *by
+          identity*, and no key. At the trusted destination this is every
+          document the platform processes, so a ``redacted.md`` written here
+          would be an artifact per document recording a non-event, and the
+          event's ``redacted_key`` would be null on essentially every run. The
+          identity is how the caller tells the two cases apart without
+          re-deriving the policy condition.
+        * **redacted** — the redacted text and the key it was uploaded under.
+          The artifact holds placeholders only, never a raw value, which is
+          what makes it safe to store and simultaneously the reason it is
+          evidence: it is what left. A log line would not be — it is rotated,
+          lossy, and holds no text to begin with.
+        * **redaction failed** — ``None``, with the failure already published,
+          and **no extraction call**: a document whose PII could not be removed
+          is a document that must not be sent. The already-uploaded
+          ``pii_result.json`` stays, because it is the scan's own audit record.
+
+        Args:
+            event: The incoming event, for the ids and the tenant-keyed failure.
+            markdown: The text as it would be sent. Never modified.
+            gate_result: The evaluation this redaction belongs to.
+
+        Returns:
+            ``(text_to_send, redacted_key_or_None)``, or ``None`` to halt.
+
+        Raises:
+            Nothing. A :class:`PIIRedactionError` is turned into a published
+                failure and a ``None``, because a raise would be caught by the
+                handler above and reported as ``markdown_structuring`` —
+                losing the fact that a security control stopped the document.
+        """
+        try:
+            redacted = self._pii_gate.redact(markdown, gate_result)
+        except PIIRedactionError as exc:
+            logger.warning("pii_redaction_failed document_id=%s message=%s", event.document_id, exc)
+            await self._fail(
+                event.document_id,
+                event.document_version_id,
+                event.patient_id,
+                PII_GATE_JOB_TYPE,
+                f"PII redaction failed closed: {exc}",
+                error_code="PII_REDACTION_FAILED",
+            )
+            return None
+
+        if redacted is markdown:
+            return markdown, None
+
+        redacted_key = self._build_key(event, MARKDOWN_KIND_REDACTED)
+        await upload_text(self._s3, redacted, redacted_key, "text/markdown")
+        # Not a new messaging event and not a new artifact type: the record of
+        # what was removed is the policy's per-category warnings, which already
+        # reach pii_result.json and the §4.7 frontmatter/event block. This line
+        # is the searchable version of the same fact.
+        logger.info(
+            "pii_redacted document_id=%s key=%s destination=%s categories=%s",
+            event.document_id,
+            redacted_key,
+            gate_result.scan_result.destination.value,
+            sorted(
+                {
+                    finding.category.value
+                    for finding in gate_result.findings
+                    if gate_result.actions.get(finding.category) is PIIAction.REDACT
+                }
+            ),
+        )
+        return redacted, redacted_key
 
     async def _fail_canonical_guard(self, event, message: str, error_code: str = "PII_GUARD_ERROR"):
         """Publish a contour-2 failure and return ``None`` for the caller."""

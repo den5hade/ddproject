@@ -74,6 +74,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.pii.aggregation import DefaultPIIAggregator, PIIAggregator
 from app.pii.detectors import (
     DETECTOR_VERSION,
@@ -82,6 +84,8 @@ from app.pii.detectors import (
 )
 from app.pii.exceptions import PIIDecisionError
 from app.pii.models import (
+    PIIAction,
+    PIICategory,
     PIIDecision,
     PIIDecisionResult,
     PIIFinding,
@@ -96,7 +100,9 @@ from app.pii.policy import (
     PIIPolicyContext,
     PolicyEngine,
     build_policy_context,
+    resolve_destination,
 )
+from app.pii.redaction import PIIRedactor, PlaceholderRedactor
 
 if TYPE_CHECKING:
     from app.classification.normalize import NormalizedDocument
@@ -107,6 +113,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DECISION_OUTCOMES",
     "HALTING_DECISIONS",
+    "DocumentPIIGateResult",
     "PolicyContextBuilder",
     "DefaultPIIGate",
     "PIIGate",
@@ -186,6 +193,51 @@ one auditable place instead of from five.
 """
 
 
+class DocumentPIIGateResult(BaseModel):
+    """A verdict plus the values behind it — M5 Phase 15.
+
+    Two audiences, one evaluation. ``scan_result`` is the artifact: the Phase 1
+    projection with no ``value`` and no ``value_fingerprint`` at any depth, and
+    the only part of this object the pipeline persists or publishes. ``findings``
+    and ``actions`` are the remediation view: the raw
+    :class:`~app.pii.models.PIIFinding` objects a redactor needs, and the
+    per-category map that says which of them are ``REDACT``-actioned.
+
+    This is the shape :class:`~app.pii.canonical_guard.CanonicalPIIGuardResult`
+    already uses for contour 2, for the same reason: a scan that can decide but
+    cannot say *what to remove* forces the caller to re-derive the values, and a
+    caller that re-derives is a second detector.
+
+    ``Field(exclude=True)`` on both value-bearing fields is the boundary, and it
+    is the whole safety argument — ``model_dump()`` cannot produce a payload
+    containing a raw PII value, so neither the ``pii_result.json`` upload, nor
+    the event, nor a stray ``logger.info(..., result=...)`` can leak one by
+    accident. A test walks every key of the dumped model at every depth and
+    asserts the absence, and the tests that already prove it for
+    ``PIIScanResult`` are re-applied here.
+
+    Frozen: the decision and the remediation must describe the same evaluation.
+    A result that could be edited between the two would let a caller redact
+    against actions the verdict was not based on.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scan_result: PIIScanResult
+    """The boundary-safe verdict. Persisted, published, and the only part that
+    ever leaves the process."""
+
+    findings: list[PIIFinding] = Field(default_factory=list, exclude=True)
+    """Raw findings, in process only. Never serialized."""
+
+    actions: dict[PIICategory, PIIAction] = Field(default_factory=dict, exclude=True)
+    """Per-category action from the same evaluation, in process only.
+
+    Carried rather than recomputed so :meth:`DefaultPIIGate.redact` cannot
+    disagree with :meth:`DefaultPIIGate.inspect` about the same document.
+    """
+
+
 class DefaultPIIGate(PIIGateBase):
     """``detect → aggregate → policy → project``, wired — M5 Phase 9.
 
@@ -218,8 +270,9 @@ class DefaultPIIGate(PIIGateBase):
         aggregator: PIIAggregator,
         policy_engine: PolicyEngine,
         policy_context_builder: PolicyContextBuilder,
+        redactor: PIIRedactor,
     ) -> None:
-        """Wire the four collaborators.
+        """Wire the collaborators.
 
         Args:
             detector: The composite chain. ``build_detector_chain(settings)``
@@ -234,11 +287,20 @@ class DefaultPIIGate(PIIGateBase):
                 default: a gate that could scan without one would have to invent
                 a destination, and the invented value would be ``INTERNAL_LLM``,
                 which is a silent allow.
+            redactor: Performs the replacement for :meth:`redact`. Injected
+                rather than imported, exactly as ``build_canonical_guard``
+                injects one, so a test can supply a redactor that fails and
+                assert the failure propagates instead of falling back to the
+                unredacted text. Required, not defaulted to
+                :class:`~app.pii.redaction.PlaceholderRedactor`: a silent
+                no-redactor default is the one default that turns this gate into
+                a pass-through.
         """
         self.detector = detector
         self.aggregator = aggregator
         self.policy_engine = policy_engine
         self.policy_context_builder = policy_context_builder
+        self.redactor = redactor
 
     async def inspect(
         self,
@@ -246,6 +308,12 @@ class DefaultPIIGate(PIIGateBase):
         context: ProcessingContext,
     ) -> PIIScanResult:
         """Scan ``document`` and return the boundary-safe result.
+
+        The projection of :meth:`evaluate_document`, kept because ORDER §8's
+        signature is a locked contract and because a caller that only persists a
+        verdict should not be handed raw values to be careful with. Both paths
+        run the same code, so a verdict obtained by one cannot disagree with the
+        other.
 
         Args:
             document: The normalized document to scan. Only ``raw_text`` is read;
@@ -268,17 +336,94 @@ class DefaultPIIGate(PIIGateBase):
                 ``ALLOW``, which is the one outcome that would let a document
                 through with nobody having looked at it ("Fail closed" above).
         """
+        result = await self.evaluate_document(document, context)
+        return result.scan_result
+
+    async def evaluate_document(
+        self,
+        document: NormalizedDocument,
+        context: ProcessingContext,
+    ) -> DocumentPIIGateResult:
+        """Scan ``document`` and return the verdict *and* what to remove for it.
+
+        Phase 15. The gate physically could not redact before this: it returned
+        a :class:`~app.pii.models.PIIScanResult`, whose findings are
+        :class:`~app.pii.models.PIIFindingSummary` — a model with no ``value``
+        field at all, by the Phase 1 structural rule. The pipeline was therefore
+        holding nothing a redactor could consume, and the only correct statement
+        about redaction was that it was not wired.
+
+        So this returns the safe projection *and* the values beside it, in
+        process, in the same shape
+        :meth:`~app.pii.canonical_guard.DefaultCanonicalPIIInspector.evaluate_payload`
+        already established for contour 2: a safe artifact plus
+        :class:`~app.pii.models.PIIFinding` objects that must never be
+        serialized. The two value-bearing fields are ``Field(exclude=True)``, and
+        the existing walk-every-key tests are re-applied to this type at any
+        depth.
+
+        Raises:
+            PIIDecisionError: If the policy-context builder returns ``None``.
+        """
         policy_context = self.policy_context_builder(document, context)
         if policy_context is None:
             raise PIIDecisionError(
-                f"{type(self).__name__}.inspect got no PIIPolicyContext from its builder; "
-                "refusing to assume a destination, because assuming INTERNAL_LLM is a "
+                f"{type(self).__name__}.evaluate_document got no PIIPolicyContext from its "
+                "builder; refusing to assume a destination, because assuming INTERNAL_LLM is a "
                 "silent allow."
             )
 
         findings = self.aggregator.aggregate(self.detector.detect(document))
         decision = self.policy_engine.evaluate(findings, policy_context)
-        return self._project(decision, findings, policy_context)
+        return DocumentPIIGateResult(
+            scan_result=self._project(decision, findings, policy_context),
+            findings=findings,
+            actions=dict(decision.actions),
+        )
+
+    def redact(self, markdown: str, result: DocumentPIIGateResult) -> str:
+        """Return the text to send, with every ``REDACT``-actioned value removed.
+
+        The rule is §4.12 verbatim: mask iff ``actions[category] is REDACT``.
+        ``DOCTOR_NAME`` and ``ORGANIZATION_NAME`` are ``ALLOW``-actioned at every
+        destination, and blanking them would destroy the note
+        (``render_document`` and the appointment model need them, R3), so the
+        filter is per category and not "redact everything found".
+
+        The decision is **not** re-evaluated here. It was made once, in
+        :meth:`evaluate_document`, and re-deriving it in a second place is how
+        the two would come to disagree about what a document is allowed to
+        contain. This method consumes ``result.actions``; it does not read
+        settings, the destination, or the findings' categories on its own.
+
+        Args:
+            markdown: The text as it would be sent. Never modified.
+            result: The evaluation this redaction belongs to. Using a result
+                from a different document raises rather than redacting the wrong
+                text — a stale result is indistinguishable from a leak at the
+                call site.
+
+        Returns:
+            A new string with each ``REDACT``-actioned value replaced by
+            ``[CATEGORY]``. **Returns ``markdown`` unchanged, by identity, when
+            nothing is ``REDACT``-actioned** — the caller uses that to decide
+            whether a ``redacted.md`` artifact is warranted at all, so a
+            "nothing was removed" answer has to be observable from outside.
+
+        Raises:
+            PIIRedactionError: From the redactor, if a finding resolves to no
+                span. Propagated rather than caught: a value left in place while
+                the pipeline records that redaction happened is the failure this
+                gate exists to prevent.
+        """
+        actionable = [
+            finding
+            for finding in result.findings
+            if result.actions.get(finding.category) is PIIAction.REDACT
+        ]
+        if not actionable:
+            return markdown
+        return self.redactor.redact(markdown, actionable)
 
     def _project(
         self,
@@ -395,19 +540,18 @@ def build_document_gate(settings: Settings) -> DefaultPIIGate:
     * A missing ``pii_fingerprint_secret`` raises out of the chain constructor,
       so a misconfigured deployment refuses to start rather than scanning
       anything with a brute-forceable digest.
+    * ``llm_mode="internal_llm"`` with an ``ai_base_url`` that
+      :data:`~app.pii.policy.TRUSTED_INTERNAL_URLS` does not name raises here
+      (Phase 15 decision 3). Resolved once, at construction, so the refusal
+      happens at worker start-up rather than on the first document.
     * ``redaction_available=True`` (Phase 12): a ``REDACT`` action now has a
       working redactor behind it, so the policy stops escalating to ``REVIEW``
       and starts reporting ``ALLOW_WITH_WARNING`` with "value must be redacted
-      before leaving the boundary". Note that this changes nothing observable at
-      today's destination — the default policy issues ``ALLOW`` for every
-      category except ``SECRET``, and the ``REDACT`` override only fires for
-      ``EXTERNAL_LLM`` — so the redactor stays dormant until Phase 15 makes
-      ``destination`` a settings read. Setting the flag now means the policy is
-      already honest about the redactor's existence when that switch is flipped,
-      instead of needing a code change at the same moment the boundary moves.
-    * ``destination`` is left at :data:`~app.pii.policy.DEFAULT_DESTINATION`
-      rather than named here, so Phase 15 changes one default instead of this
-      call.
+      before leaving the boundary".
+    * ``destination`` is :func:`~app.pii.policy.resolve_destination`'s answer,
+      resolved **once** here rather than per call: a destination that could
+      change between two documents of the same batch would mean the same
+      document is judged under two different rules depending on when it arrived.
 
     ``document_type`` is read from the *normalized* document's metadata, which
     is what :data:`PolicyContextBuilder` documents. Today the pipeline
@@ -419,21 +563,25 @@ def build_document_gate(settings: Settings) -> DefaultPIIGate:
     ``attributes``.
 
     Args:
-        settings: Application settings. ``pii_fingerprint_secret`` is read by
-            the chain constructor; nothing else is consulted.
+        settings: Application settings. ``pii_fingerprint_secret`` and
+            ``llm_mode`` are read here, plus ``ai_base_url`` and ``s3_tenant_id``
+            downstream.
 
     Returns:
         A wired :class:`DefaultPIIGate` for the document stage.
 
     Raises:
-        InvalidPIIInputError: If the fingerprint secret is missing or blank.
+        InvalidPIIInputError: If the fingerprint secret is missing or blank, or
+            if the ``internal_llm`` + untrusted-URL pairing is configured.
     """
+    destination = resolve_destination(settings)
 
     def build_context(document: NormalizedDocument, context: ProcessingContext) -> PIIPolicyContext:
         """Close over settings to supply the inputs the locked signature omits."""
         return build_policy_context(
             settings,
             stage=PIIScanStage.DOCUMENT,
+            destination=destination,
             document_type=document.metadata.get("document_type"),
             redaction_available=REDACTION_AVAILABLE,
         )
@@ -443,4 +591,5 @@ def build_document_gate(settings: Settings) -> DefaultPIIGate:
         aggregator=DefaultPIIAggregator(),
         policy_engine=DefaultPolicyEngine(DEFAULT_POLICY),
         policy_context_builder=build_context,
+        redactor=PlaceholderRedactor(),
     )
