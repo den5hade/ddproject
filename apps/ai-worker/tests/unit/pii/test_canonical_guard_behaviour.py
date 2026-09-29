@@ -55,6 +55,7 @@ from app.pii import (
 from app.pii.canonical_guard import (
     DefaultCanonicalPIIInspector,
     build_canonical_guard,
+    sanitize_canonical_payload,
     walk_string_leaves,
 )
 from app.pii.detectors import build_detector_chain
@@ -673,3 +674,137 @@ def test_a_finding_in_no_path_is_still_counted_once():
     assert sorted(result.findings_by_path) == ["fields.note", "fields.referrer"]
     sanitized = guard.sanitize(payload, result)
     assert SYNTHETIC_PATIENT not in json.dumps(sanitized, ensure_ascii=False)
+
+
+# --- 5. one finding stands for every occurrence (H-1) --------------------------
+
+
+def test_a_value_repeated_in_one_leaf_is_redacted_at_every_occurrence():
+    """The shipped leak, by name, on the text it was reproduced on.
+
+    Aggregation is by ``(category, value_fingerprint)``, so both sightings of the
+    СНИЛС below collapse into **one** finding, and the redactor resolved a single
+    span per finding. Result as shipped in Phase 14:
+
+    .. code-block:: text
+
+        IN : СНИЛС: 123-067-082 21. Повторно СНИЛС: 123-067-082 21 продублирован в карте.
+        OUT: СНИЛС: [SNILS]. Повторно СНИЛС: 123-067-082 21 продублирован в карте.
+
+    The second occurrence then reached ``canonical.json``, ``structured.md`` and
+    the event ``data`` verbatim while ``pii_result.json`` reported the value as
+    found — the artifact attesting to a removal that never happened. This is the
+    shape the whole guard exists for, and it was open in the shape that ships.
+    """
+    guard = _guard()
+    value = "123-067-082 21"
+    payload = {
+        "fields": {
+            "note": f"СНИЛС: {value}. Повторно СНИЛС: {value} продублирован в карте.",
+        }
+    }
+
+    result = guard.evaluate_payload(payload)
+    sanitized = guard.sanitize(payload, result)
+    note = sanitized["fields"]["note"]
+
+    assert value not in json.dumps(sanitized, ensure_ascii=False)
+    assert note == "СНИЛС: [SNILS]. Повторно СНИЛС: [SNILS] продублирован в карте."
+    assert "продублирован в карте" in note
+    assert result.decision is PIIDecision.ALLOW_WITH_WARNING
+
+
+def test_the_repeated_value_is_still_one_finding_and_one_violation():
+    """Repetition is a *redaction* fact, not a *detection* fact.
+
+    The guard reports one finding and one violation for a value written twice —
+    this document has one СНИЛС in it however many times it appears. Inflating
+    the count here would double-report every repeated value in every artifact M5
+    produces, which is the reason aggregation deduplicates in the first place.
+    """
+    guard = _guard()
+    value = "123-067-082 21"
+    payload = {"fields": {"note": f"СНИЛС: {value}. Повторно СНИЛС: {value}."}}
+
+    result = guard.evaluate_payload(payload)
+
+    assert len(result.findings_by_path["fields.note"]) == 1
+    assert len(result.violations) == 1
+
+
+def test_a_repeated_value_is_gone_from_both_leaves():
+    """Repetition within a leaf *and* across leaves — the two ways to leak.
+
+    ``test_a_finding_in_no_path_is_still_counted_once`` already covers the
+    cross-leaf case for two *different* paths. Here the same value is repeated
+    inside each leaf as well, so the test fails unless both dimensions are closed
+    at once.
+    """
+    guard = _guard()
+    value = "123-067-082 21"
+    payload = {
+        "fields": {
+            "note": f"СНИЛС: {value}. Повторно СНИЛС: {value} в карте.",
+            "referrer": f"СНИЛС {value} перенесён.",
+        }
+    }
+
+    result = guard.evaluate_payload(payload)
+    sanitized = guard.sanitize(payload, result)
+    serialized = json.dumps(sanitized, ensure_ascii=False)
+
+    assert value not in serialized
+    assert sorted(result.findings_by_path) == ["fields.note", "fields.referrer"]
+    assert sanitized["fields"]["note"] == "СНИЛС: [SNILS]. Повторно СНИЛС: [SNILS] в карте."
+    assert sanitized["fields"]["referrer"] == "СНИЛС [SNILS] перенесён."
+
+
+def test_an_allow_actioned_sibling_of_the_same_literal_is_over_masked():
+    """The named cost of the fix, pinned so the next reader sees a decision.
+
+    The same literal under a ``REDACT`` and an ``ALLOW`` category is filtered
+    before it reaches the redactor, which then removes the ``ALLOW``-actioned
+    occurrence too — it cannot tell the doctor's name from the patient's, because
+    both are the same fourteen characters. Over-masking costs fidelity;
+    under-masking costs the boundary. Fail-closed is the deliberate choice, and
+    this is the shape it takes.
+    """
+    value = "Петров И. С."
+    leaf = f"Пациент {value}, направил врач {value}."
+    patient = PIIFinding(
+        category=PIICategory.PERSON_NAME,
+        value=value,
+        masked_value="П***** И. С.",
+        value_fingerprint="hmac-sha256:patient",
+        confidence=0.9,
+        source=PIISource.PATTERN,
+        detector="test.person_name",
+        detector_version="1.2.0",
+        start=8,
+        end=18,
+    )
+    doctor = PIIFinding(
+        category=PIICategory.DOCTOR_NAME,
+        value=value,
+        masked_value="П***** И. С.",
+        value_fingerprint="hmac-sha256:doctor",
+        confidence=0.9,
+        source=PIISource.PATTERN,
+        detector="test.doctor_name",
+        detector_version="1.2.0",
+        start=32,
+        end=42,
+    )
+    payload = {"fields": {"note": leaf}}
+
+    sanitized = sanitize_canonical_payload(
+        payload,
+        findings_by_path={"fields.note": [patient, doctor]},
+        actions={
+            PIICategory.PERSON_NAME: PIIAction.REDACT,
+            PIICategory.DOCTOR_NAME: PIIAction.ALLOW,
+        },
+        redactor=PlaceholderRedactor(),
+    )
+
+    assert sanitized["fields"]["note"] == "Пациент [PERSON_NAME], направил врач [PERSON_NAME]."

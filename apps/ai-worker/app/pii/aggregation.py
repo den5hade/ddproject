@@ -119,6 +119,16 @@ class DefaultPIIAggregator(PIIAggregatorBase):
     - **Ties keep the earliest sighting**, which makes the winner depend only on
       detector chain order — the deterministic behaviour a test can assert and
       M6 calibration can reason about.
+
+    **What the phases that consume this rule must not assume.** Because identity
+    is the *value* and not the position, one finding can stand for several
+    occurrences of the same entity in the text. Anything downstream that turns a
+    finding into a location — :meth:`app.pii.redaction.PlaceholderRedactor.redact`
+    above all — must therefore locate **every** occurrence, not the first. This
+    rule and that redactor are a pair, and neither is safe without the other:
+    a redactor that resolved one span per finding shipped a live leak (Phase 15
+    hotfix H-1, "Deviation 2" in :mod:`app.pii.redaction`), because the two
+    deduped sightings collapsed into one finding with one span.
     """
 
     def aggregate(self, findings: list[PIIFinding]) -> list[PIIFinding]:

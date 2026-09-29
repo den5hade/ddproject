@@ -220,14 +220,21 @@ def test_wrong_offsets_survive_a_case_folded_value():
 
 
 def test_adjacent_spans_are_two_placeholders_not_one():
-    """``[0, 5)`` and ``[5, 10)`` do not intersect; merging them would lie.
+    """``[0, 2)`` and ``[2, 4)`` do not intersect; merging them would lie.
 
     One placeholder would assert that a single value was removed where two
     distinct ones were, and would hide which. Adjacency is not overlap.
+
+    Each value occurs exactly **once** here, so the test measures adjacency and
+    nothing else. The original fixture was ``"ababababab"`` split at 5 — where
+    ``"ababa"`` and ``"babab"`` each occur several times over. H-1 makes the
+    redactor remove every occurrence, those extra sightings do overlap, and they
+    correctly merge into one span, so the old data no longer said which of the
+    two invariants it was pinning.
     """
-    markdown = "ababababab"
-    first = _finding("ababa", start=0, end=5, category=PIICategory.PERSON_NAME)
-    second = _finding("babab", start=5, end=10, category=PIICategory.SNILS)
+    markdown = "ab" + "cd"
+    first = _finding("ab", start=0, end=2, category=PIICategory.PERSON_NAME)
+    second = _finding("cd", start=2, end=4, category=PIICategory.SNILS)
 
     result = PlaceholderRedactor().redact(markdown, [first, second])
 
@@ -623,3 +630,145 @@ def test_the_flag_still_fails_closed_without_a_secret():
     """Setting the redaction flag must not soften the secret requirement."""
     with pytest.raises(InvalidPIIInputError):
         build_document_gate(Settings(_env_file=None, pii_fingerprint_secret="  "))
+
+
+# --- one finding, every occurrence (H-1) --------------------------------------
+
+
+def test_a_value_repeated_in_the_text_is_removed_at_every_occurrence():
+    """Three occurrences, no offsets: all three go, and nothing else moves.
+
+    H-1. A single ``REDACT`` action is a claim about the *value*, and the caller
+    cannot make it per-occurrence: aggregation deduplicates on
+    ``(category, value_fingerprint)``, so a value written twice yields one
+    finding that says which value and nothing about how often it appears. The
+    redactor is therefore the only component that can know, and removing one
+    occurrence of three is a document that looks redacted and is not.
+    """
+    markdown = "СНИЛС 123-067-082 21 вновь; СНИЛС 123-067-082 21 подтверждён; СНИЛС 123-067-082 21."
+    finding = _finding("123-067-082 21", category=PIICategory.SNILS)
+
+    result = PlaceholderRedactor().redact(markdown, [finding])
+
+    assert "123-067-082 21" not in result
+    assert result.count("[SNILS]") == 3
+    assert result == "СНИЛС [SNILS] вновь; СНИЛС [SNILS] подтверждён; СНИЛС [SNILS]."
+
+
+def test_a_repeated_value_is_removed_in_a_different_case():
+    """The canonicaliser case-folds, so occurrences need not be byte-identical.
+
+    The second sighting is lower-case, which is how a real document carries a
+    repeated surname. Matching is case-insensitive per occurrence, not only on
+    the one that happened to be found first.
+    """
+    markdown = "Пациент Кузнецова Александра. Пациент кузнецова александра."
+    finding = _finding("Кузнецова Александра", start=8, end=26)
+
+    result = PlaceholderRedactor().redact(markdown, [finding])
+
+    assert "Кузнецова" not in result
+    assert "кузнецова" not in result
+    assert result == "Пациент [PERSON_NAME]. Пациент [PERSON_NAME]."
+
+
+def test_a_verified_offset_hint_does_not_suppress_the_other_occurrences():
+    """The hint path was the second half of the leak, and it is covered too.
+
+    A verified hint pins **one** span. When the caller walks exactly the string
+    it scanned — the canonical-guard contour — the hint is always verified, so
+    returning it and skipping the search would have left contour 2 leaking just
+    as it did before. Both are collected.
+    """
+    markdown = "СНИЛС 123-067-082 21. Повторно СНИЛС 123-067-082 21 продублирован в карте."
+    hint = _finding("123-067-082 21", category=PIICategory.SNILS, start=6, end=21)
+
+    result = PlaceholderRedactor().redact(markdown, [hint])
+
+    assert "123-067-082 21" not in result
+    assert result == "СНИЛС [SNILS]. Повторно СНИЛС [SNILS] продублирован в карте."
+
+
+def test_a_hint_and_the_search_yield_one_placeholder_per_occurrence():
+    """N occurrences produce N placeholders, not N+1.
+
+    Collecting the hint *and* the search is only safe if the span they agree on
+    is counted once. Without this, the first occurrence would be replaced by two
+    overlapping spans that merge into a single ``[SNILS][SNILS]`` — a corrupted
+    document produced by a fix for a leak, which is the failure mode worth
+    spending a test on.
+    """
+    markdown = "СНИЛС 123-067-082 21 и снова 123-067-082 21."
+    hint = _finding("123-067-082 21", category=PIICategory.SNILS, start=6, end=20)
+
+    result = PlaceholderRedactor().redact(markdown, [hint])
+
+    assert result == "СНИЛС [SNILS] и снова [SNILS]."
+
+
+def test_a_back_to_back_repetition_is_two_placeholders():
+    """Adjacent repetitions are not one run of text, so they are two tokens.
+
+    The merge rule stays "intersecting, not touching" — ``"ABAB"`` with value
+    ``"AB"`` is two values that happen to share a boundary, and collapsing them
+    would assert that one thing was removed where two were.
+    """
+    markdown = "номерABABдубль"
+    finding = _finding("AB", category=PIICategory.SNILS)
+
+    result = PlaceholderRedactor().redact(markdown, [finding])
+
+    assert result == "номер[SNILS][SNILS]дубль"
+
+
+def test_a_repeated_value_in_the_document_fixture_leaves_no_trace():
+    """The gate's own data path, not a hand-built finding.
+
+    Detection and aggregation are the shipped ones, so this is the contour-1
+    property Phase 15 will rely on: scan, aggregate to one finding, redact — and
+    the value the manifest's detector found is absent from every occurrence of
+    the text it was scanned in.
+    """
+    markdown = "СНИЛС 123-067-082 21. Повторно СНИЛС 123-067-082 21 продублирован в карте."
+    findings = _gate_findings(markdown)
+    assert [f.category for f in findings] == [PIICategory.SNILS]
+
+    result = PlaceholderRedactor().redact(markdown, findings)
+
+    assert "123-067-082 21" not in result
+    assert result == "СНИЛС [SNILS]. Повторно СНИЛС [SNILS] продублирован в карте."
+
+
+def test_a_value_only_reachable_by_its_offsets_still_raises():
+    """Widening the search must not have softened the fail-closed branch.
+
+    A finding with neither a usable hint nor a searchable value still has to
+    raise, and an unsearchable value — one whose whitespace the canonicaliser
+    collapsed — must not be reported as "found nowhere" when the hint already
+    proved it is there.
+    """
+    markdown = "Пациент: Смирнова   Ольга"
+    hint = _finding("смирнова ольга", start=9, end=25)  # selects the triple-spaced run
+
+    assert PlaceholderRedactor().redact(markdown, [hint]) == "Пациент: [PERSON_NAME]"
+
+    with pytest.raises(PIIRedactionError):
+        PlaceholderRedactor().redact("совсем другой текст", [hint])
+
+
+def test_the_module_still_states_the_every_occurrence_deviation():
+    """A deviation nobody can find is a deviation nobody can review.
+
+    The M4 algorithm said "resolve every finding to a span", and H-1 changed it
+    to "to every span it occupies". A refactor that restores the singular
+    wording would otherwise leave the code correct-looking and the reason gone,
+    and the next person to dedup an entity per occurrence would ship the leak
+    again believing the docstring described what happens.
+    """
+    from app.pii import redaction
+
+    doc = redaction.__doc__ or ""
+
+    assert "Deviation 2" in doc
+    assert "every occurrence" in doc
+    assert "123-067-082 21" in doc  # the reproduced leak is quoted, not paraphrased

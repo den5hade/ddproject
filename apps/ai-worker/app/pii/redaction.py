@@ -10,9 +10,10 @@ is trusted by name (plan §0, §7).
 The locked algorithm
 --------------------
 
-1. **Resolve every finding to a span.** Prefer ``start``/``end`` when both are
-   present and lie within the markdown. Otherwise fall back to locating
-   ``value`` in the markdown. A finding that resolves to neither must raise
+1. **Resolve every finding to *every* span it occupies.** Prefer ``start``/``end``
+   when both are present, lie within the markdown **and** select the finding's own
+   value. Otherwise locate ``value`` in the markdown — at **every** occurrence,
+   not just the leftmost. A finding that resolves to no span at all must raise
    ``PIIRedactionError`` — never be skipped, because a silently skipped
    redaction is a leak that the artifact will happily attest to. The fallback
    is not optional: structured-field and canonical-guard findings legitimately
@@ -33,6 +34,45 @@ The locked algorithm
    ``findings`` is the caller's list; neither is modified in place, and the
    returned string is a new object. ``PIIFinding`` is frozen, so a redactor
    cannot "helpfully" annotate a finding either.
+
+Deviation 2 — every occurrence, not the first one
+-------------------------------------------------
+
+M4 locked step 1 as "resolve every finding to **a** span". That wording is
+wrong, and it was wrong silently: it shipped with the canonical guard in
+Phase 14, where it leaks.
+
+:attr:`app.pii.aggregation.DefaultPIIAggregator` deduplicates on
+``(category, value_fingerprint)``, so two occurrences of one value inside a
+single leaf are **one** finding. Resolving that finding to a single span then
+redacts the first occurrence and leaves the second. Reproduced against the
+shipped guard:
+
+.. code-block:: text
+
+    IN : СНИЛС: 123-067-082 21. Повторно СНИЛС: 123-067-082 21 продублирован в карте.
+    OUT: СНИЛС: [SNILS]. Повторно СНИЛС: 123-067-082 21 продублирован в карте.
+
+The second value reaches ``canonical.json``, ``structured.md`` and the event
+``data`` verbatim, while ``pii_result.json`` reports the value as found — the
+artifact attests to a removal that did not happen.
+
+The fix is here and not in the aggregator, for the reason Phase 12 fixed the
+offset handling here and not in the detector: the redactor's contract is "this
+value is gone from this text", and removing it once is not removal. Widening
+the aggregator instead would break the M4-locked dedup key and inflate
+``findings_count`` and ``category_counts`` with one entity seen twice, which is
+the entire reason aggregation exists.
+
+The deviation only widens what is removed. It moves in the same direction as
+Phase 12's: both change behaviour solely for cases where the literal reading
+would produce a document that *looks* redacted and is not.
+
+**Named cost.** The same literal under two categories — ``PERSON_NAME``
+redacted, ``DOCTOR_NAME`` allowed — is now masked at *both* occurrences, so an
+``ALLOW``-actioned sibling of the same string is over-redacted. Fail-closed is
+the deliberate choice: over-masking costs fidelity, under-masking costs the
+boundary. Pinned by a test so the next reader sees a decision, not a bug.
 
 Placeholder tokens
 ------------------
@@ -154,6 +194,14 @@ class PlaceholderRedactor(RedactorBase):
     redaction is a leak" — is served better by this than by the literal reading,
     which leaks while appearing to succeed.
 
+    **This is also the second place the module docstring's algorithm is
+    deliberately narrower than reality** (see "Deviation 2" above). The hint is
+    not a substitute for a search: a verified hint pins *one* span, and when the
+    aggregator has already collapsed several occurrences of one value into a
+    single finding, pinning the first of them is precisely the leak. Both are
+    collected, and a located span identical to the hint is dropped so the count
+    is the number of occurrences, not the number of occurrences plus one.
+
     Case-insensitive location is required, not a convenience: the canonicaliser
     case-folds, so a value the detector saw as ``смирнова ольга ивановна``
     appears in the markdown as ``Смирнова Ольга Ивановна``. Matching is done
@@ -192,7 +240,7 @@ class PlaceholderRedactor(RedactorBase):
             return markdown
 
         spans = sorted(
-            (self._resolve(markdown, finding) for finding in findings),
+            (span for finding in findings for span in self._resolve(markdown, finding)),
             key=lambda span: (span.start, span.end, -span.confidence, span.placeholder),
         )
         merged = _merge_overlapping(spans)
@@ -202,34 +250,50 @@ class PlaceholderRedactor(RedactorBase):
             redacted = redacted[: span.start] + span.placeholder + redacted[span.end :]
         return redacted
 
-    def _resolve(self, markdown: str, finding: PIIFinding) -> _Span:
+    def _resolve(self, markdown: str, finding: PIIFinding) -> list[_Span]:
         """Locate one finding in ``markdown`` — the offset hint, then the value.
+
+        Returns **every** span the finding occupies, never just the first: one
+        finding can stand for several occurrences (the aggregator deduplicates
+        by value), and redacting only the leftmost one is a leak. See
+        "Deviation 2" in the module docstring.
+
+        A verified offset hint and the value search are both used together
+        rather than one replacing the other. The hint alone repeats the bug for
+        the canonical-guard contour, where the caller walks exactly the string it
+        scanned; the search alone would drop the hint's whitespace-tolerant
+        match. They are reconciled by dropping any located span that *is* the
+        hint, so a value present N times yields N spans, not N+1.
 
         Raises:
             PIIRedactionError: If neither the hint nor the value locates.
         """
-        from_offset = self._span_from_offset(markdown, finding)
-        if from_offset is not None:
-            return from_offset
+        hint = self._span_from_offset(markdown, finding)
+        spans: list[_Span] = [hint] if hint is not None else []
 
         value = finding.value
         if value:
-            located = _locate(markdown, value)
-            if located is not None:
-                return _Span(
-                    start=located[0],
-                    end=located[1],
-                    placeholder=placeholder_for(finding.category),
-                    confidence=finding.confidence,
+            for start, end in _locate_all(markdown, value):
+                if hint is not None and (start, end) == (hint.start, hint.end):
+                    continue
+                spans.append(
+                    _Span(
+                        start=start,
+                        end=end,
+                        placeholder=placeholder_for(finding.category),
+                        confidence=finding.confidence,
+                    )
                 )
 
-        raise PIIRedactionError(
-            f"cannot redact a {finding.category.value} finding from the text: neither its "
-            f"({finding.start}, {finding.end}) offsets nor its value select it. The finding's "
-            f"offsets index a different string than the one being redacted, and redaction "
-            f"refuses to guess: a value left in place and an artifact claiming it was removed "
-            f"is the failure this gate exists to prevent."
-        )
+        if not spans:
+            raise PIIRedactionError(
+                f"cannot redact a {finding.category.value} finding from the text: neither its "
+                f"({finding.start}, {finding.end}) offsets nor its value select it. The "
+                f"finding's offsets index a different string than the one being redacted, and "
+                f"redaction refuses to guess: a value left in place and an artifact claiming it "
+                f"was removed is the failure this gate exists to prevent."
+            )
+        return spans
 
     @staticmethod
     def _span_from_offset(markdown: str, finding: PIIFinding) -> _Span | None:
@@ -273,16 +337,20 @@ def _same_text(left: str, right: str) -> bool:
     return normalise(left) == normalise(right)
 
 
-def _locate(markdown: str, value: str) -> tuple[int, int] | None:
-    """Leftmost case-insensitive occurrence of ``value``, or ``None``.
+def _locate_all(markdown: str, value: str) -> list[tuple[int, int]]:
+    """Every case-insensitive occurrence of ``value``, in document order.
 
     A case-insensitive *regex* rather than ``casefold()`` on both strings
     because ``casefold`` is not length-preserving (``"ß"`` → ``"ss"``); searching
     a transformed copy would return offsets into the wrong string and splice it
     at the wrong place.
+
+    The plural is the fix for the shipped leak, and it is here rather than in
+    the caller because the caller cannot know how many occurrences exist: a
+    deduplicated finding says *which* value, never *how often* it appears.
     """
-    match = re.search(re.escape(value), markdown, re.IGNORECASE)
-    return (match.start(), match.end()) if match else None
+    pattern = re.escape(value)
+    return [(match.start(), match.end()) for match in re.finditer(pattern, markdown, re.IGNORECASE)]
 
 
 def _merge_overlapping(spans: list[_Span]) -> list[_Span]:
