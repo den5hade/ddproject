@@ -295,20 +295,73 @@ def test_an_unconfigured_detector_fails_closed():
 # --- overlapping rules -----------------------------------------------------
 
 
-def test_a_specific_rule_wins_over_the_long_digit_run(detector):
-    """СНИЛС is 9 digits plus a checksum; the medical-record rule is 9 digits.
+def test_an_exact_sixteen_digit_run_is_an_insurance_number_and_not_also_a_ticket(detector):
+    """A 16-digit span belongs to the specific rule, and to *only* it.
 
-    Both match the same span, and which one survives is decided by table order
-    (aggregation keeps *both* — a different category is not a duplicate). So the
-    finding list must contain the specific category, and the generic one is an
-    accepted, separately-masked duplicate rather than a replacement.
+    Every rule is an independent ``finditer``, so table order cannot stop the
+    generic ``ticket_number.long_digits`` from also claiming the real marker's
+    ``Полис №: 8152510822001720`` — one number, two categories, two mask
+    constants, and an artifact that disagrees with itself about what it holds.
+    The general rule now excludes the exact 16-digit form, which is the same
+    trade :func:`_tolerant` makes inside one rule's alternatives, applied across
+    rules.
+
+    The exclusion is narrow on purpose: a 22-digit ``Номер талона`` is still
+    claimed, and a 13-digit run is not narrowed at all.
     """
     found = detector.detect_text("Полис: 2203945854001234")
     categories = {finding.category for finding in found}
-    assert PIICategory.INSURANCE_NUMBER in categories
-    assert PIICategory.TICKET_NUMBER in categories, "the long-run rule must not be suppressed"
+    assert categories == {PIICategory.INSURANCE_NUMBER}
     insurance = next(f for f in found if f.category is PIICategory.INSURANCE_NUMBER)
     assert insurance.masked_value == FIXED_MASKS[PIICategory.INSURANCE_NUMBER]
+
+
+def test_a_ticket_longer_than_sixteen_digits_is_still_a_ticket(detector):
+    """The guard must not become a blanket ban on the general rule.
+
+    ``Номер талона: 2026030709303211960141`` is the real marker's shape. If the
+    sixteen-digit guard were written as a length *minimum* instead of a
+    single-form exclusion, this number would silently stop being a ticket and
+    the platform would mask it as nothing at all.
+    """
+    found = _categories(detector, "Номер талона: 2026030709303211960141")
+    assert PIICategory.TICKET_NUMBER in found
+    assert PIICategory.INSURANCE_NUMBER not in found
+
+
+def test_a_digit_run_containing_a_sixteen_digit_span_is_not_split_into_a_ticket(detector):
+    """A 20-digit run is one value; the 16 inside it is not a policy number.
+
+    This is the case a naive "skip the run if it contains sixteen digits"
+    implementation gets wrong, and the reason the guard is written as a
+    negative lookahead anchored to the *start* of the run rather than a search
+    over its contents.
+    """
+    found = _categories(detector, "Идентификатор: 12345678901234567890")
+    assert PIICategory.TICKET_NUMBER in found
+    assert PIICategory.INSURANCE_NUMBER not in found
+
+
+def test_an_eleven_digit_run_inside_a_hex_hash_is_not_a_snils(detector):
+    """A clinician certificate is a 32-character hex string, so it *contains*
+    11-digit runs — ``fbf92603229241aa4f2c47c135c61e8e`` holds ``92603229241``,
+    flanked by ``f`` and ``a``, and read as a СНИЛС at 0.95.
+
+    A digit boundary does not exclude that; only a word boundary does, because a
+    СНИЛС is a standalone token and a hash is not.
+    """
+    found = _categories(detector, "Сертификат: fbf92603229241aa4f2c47c135c61e8e")
+    assert found == set()
+
+
+def test_a_real_snils_is_still_found_next_to_those_hashes(detector):
+    """The guard must not cost the real positive; the hash and the СНИЛС appear
+    in the same document, which is how both rules were found."""
+    found = _categories(
+        detector,
+        "Сертификат: fbf92603229241aa4f2c47c135c61e8e\nСНИЛС: 12306708221",
+    )
+    assert found == {PIICategory.SNILS}
 
 
 def test_a_short_number_is_not_a_ticket(detector):
@@ -330,20 +383,42 @@ def test_composite_fans_out_over_the_chain():
 
     Order matters because aggregation breaks ties by earliest position, so the
     chain order is what makes a winner deterministic.
+
+    The two detectors differ in exactly one rule each so the assertion can be
+    about *the chain* rather than about which rules happen to fire: a text that
+    both rules match would make ``len(found)`` a statement about the rule table,
+    and the rule table changes for reasons that have nothing to do with fan-out.
     """
     first = PatternPIIDetector(fingerprint_secret=SECRET)
     second = PatternPIIDetector(fingerprint_secret=SECRET)
     composite = CompositePIIDetector([first, second])
+
+    snils_only = composite.detect_text("СНИЛС 123-456-789 00")
+    assert [finding.category for finding in snils_only] == [PIICategory.SNILS] * 2
+    assert all(finding.detector_version == DETECTOR_VERSION for finding in snils_only)
+
     text = "Пациент: Смирнова Ольга Ивановна"
     found = composite.detect_text(text)
-    assert len(found) == 2
-    assert all(finding.detector_version == DETECTOR_VERSION for finding in found)
+    assert {finding.category for finding in found} == {PIICategory.PERSON_NAME}
+    # Fan-out is doubling, not union: the composite concatenates, so two
+    # detectors over the same text yield each finding twice. Deduplicating here
+    # would be aggregation's job, and doing it early would hide a rule that fires
+    # twice for two different reasons.
+    single = PatternPIIDetector(fingerprint_secret=SECRET).detect_text(text)
+    assert len(found) == 2 * len(single)
 
 
 def test_composite_detect_reads_raw_text_and_returns_everything():
     from types import SimpleNamespace
 
-    composite = CompositePIIDetector([PatternPIIDetector(fingerprint_secret=SECRET)])
+    detector = PatternPIIDetector(fingerprint_secret=SECRET)
+    composite = CompositePIIDetector([detector])
     document = SimpleNamespace(raw_text="Пациент: Смирнова Ольга Ивановна")
+
     found = composite.detect(document)
-    assert [finding.category for finding in found] == [PIICategory.PERSON_NAME]
+
+    # Same answers as the wrapped detector, and every one of them — "returns
+    # everything" is the claim, and dropping a duplicate would look identical to
+    # passing it.
+    assert found == detector.detect_text(document.raw_text)
+    assert {finding.category for finding in found} == {PIICategory.PERSON_NAME}

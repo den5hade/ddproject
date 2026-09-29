@@ -419,7 +419,7 @@ async def test_structuring_ambiguous_document_uses_generic_extraction(mock_s3, m
 # fails here rather than in production.
 
 
-SECRET_MARKER = """## Page 1
+IDENTIFIER_MARKER = """## Page 1
 
 # Справка
 
@@ -427,21 +427,40 @@ SECRET_MARKER = """## Page 1
 | :--- | :--- |
 | ФИО: | Шадеркин Денис Сергеевич |
 | СНИЛС: | 123-456-789 00 |
+"""
+"""A document carrying identifiers and no credential — the allow path.
+
+Split from :data:`CREDENTIAL_MARKER` in M5 Phase 13. The two used to be one
+fixture, and that fixture was a **tripwire**: ``SecretPIIDetector`` did not exist,
+so the ``api_key`` row was invisible to the chain, the document was allowed
+through on the ``СНИЛС`` alone, and the day the secret detector landed every
+allow-path assertion here began failing with a zero-upload
+``document.processing.failed``.
+
+A failing test is the correct way to learn that a block source works, but the
+repair is to split the fixture, not to weaken the assertions — one document per
+verdict, so that a later change to either verdict is attributable to whichever
+one the fixture actually exercises.
+"""
+
+CREDENTIAL_MARKER = """## Page 1
+
+# Справка
+
+| | |
+| :--- | :--- |
+| ФИО: | Шадеркин Денис Сергеевич |
 | api_key: | sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 |
 """
-"""A document carrying identifiers *and* a credential.
+"""A document carrying a live-shaped credential — the block path.
 
-The credential line is inert today: ``SecretPIIDetector`` is Phase 13, so the
-``api_key`` row is currently invisible to the chain and the document is allowed
-through on the ``СНИЛС`` alone.
-
-That is deliberate, and it makes this fixture a **tripwire for Phase 13**. The
-day the secret detector lands, this document's decision becomes ``BLOCK``, the
-pipeline halts, and the allow-path tests below start failing with a zero-upload
-``document.processing.failed``. That failure is the signal that the block source
-works end-to-end — it should be resolved by splitting the fixture in two (an
-identifier-only document for the allow path, a credential document for the block
-path), not by loosening the assertions.
+This is the fixture the tripwire was asking for. ``SecretPIIDetector`` is the
+only source of ``BLOCK`` (``PII_DECISION_ERROR_CODES`` and
+:data:`~app.pii.policy.HALTING_DECISIONS` say so), so before Phase 13 no test
+could drive the real gate to a halt at all: every halting test substituted
+:class:`_StubGate` and proved the pipeline honours a verdict it was handed,
+never that the pipeline can reach one. Both halves of that are asserted in
+``test_a_credential_in_a_real_document_blocks_through_the_real_gate``.
 """
 
 
@@ -527,7 +546,7 @@ async def test_structuring_pii_block_present_in_frontmatter_and_event(
 async def test_structuring_detects_pii_and_still_continues(pipeline, mock_s3, mock_publisher):
     """PII presence alone never halts; it is recorded and the document proceeds."""
     event = _event(DocumentUploaded)
-    mock_s3.download_bytes.return_value = SECRET_MARKER.encode()
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
 
     await pipeline.handle_structuring(_converted(event))
 
@@ -542,7 +561,7 @@ async def test_structuring_detects_pii_and_still_continues(pipeline, mock_s3, mo
 async def test_structuring_does_not_leak_raw_pii_into_artifacts(pipeline, mock_s3, mock_publisher):
     """The artifacts carry the masked finding, never the value behind it."""
     event = _event(DocumentUploaded)
-    mock_s3.download_bytes.return_value = SECRET_MARKER.encode()
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
 
     await pipeline.handle_structuring(_converted(event))
 
@@ -567,7 +586,7 @@ async def test_structuring_does_not_leak_raw_pii_into_artifacts(pipeline, mock_s
 async def test_structuring_halting_decision_writes_nothing(mock_s3, mock_publisher):
     """REVIEW/BLOCK: no artifact, no completed event, only the failure event."""
     event = _event(DocumentUploaded)
-    mock_s3.download_bytes.return_value = SECRET_MARKER.encode()
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
     pipeline = _pipeline(mock_s3, mock_publisher)
     pipeline._pii_gate = _StubGate(PIIDecision.REVIEW)
 
@@ -615,12 +634,75 @@ async def test_structuring_gate_runs_before_extraction(pipeline):
     assert pipeline._ai_client.extract_canonical.called is False
 
 
+@pytest.mark.asyncio
+async def test_a_credential_in_a_real_document_blocks_through_the_real_gate(
+    pipeline, mock_s3, mock_publisher
+):
+    """The block path end-to-end: no stub, no injected verdict.
+
+    Every other halting test in this module replaces the gate with
+    :class:`_StubGate`, so they prove the pipeline honours a verdict it was
+    handed. None of them proves the pipeline can *reach* one — and before M5
+    Phase 13 it could not, because ``SecretPIIDetector`` is the only source of
+    ``BLOCK`` and did not exist. This is that test: a credential in a document,
+    the real chain, the real policy, and the four assertions that together mean
+    the document is stopped *before* it is used —
+
+    - nothing is uploaded, not even the PII artifact that records the finding;
+    - the LLM is never called, so no credential reaches a prompt;
+    - only ``document.processing.failed`` is published, with ``PII_BLOCKED``;
+    - the raw credential appears in no published payload.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = CREDENTIAL_MARKER.encode()
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert mock_s3.upload_bytes.call_args_list == []
+    assert pipeline._ai_client.extract_canonical.called is False
+
+    published_keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+    assert published_keys == ["document.processing.failed"]
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_GATE_JOB_TYPE
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.BLOCK]
+
+    serialised = json.dumps([c.args[1] for c in mock_publisher.publish.call_args_list], default=str)
+    assert "sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in serialised
+
+
+@pytest.mark.asyncio
+async def test_identifiers_alone_do_not_block_even_with_a_real_gate(
+    pipeline, mock_s3, mock_publisher
+):
+    """The other half of the pair, and the one that keeps the first honest.
+
+    A gate that halted on every document would pass
+    ``test_a_credential_in_a_real_document_blocks_through_the_real_gate`` and be
+    useless. ``IDENTIFIER_MARKER`` differs from :data:`CREDENTIAL_MARKER` only in
+    the credential row, so the allow decision here is attributable to the secret
+    detector and not to the fixture being different in some other way.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+
+    await pipeline.handle_structuring(_converted(event))
+
+    completed = _published(mock_publisher, "document.analysis.completed")
+    assert completed.data["pii"]["decision"] in {"allow", "allow_with_warning"}
+    assert completed.data["pii"]["findings_count"] > 0
+
+
 class _StubGate:
     """A gate that returns a fixed verdict, for the halt paths only.
 
-    The allow path is exercised by the real gate in the tests above; this exists
-    because there is no *implemented* detector that yields BLOCK — the secret
-    detector is Phase 13 — so BLOCK is otherwise unreachable in a test at all.
+    The allow path *and* the real block path are both exercised by the real gate
+    in the tests above; this exists so a test can assert that the pipeline
+    honours a specific verdict without also asserting that the chain produced
+    it, which is what the ``REVIEW`` and ordering tests need — ``REVIEW`` is a
+    verdict the real chain does not currently reach, and "a halting verdict must
+    not cost an LLM call" is a claim about the pipeline's order of operations,
+    not about the detector's recall.
     """
 
     def __init__(self, decision: PIIDecision) -> None:

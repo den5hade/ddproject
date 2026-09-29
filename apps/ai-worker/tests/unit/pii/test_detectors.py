@@ -91,25 +91,36 @@ def test_stubs_detect_is_sync_with_the_protocol_signature():
 # --- fail-loud stubs --------------------------------------------------------
 
 
-def test_base_and_the_two_remaining_stubs_raise_not_implemented():
+def test_only_the_base_class_still_raises_not_implemented():
     """An unimplemented detector must fail loudly, never report "no PII found".
 
-    Phase 9 implemented the pattern detector and gave the composite a real
-    ``detect_text``, so the pair is asserted separately below. The structured
-    and secret detectors stay stubs through Phase 9 and must still raise — a
-    silent stub in either would mean a document's medical record number is
-    never examined.
+    M5 Phase 13 implemented the last two stubs, so
+    :class:`PIIDetectorBase` is the *only* thing left that must raise: it has no
+    rule table to scan with, and inheriting it is a deliberate act, so a silent
+    empty result there would hide a detector nobody finished.
     """
-    instances = (
-        PIIDetectorBase(),
-        StructuredFieldPIIDetector(),
-        SecretPIIDetector(),
+    with pytest.raises(NotImplementedError) as excinfo:
+        PIIDetectorBase().detect(_document())
+    assert type(excinfo.value) is NotImplementedError
+    assert "M5" in str(excinfo.value)
+
+
+def test_phase_13_detectors_no_longer_raise_not_implemented():
+    """The structured and secret layers are live as of M5 Phase 13.
+
+    Each is asserted on text it must find *and* text it must leave alone, so a
+    later edit that guts a rule table fails here as an empty result rather than
+    quietly as a passing test.
+    """
+    cases = (
+        (StructuredFieldPIIDetector(fingerprint_secret=_SECRET), "**ФИО:** Иванов Пётр", "памятка"),
+        (SecretPIIDetector(fingerprint_secret=_SECRET), "api_key: sk-live-abcd1234", "памятка"),
     )
-    for instance in instances:
-        with pytest.raises(NotImplementedError) as excinfo:
-            instance.detect(_document())
-        assert type(excinfo.value) is NotImplementedError
-        assert "M5" in str(excinfo.value)
+    for detector, positive, negative in cases:
+        assert detector.detect_text(positive), f"{type(detector).__name__} finds nothing"
+        assert detector.detect_text(negative) == []
+        assert detector.detect(_text_document(positive))
+        assert detector.detect(_text_document(negative)) == []
 
 
 def test_phase_9_detectors_no_longer_raise_not_implemented():

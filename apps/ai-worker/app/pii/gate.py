@@ -78,7 +78,7 @@ from app.pii.aggregation import DefaultPIIAggregator, PIIAggregator
 from app.pii.detectors import (
     DETECTOR_VERSION,
     PIIDetector,
-    build_available_detector_chain,
+    build_detector_chain,
 )
 from app.pii.exceptions import PIIDecisionError
 from app.pii.models import (
@@ -439,7 +439,7 @@ def build_document_gate(settings: Settings) -> DefaultPIIGate:
         )
 
     return DefaultPIIGate(
-        detector=build_available_detector_chain(settings),
+        detector=build_detector_chain(settings),
         aggregator=DefaultPIIAggregator(),
         policy_engine=DefaultPolicyEngine(DEFAULT_POLICY),
         policy_context_builder=build_context,

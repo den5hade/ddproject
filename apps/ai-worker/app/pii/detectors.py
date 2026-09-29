@@ -1,13 +1,13 @@
-"""PII detection contract, detector stubs and the settings-driven chain (M5 Phase 8).
+"""PII detection contract, the three deterministic detectors and the chain (M5 Phases 8, 9, 13).
 
-Locks the ``PIIDetector`` protocol every detector implements and the four
-deterministic detector stubs M5 will implement. **No detection logic yet** — the
-stubs declare a contract and raise. A stub that returned ``[]`` would be a
-fail-open default: wired but unimplemented, it would report "no PII found" and
-the gate would ``ALLOW``. Every stub therefore raises ``NotImplementedError``
-until its implementation lands, and a raising detector is caught by
-``PIIDetectorError`` handling in the gate rather than silently passing a
-document through.
+Locks the ``PIIDetector`` protocol every detector implements and wires the three
+deterministic detectors in the order the plan fixes: labelled fields, then bare
+patterns, then credentials. **No detector in this chain may return ``[]`` for
+want of an implementation** — that is the fail-open default this milestone exists
+to prevent, so a detector that cannot scan raises instead. The three that do scan
+all sit in one module on purpose: they share one rule-row shape, one
+masking/fingerprint construction site, and one chain constructor, so "which
+categories exist" is answerable by reading one file.
 
 Contract points locked here:
 
@@ -52,18 +52,27 @@ infrastructure, so the security control never depends on the deployment
 supplying an environment. The wiring happens at the edge — ``DocumentPipeline``
 (Phase 11) — not here.
 
-Category assignment is **docstring-only in M4** and becomes a machine-checked
-mapping in M5. Reason: the taxonomy is not fully assigned yet — the NER and LLM
-detectors are deliberately deferred (§7), so ``AGE``/``GENDER``/``NATIONALITY``
-and free-text ``ADDRESS`` have no owner among these four stubs, and a
-"every category is claimed" assertion would fail today by construction. The
-docstrings below are the intent, not the lock.
+Category assignment is **table-driven** as of M5 Phase 13. It was docstring-only
+in M4 because the taxonomy was not yet assigned: the NER and LLM detectors are
+deliberately deferred (§7), and a "every category is claimed" assertion would
+have failed by construction. Both remaining tables —
+:data:`_FIELDS` (:class:`StructuredFieldPIIDetector`) and :data:`_SECRET_RULES`
+(:class:`SecretPIIDetector`) — now name a real ``PIICategory`` per row, and the
+tests assert the tables and their class docstrings agree, so a rule can no longer
+be added without saying which category it serves.
+
+``DETECTOR_VERSION`` stays ``1.1.0`` through this phase: §4.8 makes a *minor*
+bump an **additive** change (new optional fields, new ``PIICategory`` values) and
+Phase 13 adds neither — it fills in the categories the locked table already
+declared. §8's acceptance smoke check ("expected after Phase 14: ``1.1.0
+2.0.0``") is the same fact stated as a number, and Phase 16's NER is the additive
+step that earns ``1.2.0``.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -79,16 +88,18 @@ DETECTOR_VERSION = "1.1.0"
 """Contract version of the detector layer, stamped into every finding.
 
 Independent of ``PII_POLICY_VERSION`` (mirroring ``classifier_version``): a
-detector change and a policy change are separate events. Patch = docs/comments
-only; minor = a new detector or a new category; major = a change that alters
-which findings are produced. A stored ``PIIScanResult`` names the detector
-version that produced it, so a historical verdict stays interpretable.
+detector change and a policy change are separate events. The rule is §4.8's —
+patch = docs/comments only; minor = **additive** (new optional fields, new
+``PIICategory`` values); major = breaking (required-field changes, enum removals,
+decision-rule changes). A stored ``PIIScanResult`` names the detector version that
+produced it, so a historical verdict stays interpretable.
 
-``1.1.0`` in M5 Phase 9, and the bump is exactly the contract change: the
+``1.1.0`` in M5 Phase 9, and the bump was exactly the contract change: the
 detector protocol gained ``detect_text`` and a concrete pattern detector exists
-where only a stub did. No category was added, removed, or re-labelled, and no
-finding produced by the same text changed shape — the minor line, not the major
-one. The `^0.95$` guard in the detector test suite is what keeps that honest.
+where only a stub did. **M5 Phase 13 does not move it** — the two new detectors
+populate the categories the locked table already declared, and §4.8 admits no
+new ``PIICategory`` value, so the additive line is not spent. Phase 16's NER is
+the additive step that earns ``1.2.0`` (§7's roadmap).
 """
 
 PII_FINGERPRINT_SECRET_ENV = "PII_FINGERPRINT_SECRET"
@@ -207,8 +218,16 @@ The second exists because of a property of the *input*, not of Russian grammar:
 ``MarkdownNormalizer.raw_text`` is case-folded (``normalize.py:82``), so
 contour 1 scans text in which every name is lower-case. A title-case-only rule
 would match the canonical guard's payload leaves and nothing else — a green test
-suite with the contour-1 gate silently blind. ``re.IGNORECASE`` is not the answer:
-its Unicode-aware case folding does not cover Cyrillic.
+suite with the contour-1 gate silently blind.
+
+An earlier revision of this note claimed ``re.IGNORECASE`` "does not cover
+Cyrillic" and used it as the reason for the second class. That is **false**, and
+Phase 13 measured it: on the worker's Python 3.12, ``re.IGNORECASE`` case-folds
+Cyrillic (including ``ё``/``Ё``) through Unicode simple case folding. The
+conclusion is unchanged — the folded text still needs a case-agnostic *character
+class* — but the reason is that the text is folded, not that the flag is blind,
+and the label rules below do compile with ``re.IGNORECASE`` so the canonical
+contour's un-folded leaves are readable by the same table.
 """
 
 
@@ -230,20 +249,110 @@ class _Pattern:
     """
 
 
-_LONG_DIGIT_RUN = r"(?<!\d)\d{12,}(?!\d)"
+_LONG_DIGIT_RUN = r"(?<!\d)(?!\d{16}(?!\d))\d{12,}(?!\d)"
 """A bare digit run long enough to be a *талон*.
 
 The threshold is the real marker's, not a guess: ``Номер талона`` in
 ``2b8fdd0d`` is 22 digits. Twelve is where a run stops looking like a card
 number — the ``Номер карты: 0000001234`` in the real fixture is 10, and calling
 that a ticket is the guess this rule exists not to make.
+
+M5 Phase 13 added the leading ``(?!\\d{16}(?!\\d))``. The table's own docstring
+already claimed "the 16-digit ``INSURANCE_NUMBER`` before the same run" owns that
+span, and the claim was **false**: every row is an independent ``finditer``, so
+table order cannot give one rule priority over another, and the real marker's
+``Полис №: 8152510822001720`` was being reported as an insurance number *and* as
+a ticket number. The guard makes the docstring true by excluding the more
+specific form from the more general one — the same thing ordering does inside
+:func:`_tolerant`'s alternatives, which is why it belongs here rather than in the
+aggregator. It is not cross-category suppression: a 22-digit ticket is still
+claimed, and the 28-digit API key is still misread as one (see the manifest's
+notes on ``malicious/synthetic-injection-01.md``).
 """
-_NAME_LABELS = r"пациент\w*|фио|врач\w*|доктор\w*|д-р|больн\w*"
-"""Words that introduce a name in the document genre this platform receives.
+def _standalone_digits(pattern: str) -> str:
+    """Wrap ``pattern`` in boundaries that keep it from matching inside a token.
+
+    Both sides are written here, once, because a rule that guards only the left
+    is worse than an unguarded one: it does not fail loudly, it *truncates*.
+    ``\\d{9}\\s*\\d{2}`` with a left guard alone claims the first eleven digits
+    of the real marker's 22-digit ``Номер талона`` and of the 16-digit
+    ``Полис №`` as СНИЛС at 0.95 — values that are neither, and that read as
+    more authoritative than the real ticket they were cut from.
+
+    A digit boundary is not enough on either side. In the real corpus every
+    clinician certificate is a 32-character hex hash, and hex digits are
+    ``[0-9a-f]``, so ``fbf92603229241aa4f2c47c135c61e8e`` contributes
+    ``92603229241``: a clean 9+2 run flanked by ``f`` and ``a``. ``\\w`` is what
+    says "standalone token" instead of "adjacent digits".
+    """
+    return rf"(?<![\d\w])(?:{pattern})(?![\d\w])"
+
+
+
+_NAME_BOUND_WORDS = (
+    r"в|на|и|с|со|к|ко|о|об|от|до|у|из|за|для|по|при|без|над|под|про"
+    r"|не|ни|а|но|или|же|ли|бы|да"
+)
+"""Russian prepositions and particles — a **closed** class, not a stop-word list.
+
+This is the one vocabulary rule the name pattern needs, and it is worth being
+explicit about why a closed class is acceptable where a stop-list is not: Russian
+prepositions and conjunctions are a finite, grammatically defined set, so
+enumerating them terminates. A "common words seen after *пациент*" list would
+not terminate — it is a snapshot of the corpus, and the next document adds to
+it. The first token of a ФИО is never a preposition, so refusing them costs no
+recall and removes an entire class of prose: ``у пациента с повышенным
+давлением`` stops at ``с``, ``для пациента не сохранён`` stops at ``не``.
+
+The word boundary matters as much as the class: ``с`` also prefixes real surnames
+(``Соколова``) and ``не`` also prefixes real given names, so without ``\\b`` this
+would refuse a ФИО. Written into the pattern rather than kept as a Python-side
+check, because a check the regex cannot express is a check the next editor
+cannot see.
+"""
+
+_LABEL_SEP = r"(?:\s*[:：]|\s+[-\u2013\u2014])"
+_NAME_LABELS = (
+    rf"пациент\w*{_LABEL_SEP}"
+    rf"|(?:для|у|от)\s+пациент(?:а|у|ом|е)?"
+    rf"|(?:ф\.?\s*и\.?\s*о\.?|больн\w*){_LABEL_SEP}"
+    rf"|\*\*\s*пациент\w*\s*\*\*"
+)
+"""Constructions that introduce a *patient's* name in this document genre.
 
 Used *only* by :data:`_PATTERNS`' label rule — the case-folded contour's name
-rule. The word list is Cyrillic and case-agnostic on purpose: in folded text the
-label is as lower-case as the name.
+rule, and the *declined* contour that exists because the leak it has to catch
+(§7 gotcha G1) is genitive, mid-sentence and lower-case: ``для пациента
+Шадеркина Дениса Сергеевича``. There is no colon to require there, so the
+precision has to come from the *construction* — a preposition binding the
+genitive, ``для``/``у``/``от`` + ``пациента`` — and from
+:data:`_NAME_BOUND_WORDS` refusing a preposition as the name's first token.
+
+The remaining two forms are the counterpart. M5 Phase 9's version of this rule
+accepted ``пациент`` with no punctuation at all, and on folded text — where
+capitalisation is already gone, so a colon or a pair of ``**`` is the only
+punctuation left to read — that claims prose: ``Пациент отказался от приёма.``
+came back as the person name ``отказался от приёма``, at 0.7, in the synthetic
+appointment fixture. Two signals replace that blank slate, and both are
+punctuation the normaliser leaves intact:
+
+- a **colon**, as in ``Пациент: Имя Фамилия``;
+- a **bold label**, as in the real marker ``**Пациент**`` on its own line with
+  the name on the next — after folding that is ``**пациент** шадеркин денис
+  сергеевич``, and the name is the *only* thing after the label, which is what
+  makes the missing colon safe. It is a deliberate asymmetry: prose after a
+  bold ``**Пациент**`` is possible and would be over-masked, while dropping the
+  form would lose a real patient's name from a real document. A missed name is a
+  leak; an over-masked clause is a fidelity problem, and the plan's failure mode
+  is the leak.
+
+The colon forms for ``фио``/``больн`` are the same three-way choice resolved the
+other way — a ФИО in prose is rare enough that a colon is required, and a doctor
+or a ward label is not a patient name at all. M5 Phase 13 **removed**
+``врач\\w*|доктор\\w*|д-р`` from this list: on the real marker's ``ФИО врача: …``
+they made the patient rule claim a clinician as ``PERSON_NAME``, and removing
+them is what lets the two categories mean what they say. A clinician's name is
+``DOCTOR_NAME`` at :class:`StructuredFieldPIIDetector`.
 """
 
 _MD_DECOR = r"[\s:*_~>#—–-]*"
@@ -282,8 +391,10 @@ _PATTERNS: tuple[_Pattern, ...] = (
         name="person_name.after_label",
         regex=re.compile(
             rf"(?<![\w-])(?:{_NAME_LABELS}){_MD_DECOR}"
+            rf"(?!(?:{_NAME_BOUND_WORDS})\b)"
             rf"({_CYRILLIC_ANY_TOKEN}(?:\s+{_CYRILLIC_ANY_TOKEN}){{2}})"
-            rf"(?![{_CYRILLIC_ANY_TOKEN[1:-1]}])"
+            rf"(?![{_CYRILLIC_ANY_TOKEN[1:-1]}])",
+            re.IGNORECASE,
         ),
         confidence=0.7,
         group=1,
@@ -291,7 +402,12 @@ _PATTERNS: tuple[_Pattern, ...] = (
     _Pattern(
         category=PIICategory.SNILS,
         name="snils.check_summed",
-        regex=_tolerant([r"\d{3}-\d{3}-\d{3}\s*\d{2}", r"\d{9}\s*\d{2}"]),
+        regex=_tolerant(
+            [
+                _standalone_digits(r"\d{3}-\d{3}-\d{3}\s*\d{2}"),
+                _standalone_digits(r"\d{9}\s*\d{2}"),
+            ]
+        ),
         confidence=0.95,
     ),
     _Pattern(
@@ -359,14 +475,29 @@ _PATTERNS: tuple[_Pattern, ...] = (
 Every rule is a plain ``(category, regex, confidence)`` row rather than a method
 per category, so the table can be asserted against the categories the phase is
 supposed to cover — a rule that silently stops matching is a test failure, not
-something a reader has to notice. Order matters twice over: within
-:func:`_tolerant` alternatives, and between rows when two patterns overlap on
-the same span (``SNILS`` before the ``TICKET_NUMBER`` long run, the 16-digit
-``INSURANCE_NUMBER`` before the same run).
+something a reader has to notice. Order matters **within** :func:`_tolerant`'s
+alternatives, where a specific form is listed before a general one. It does *not*
+matter *between* rows — each row is an independent ``finditer`` — which is why
+the two precedence claims this table used to make between rows are now expressed
+as guards inside the rows themselves (see the Phase 13 note below).
 
 What is deliberately **not** here, and why. The absence is calibrated against
 real text, not against the category list: the table was trimmed to the rules that
 do not mis-claim a value the manifest already attributes to a *labelled* field.
+
+M5 Phase 13 ran this table over the real markers for the first time and fixed two
+defects it found there. Both were *claims the module already made* and the
+implementation did not honour, which is the best kind of bug to find because the
+fix is the docstring, not a new idea:
+
+- ``snils.check_summed`` had no digit boundary, so ``\\d{9}\\s*\\d{2}`` matched inside
+  a 22-digit ticket number and produced **two** СНИЛС findings from one value
+  (``20260307093`` and ``03211960141``), and a third from the 16-digit полис.
+  The rule now requires a standalone run.
+- ``ticket_number.long_digits`` claimed the 16-digit полис, contradicting the
+  ordering note below; see :data:`_LONG_DIGIT_RUN`.
+
+The remaining is calibrated against real text, not against the category list:
 
 - ``NATIONAL_ID``/``INN`` and ``PASSPORT`` as *bare* lengths — an 8/10/12-digit run.
   The ``synthetic-consultation-01`` fixture's own ``Номер карты: 0000001234`` is
@@ -396,7 +527,9 @@ do not mis-claim a value the manifest already attributes to a *labelled* field.
 - ``DOCTOR_NAME`` — the one FIO-shaped run the patient name will not claim is a
   two-token run, because ``Петров И. С.`` is a surname plus two initials. A
   2-token rule matches ``Уважаемые жильцы``-style prose and any org name
-  ``ООО Ромашка``, so it is Phase 13's problem with a label in hand.
+  ``ООО Ромашка``, so it stayed out of this table — and Phase 13 puts it in
+  :data:`_FIELDS` instead, where a ``Врач:`` / ``ФИО врача:`` label is what
+  makes the same three-token run safe.
 - ``ENCOUNTER_ID``/``PATIENT_ID``/``DOCTOR_LICENSE``/``ORGANIZATION_*`` — no
   self-identifying format at all. Claiming them from a digit run would be
   guessing, and would make a patient id a ``medical_record_number`` that Phase
@@ -426,12 +559,18 @@ That trade is deliberate and priced. A false positive here costs one
 policy's base action for ``PERSON_NAME`` — no halt at all. A false negative
 costs the leak §7 calls "the single most likely way a green Phase 9 still leaves
 the leak open". For a security control the asymmetry is not close. Phase 13's
-labelled detector is the real fix and supersedes the second row wherever a label
-is present.
+labelled detector (:data:`_FIELDS`) is the real fix and supersedes the second row
+wherever a label is present.
 
 Where both rows match the *same* span they produce the same value, hence the
 same fingerprint, hence one finding after aggregation — which is the dedup rule
-doing exactly its job on a real pair rather than a synthetic one.
+doing exactly its job on a real pair rather than a synthetic one. The same holds
+between :data:`_FIELDS` and this table: ``ФИО:`` is claimed by both, with the
+labelled row's higher confidence surviving aggregation. Where they claim
+*different* spans of one entity — the labelled ``Адрес приема:`` cell and the
+pattern's ``address.locality`` — both survive, by design: see
+``aggregation.py`` for why a different value is not a duplicate, and Phase 12's
+redactor for the merge that keeps one placeholder on the page.
 """
 
 _PATTERNS_BY_CATEGORY: dict[PIICategory, _Pattern] = {}
@@ -502,37 +641,459 @@ class PatternPIIDetector(PIIDetectorBase):
 
     def _find_all(self, row: _Pattern, text: str) -> list[PIIFinding]:
         """Build one finding per match of ``row`` in ``text``."""
-        found = []
-        for match in row.regex.finditer(text):
-            value = match.group(row.group)
-            if not value.strip():
-                continue
-            start, end = match.span(row.group)
-            found.append(
-                PIIFinding(
-                    category=row.category,
-                    value=value,
-                    masked_value=mask_pii_value(row.category, value),
-                    value_fingerprint=self.fingerprint(value),
-                    confidence=row.confidence,
-                    source=PIISource.PATTERN,
-                    detector=f"pattern.{row.name}",
-                    detector_version=DETECTOR_VERSION,
-                    start=start,
-                    end=end,
-                )
+        return _findings_for_rule(
+            text,
+            row.regex,
+            category=row.category,
+            group=row.group,
+            confidence=row.confidence,
+            source=PIISource.PATTERN,
+            detector_name=f"pattern.{row.name}",
+            fingerprint=self.fingerprint,
+        )
+
+
+def _findings_for_rule(
+    text: str,
+    regex: re.Pattern[str],
+    *,
+    category: PIICategory,
+    group: int,
+    confidence: float,
+    source: PIISource,
+    detector_name: str,
+    fingerprint: Callable[[str], str],
+) -> list[PIIFinding]:
+    """Turn every match of ``regex`` in ``text`` into an already-masked finding.
+
+    The single place a detector builds a :class:`~app.pii.models.PIIFinding`, so
+    the three detectors cannot drift on the fields Phase 1 makes mandatory: a
+    finding that reached a caller without a ``masked_value`` or a keyed
+    ``value_fingerprint`` would be the raw value with extra steps. ``masking.py``
+    is the other half of that argument — it is the only function allowed to
+    build a masked value — and this is the only caller allowed to build either.
+
+    Args:
+        text: The string being scanned. Offsets index *this* string exactly as
+            passed, which is why no detector may apply them to the original
+            markdown (see this module's offsets caveat).
+        regex: The compiled rule. Its ``group`` is the value-bearing group.
+        category: The category every match of this rule belongs to.
+        group: Capture group holding the *value*; ``0`` means the whole match.
+        confidence: Rule confidence, stamped on the finding and used by
+            aggregation to pick the winner among duplicate values.
+        source: Which mechanism found it (``PIISource``).
+        detector_name: Dotted rule name, e.g. ``pattern.snils.check_summed``.
+        fingerprint: The owning detector's :meth:`PIIDetectorBase.fingerprint`,
+            passed in so the finding is built with a bound method rather than a
+            detector reference this module would have to keep alive.
+
+    Returns:
+        One finding per match whose value group is not blank. A rule that matches
+        only decoration (``| :--- | :--- |`` under a label row) contributes
+        nothing rather than a finding with an empty value — which reads in an
+        artifact as "found, but nothing to redact".
+    """
+    found: list[PIIFinding] = []
+    for match in regex.finditer(text):
+        value = match.group(group)
+        if not value or not value.strip():
+            continue
+        start, end = match.span(group)
+        found.append(
+            PIIFinding(
+                category=category,
+                value=value,
+                masked_value=mask_pii_value(category, value),
+                value_fingerprint=fingerprint(value),
+                confidence=confidence,
+                source=source,
+                detector=detector_name,
+                detector_version=DETECTOR_VERSION,
+                start=start,
+                end=end,
             )
-        return found
+        )
+    return found
+
+
+# --- structured field rules (M5 Phase 13) -------------------------------------
+
+_FIELD_GAP = r"[\s:*_~>|#\-–—]*[:：][\s|*]*"
+"""Markdown decoration, a **mandatory** colon, then the cell gap: label to value.
+
+The colon is the precision lever, and it is not cosmetic. Every shape the real
+marker writes puts a colon in the gap — ``ФИО:``, ``| полис №: |``,
+``**пациент:**`` — so requiring one costs no recall on the data this detector
+exists for, and it buys the thing that matters: a label can no longer be found
+where it is merely a *prefix* of a phrase. ``фио врача:`` is the case in point.
+Without the requirement, the label ``фио`` plus optional decoration would reach
+across `` врача:`` and claim a clinician as the patient; with it, the rule stops
+at ``фио`` and :class:`StructuredFieldPIIDetector`'s doctor row owns the value.
+
+Markdown decoration is kept because ``raw_text`` keeps emphasis markers: the real
+text is ``**пациент:** смирнова ольга ивановна``, not ``пациент: …`` (the same
+reason as :data:`_MD_DECOR`).
+"""
+
+_NO_GAP = r""
+"""The gap for a rule whose prefix is already self-contained.
+
+Only the two ``*.shape`` rows pass it. Their prefix is a *delimiter*, not a
+label — a parenthesised demographic, or ``Пол/возр.: М / `` — so the value
+starts where that prefix ends, and demanding a second colon would make the rule
+unsatisfiable. The mandatory colon therefore stays on every word label, which is
+where the precision it buys actually is.
+"""
+
+_CELL_END = r"(?=\s*\*\*(?:[^*\n]{0,40}:|\s*(?:\||$))|\s*\||$)"
+"""Where a free-text field value stops: the next bold label, a cell edge, or end.
+
+Not a nicety — a correctness requirement, and one that comes straight from how
+``MarkdownNormalizer`` builds ``raw_text``: it collapses **all** whitespace,
+newlines included, so a contour-1 scan sees the whole document as *one line*
+(measured: the 53-line real marker normalizes to a single string). A
+"to end of line" value pattern would therefore swallow the rest of the document,
+and the finding's ``value`` would be a paragraph.
+
+Two terminators carry the dataset: a ``**``-wrapped next label and a ``|`` cell
+edge, which is how both the marker's table rows and the synthetic fixtures write
+their fields. The first branch is the one that has to be written carefully,
+because the shape that fails is the *intersection* of the two — a value that is
+itself bold and sits in a cell, ``| **Адрес:** **ул. Примерная, д. 1** |``.
+Neither terminator matches there on its own: after the closing ``**`` the text
+is `` |``, which is neither a label nor a bare cell edge, so the lazy value class
+walks straight past the markers it should have stopped at and returns the cell
+plus the pipe plus the following label. Hence the inner group accepts *either* a
+label colon *or* an optional space and then a cell edge or end of text — the
+last two terms also cover a bold value that ends the document, which is what the
+final fixture row looks like.
+
+Known limit, stated rather than hidden: a value that is *plain prose* with no
+bold label, no cell edge and no end of document after it runs to the end of the
+text. No fixture in the dataset is shaped that way, and the categories exposed
+to it (``ADDRESS``, ``ORGANIZATION_NAME``) carry ``RULE_NONE`` masks, so the cost
+is a long value in one artifact row rather than a wrong redaction.
+"""
+
+_CYR_WORD = r"[А-Яа-яЁё][А-Яа-яЁё\-]*\.?"
+_NAME_VALUE = rf"{_CYR_WORD}(?:(?:[ ,]+|(?<=\.)){_CYR_WORD}){{1,3}}"
+"""A ФИО: two to four words, where a word may carry one trailing dot.
+
+Two details are the whole trick, and both come from real shapes in the marker:
+
+- the word class may carry **one trailing dot**, because otherwise it consumes
+  the initial's letter, leaves the dot behind, and the match stops a character
+  early — a value of ``Петров И`` that reads as a truncation, not a name;
+- the separator is a space/comma **or the fixed-width ``(?<=\\.)`` lookbehind**,
+  because ``КУРМАМБАЕВА Ю.М.`` writes its second initial with no space at all.
+
+Two words are the floor and four the ceiling: the ceiling is what stops
+``Силина А.Н. (ВРАЧ …)`` before the parenthesis, and the floor is what keeps a
+single-word value from being claimed. The floor does **not** stop
+``Врач: врач-терапевт участковый`` — two words, so it matches, and the finding
+names a specialty as a doctor. That error is accepted on purpose: it lands in
+``DOCTOR_NAME``, the one category that is explicitly not patient PII
+(IMPL_ARCH §3.1) and is ``ALLOW`` at every destination, so the cost is one
+over-labelled artifact row rather than a wrong redaction or a wrong halt.
+"""
+
+_TICKET_VALUE = r"(?<!\d)\d{6,}(?!\d)"
+_POLICY_VALUE = r"(?<![\d-])\d{16}(?![\d-])"
+_SNILS_VALUE = r"(?<!\d)\d{3}-\d{3}-\d{3}\s*\d{2}"
+_DOB_VALUE = r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)"
+_PHONE_VALUE = r"(?<![\d+])\+\d[\d\s()\-]{9,17}\d"
+_EMAIL_VALUE = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+_AGE_VALUE = r"(?<!\d)\d{1,3}(?!\d)\s*(?:лет|года|год|г\.)"
+_GENDER_VALUE = r"(?<![А-Яа-яЁё])[МЖFf](?![А-Яа-яЁё])"
+_RECORD_VALUE = r"(?<!\d)\d{4,12}(?!\d)"
+_PATIENT_ID_VALUE = r"(?<!\d)\d{5,12}(?!\d)"
+_LICENSE_VALUE = r"(?<![A-Za-zА-Яа-яЁё0-9])[A-Za-zА-Яа-яЁё0-9/-]{5,}"
+_ORG_ID_VALUE = r"(?<!\d)\d{9,15}(?!\d)"
+_FREE_TEXT_VALUE = rf"[^|*\n]+?{_CELL_END}"
+_ONE_OR_TWO_WORDS = rf"{_CYR_WORD}(?:[ ]+{_CYR_WORD}){{0,1}}"
+"""The value shapes, each **bounded**.
+
+A label says *this* is the value; a bounded shape says how long it may be, and
+the bounding is what keeps a label from claiming the rest of the document. The
+digit shapes are deliberately the same ones :data:`_PATTERNS` uses, so the two
+detectors agree on what a value of that category looks like and produce the same
+``value`` — which is what makes aggregation's ``(category, fingerprint)`` dedup
+collapse them into one finding instead of two.
+
+``_FREE_TEXT_VALUE`` is the one unbounded shape, and it is bounded by
+:data:`_CELL_END` instead (address, organization name, nationality).
+"""
+
+
+@dataclass(frozen=True)
+class _Field:
+    """One labelled-field rule row: what it finds, how it is named, how sure it is.
+
+    ``regex`` is label + gap + value already joined, with the value in group 1 —
+    a single scan with a single span, so a field's offsets are its value's
+    offsets rather than a diff of two lookups.
+    """
+
+    category: PIICategory
+    name: str
+    regex: re.Pattern[str]
+    confidence: float
+
+
+def _field(
+    category: PIICategory,
+    name: str,
+    label: str,
+    value: str,
+    confidence: float,
+    gap: str = _FIELD_GAP,
+) -> _Field:
+    """Compile one ``label`` + ``gap`` + ``value`` row, case-insensitively.
+
+    ``gap`` is :data:`_FIELD_GAP` — the mandatory colon — for every row whose
+    label is a word. The two shape rows pass :data:`_NO_GAP` instead, because a
+    shape's prefix is a delimiter (``(``, ``Пол/возр.: М / ``) and it has already
+    said where the value starts; demanding a second colon there would make the
+    rule unsatisfiable. Keeping the colon *per row* rather than global is what
+    lets the precision lever stay on the labelled rows without disabling it.
+
+    ``re.IGNORECASE`` is what lets one table serve both contours: contour 1 scans
+    the case-folded ``raw_text`` and contour 2 (Phase 14's canonical guard) scans
+    un-folded payload leaves, so a table pinned to one case would be blind on
+    exactly one of them.
+
+    The two-character guard in the compiled form — *not* whitespace, *not* an
+    opening bracket — is Phase 13's idempotence check, and it is here rather
+    than in each value shape because it is a property of *every* row: a value
+    neither starts with whitespace (the gap already ate it) nor with a bracket,
+    and a bracket is exactly what :func:`~app.pii.masking.placeholder_for`
+    writes. Without it the redaction output feeds straight back into the gate —
+    the second pipeline pass sees ``**Адрес:** [address]``, and
+    ``address.labelled`` reports the placeholder as a fresh address, which is
+    the one thing Phase 12's second-pass-is-a-no-op property exists to prevent.
+
+    Whitespace belongs in that guard for a reason that looks pedantic until it
+    bites: the guard is only as strong as its least popular branch, and the
+    gap's own trailing class is greedy *and backtrackable*. With a bare
+    bracket guard the engine still finds a match — it hands the leading space to
+    the value class and starts the value at the space rather than the bracket,
+    which :data:`_FREE_TEXT_VALUE` allows. Both characters have to be refused at
+    once, or the backtracking finds exactly the gap the guard was written to
+    close.
+    """
+    return _Field(
+        category=category,
+        name=name,
+        regex=re.compile(
+            rf"(?<![\w-])(?:{label}){gap}(?![\s\[])({value})",
+            re.IGNORECASE,
+        ),
+        confidence=confidence,
+    )
+
+
+_DEMOGRAPHIC_LABEL = r"пол\s*/\s*возр(?:аст)?\.?"
+"""``Пол/возр.:`` — the laboratory marker's combined sex-and-age cell (real
+``fbbcb675``). It is a label *and* a container: the sex and the date of birth sit
+inside it, which is why three rows carry this prefix instead of a plain
+``пол:``/``дата рождения:``.
+"""
+
+_DEMOGRAPHIC_PREFIX = _DEMOGRAPHIC_LABEL + _FIELD_GAP
+"""``Пол/возр.:`` through its colon and cell gap — the start of that cell's value.
+
+Named once because three rows need it and they must not drift: the sex, the
+date of birth and the age are three readings of one cell, and a change to the
+cell's spelling is a change to all three or to none.
+"""
+
+
+_FIELDS: tuple[_Field, ...] = (
+    _field(
+        PIICategory.DOCTOR_NAME,
+        "doctor_name.labelled",
+        r"ф\.\s*и\.\s*о\.\s*(?:врача|доктора)|фио\s+врача|фамилия\s+врача"
+        r"|(?<!специальность\s)(?:врач|доктор|д-р)\w*|лечащий\s+врач",
+        _NAME_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.PERSON_NAME,
+        "person_name.labelled",
+        r"ф\.\s*и\.\s*о\.|фамилия[,\s]+имя|пациент\w*|больн\w*|фио",
+        _NAME_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.DATE_OF_BIRTH,
+        "date_of_birth.labelled",
+        r"дата\s+рождения|д\.\s*р\.|рождени\w*",
+        _DOB_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.DATE_OF_BIRTH,
+        "date_of_birth.demographic_shape",
+        _DEMOGRAPHIC_PREFIX + r"[МЖFf][,\s/]*",
+        _DOB_VALUE,
+        0.9,
+        gap=_NO_GAP,
+    ),
+    _field(
+        PIICategory.AGE,
+        "age.labelled",
+        r"возраст|возр\.",
+        _AGE_VALUE,
+        0.85,
+    ),
+    _field(
+        PIICategory.AGE,
+        "age.demographic_paren.shape",
+        r"\(\s*[МЖFf]?\s*[,\-/]?\s*",
+        _AGE_VALUE,
+        0.8,
+        gap=_NO_GAP,
+    ),
+    _field(
+        PIICategory.GENDER,
+        "gender.demographic_label",
+        _DEMOGRAPHIC_LABEL,
+        _GENDER_VALUE,
+        0.85,
+    ),
+    _field(
+        PIICategory.NATIONALITY,
+        "nationality.labelled",
+        r"гражданство",
+        _ONE_OR_TWO_WORDS,
+        0.7,
+    ),
+    _field(
+        PIICategory.PHONE,
+        "phone.labelled",
+        r"номер\s+телефона|телефон|мобильн\w+|тел\.?",
+        _PHONE_VALUE,
+        0.9,
+    ),
+    _field(
+        PIICategory.EMAIL,
+        "email.labelled",
+        r"электронная\s+почта|эл\.\s*почта|e-mail|email|почта",
+        _EMAIL_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.ADDRESS,
+        "address.labelled",
+        r"адрес(?:\s+(?:при[её]ма|регистрации|рег\.?))*|место\s+жительства",
+        _FREE_TEXT_VALUE,
+        0.9,
+    ),
+    _field(
+        PIICategory.SNILS,
+        "snils.labelled",
+        r"снилс|страховой\s+номер",
+        _SNILS_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.INSURANCE_NUMBER,
+        "insurance_number.labelled",
+        r"полис(?:а)?(?:\s+омс)?|номер\s+полиса",
+        _POLICY_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.TICKET_NUMBER,
+        "ticket_number.labelled",
+        r"номер\s+талона|талон",
+        _TICKET_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.PATIENT_ID,
+        "patient_id.labelled",
+        r"идентификатор\s+пациента|id\s*пациента|номер\s+пациента",
+        _PATIENT_ID_VALUE,
+        0.9,
+    ),
+    _field(
+        PIICategory.MEDICAL_RECORD_NUMBER,
+        "medical_record_number.labelled",
+        r"номер\s+карты|амбулаторная\s+карта|карта\s+пациента|карта",
+        _RECORD_VALUE,
+        0.95,
+    ),
+    _field(
+        PIICategory.DOCTOR_LICENSE,
+        "doctor_license.labelled",
+        r"сертификат(?:а)?|№\s*сертификата",
+        _LICENSE_VALUE,
+        0.85,
+    ),
+    _field(
+        PIICategory.ORGANIZATION_NAME,
+        "organization_name.labelled",
+        r"медицинская\s+организация|медучреждение|лечебное\s+учреждение"
+        r"|филиал|отделение",
+        _FREE_TEXT_VALUE,
+        0.6,
+    ),
+    _field(
+        PIICategory.ORGANIZATION_ID,
+        "organization_id.labelled",
+        r"инн|огрн|код\s+учреждения",
+        _ORG_ID_VALUE,
+        0.85,
+    ),
+)
+"""The ``StructuredFieldPIIDetector`` rule table, in precedence order.
+
+Every row is a **label** plus a **bounded value**, which is the whole thesis of
+this detector: a value behind a known label is labelled data, not a guess. The
+real ``2b8fdd0d`` marker carries the taxonomy in exactly this form, and Phase 13
+adds the file that reproduces it synthetically
+(``tests/fixtures/pii/appointment/synthetic-registration-01.md``).
+
+Order is documentation, not behaviour: each row is an independent
+``finditer`` scan, so a row cannot shadow another the way :data:`_PATTERNS`' rows
+can. ``DOCTOR_NAME`` is nevertheless listed first, because a reader checking
+``фио врача:`` should meet the doctor row before the patient one, and because the
+mandatory colon — not the table order — is what actually keeps
+``person_name.labelled`` off a clinician.
+
+Why each row's confidence is what it is. A label plus a shape is strong evidence
+(``0.9``–``0.95``), which is what makes the labelled row win aggregation's
+confidence tie against :data:`_PATTERNS`' unlabelled form of the same value.
+``nationality.labelled`` sits at ``0.7`` and ``organization_name.labelled`` at
+``0.6`` because their value shapes are the loosest in the table — a nationality
+and a clinic name are both "a word" — and a guess about a person's citizenship
+should be visibly weaker in the artifact than a parsed СНИЛС.
+
+What is deliberately **not** here, and why:
+
+- ``LAB_ORDER_ID`` and ``ENCOUNTER_ID`` are absent because the two markers
+  disagree about what a ``Лаб. номер`` is — a 7-digit run on the real
+  ``fbbcb675`` would be a lab order on one document and an encounter on another —
+  and a category this table cannot fill with evidence is a category it should
+  not claim. The taxonomy keeps them for the NER detector.
+- ``DOCTOR_LICENSE`` is included even though it is not patient PII
+  (IMPL_ARCH §3.1), for the reason ``ORGANIZATION_*`` is: the categories exist
+  so a policy can redact the patient *without* redacting the issuing clinic or
+  the signing physician. The real marker's ``Сертификат: 00ED1…`` is the shape.
+- ``NATIONAL_ID``/``INN`` as *bare* lengths stays out, exactly as in
+  :data:`_PATTERNS`. A label is what turns a digit run into an identity.
+- A dotted date of birth inside ``Пол/возр.:`` is reachable
+  (``date_of_birth.demographic_shape``), but a *free-prose* ``27.07.1984`` with no
+  label and no demographic cell is not. ``PIICategory`` has no bare-date rule and
+  this is not one: a service date is not PII, which is why
+  ``clean/generic-notice-01.md``'s ``12 июня`` must stay undetected.
+"""
 
 
 class StructuredFieldPIIDetector(PIIDetectorBase):
-    """Labelled-field detector (IMPL_ARCH §9) — implements in M5.
-
-    Intended categories: ``PERSON_NAME``, ``DOCTOR_NAME``, ``DATE_OF_BIRTH``,
-    ``AGE``, ``GENDER``, ``NATIONALITY``, ``PHONE``, ``EMAIL``, ``ADDRESS``,
-    ``SNILS``, ``INSURANCE_NUMBER``, ``TICKET_NUMBER``, ``PATIENT_ID``,
-    ``MEDICAL_RECORD_NUMBER``, ``DOCTOR_LICENSE``, ``ORGANIZATION_NAME``,
-    ``ORGANIZATION_ID``.
+    """Labelled-field detector (IMPL_ARCH §9) — implemented in M5 Phase 13.
 
     The strongest signal available without an LLM: a value behind a known label
     (``ФИО:``, ``Дата рождения:``, ``Полис №:``, ``СНИЛС:``, ``Номер талона:``)
@@ -540,32 +1101,270 @@ class StructuredFieldPIIDetector(PIIDetectorBase):
     taxonomy in this form, and ``"(М, 39 лет)"`` is why ``AGE``/``GENDER`` are
     PII categories at all (§7) rather than ignored.
 
+    Categories: ``PERSON_NAME``, ``DOCTOR_NAME``, ``DATE_OF_BIRTH``, ``AGE``,
+    ``GENDER``, ``NATIONALITY``, ``PHONE``, ``EMAIL``, ``ADDRESS``, ``SNILS``,
+    ``INSURANCE_NUMBER``, ``TICKET_NUMBER``, ``PATIENT_ID``,
+    ``MEDICAL_RECORD_NUMBER``, ``DOCTOR_LICENSE``, ``ORGANIZATION_NAME``,
+    ``ORGANIZATION_ID``.
+
     ``ORGANIZATION_*``/``DOCTOR_*`` are included on purpose: they are not
     patient PII (IMPL_ARCH §3) and must stay separable so a policy can redact the
     patient without redacting the issuing clinic.
 
+    Runs :data:`_FIELDS` over the text and stamps every hit with the mask and the
+    fingerprint it computed itself, because a detector is the only component that
+    sees raw text and the only place those two derived values can be built (Phase
+    1's field requirements). Two properties carry over from
+    :class:`PatternPIIDetector` and are deliberate: **no suppression of
+    overlapping hits** (aggregation dedups only on
+    ``(category, value_fingerprint)``, and collapsing a patient's name into a
+    passport finding would delete one of them) and **every row is used**
+    (:meth:`detect_text` iterates the table, not a hand-written dispatch).
+
     Source: ``PIISource.STRUCTURED_FIELD``.
     """
 
+    def detect(self, document: NormalizedDocument) -> list[PIIFinding]:
+        """Scan ``document.raw_text`` — the §7 decision 5 wrapper.
+
+        Same caveat as :meth:`PatternPIIDetector.detect` and for the same
+        reasons: ``raw_text`` is case-folded with whitespace collapsed, so a
+        ``masked_value`` here is the folded form of the entity and the offsets
+        index ``raw_text`` rather than the original markdown.
+        """
+        return self.detect_text(document.raw_text)
+
+    def detect_text(self, text: str) -> list[PIIFinding]:
+        """Return every labelled field in ``text``, in rule order then position order.
+
+        Args:
+            text: Any string. Empty input yields ``[]``: an empty document is a
+                legitimate input, and a detector that cannot be asked about
+                nothing cannot be trusted on what it finds.
+
+        Returns:
+            One :class:`~app.pii.models.PIIFinding` per matched field, already
+            masked and fingerprinted. Values that duplicate a
+            :class:`PatternPIIDetector` finding are left in place — same
+            category and same value means same fingerprint, so the aggregator
+            collapses them.
+        """
+        if not text:
+            return []
+        found: list[PIIFinding] = []
+        for row in _FIELDS:
+            found.extend(
+                _findings_for_rule(
+                    text,
+                    row.regex,
+                    category=row.category,
+                    group=1,
+                    confidence=row.confidence,
+                    source=PIISource.STRUCTURED_FIELD,
+                    detector_name=f"structured.{row.name}",
+                    fingerprint=self.fingerprint,
+                )
+            )
+        return found
+
+
+_SECRET_LABELS = (
+    r"api[\s_-]?key|api[\s_-]?secret|apikey|secret[\s_-]?key|client[\s_-]?secret"
+    r"|access[\s_-]?key|access[\s_-]?token|auth[\s_-]?token|private[\s_-]?key"
+    r"|passphrase|credentials"
+    r"|секретн\w*\s+ключ|секрет|ключ\s+доступа|ключ\s+api|токен"
+    r"|парольн\w*\s+фраз\w*|пароль|passwd|password|уч[её]тные\s+данные|учетные\s+данные"
+)
+_SECRET_GAP = r"[\s:*_~>|#\-–—]*[:=][\s|*]*"
+_SECRET_VALUE = (
+    r"(?=[^\s|*\"'`,;:{}\[\]<>]{8,}[^\s|*\"'`,;:{}\[\]<>]*[A-Za-zА-Яа-яЁё])"
+    r"[^\s|*\"'`,;:{}\[\]<>]{8,}"
+)
+"""Credential words, the ``key = value`` gap, and a value shape for :data:`_SECRET_RULES`.
+
+The value shape requires eight characters **and** a letter. Both halves are
+load-bearing for a detector whose only category is ``BLOCK``: the length floor
+keeps ``token: 42`` and ``pin: 1234`` out, and the letter requirement keeps a
+bare number — an order id, a room number, a phone fragment — from being called a
+credential on the strength of the word before it. ``log:`` and ``login=`` are
+absent for the same reason a username is not a secret: it is the half of a
+credential that is meant to be read.
+
+The separator allows ``=`` as well as ``:`` because that is how the credentials
+in the real world are written (``password=…``, ``api_key: …``), and it stops at
+a trailing ``.`` or ``,`` so prose punctuation is not swallowed into the value.
+"""
+
+
+@dataclass(frozen=True)
+class _Secret:
+    """One credential rule row. ``SECRET`` is the only category, so there is no
+    category column — a second one would be an invitation to claim something else.
+    """
+
+    name: str
+    regex: re.Pattern[str]
+    confidence: float
+    group: int = 0
+    """Capture group holding the value; ``0`` means the whole match.
+
+    The prefixed forms are the value. The labelled form's match is wider than its
+    value by construction — the word ``api_key`` is the evidence, not the secret —
+    so it takes group 1, and a ``masked_value`` of ``api_key: sk-live-…`` would be
+    a fabricated credential.
+    """
+
+
+_SECRET_RULES: tuple[_Secret, ...] = (
+    _Secret(
+        name="private_key_block",
+        regex=re.compile(r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"),
+        confidence=0.95,
+    ),
+    _Secret(
+        name="connection_string",
+        regex=re.compile(
+            r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:@/]+:[^\s@/]+@"
+        ),
+        confidence=0.9,
+    ),
+    _Secret(
+        name="aws_access_key_id",
+        regex=re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+        confidence=0.95,
+    ),
+    _Secret(
+        name="github_token",
+        regex=re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+        confidence=0.95,
+    ),
+    _Secret(
+        name="slack_token",
+        regex=re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),
+        confidence=0.95,
+    ),
+    _Secret(
+        name="google_api_key",
+        regex=re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b"),
+        confidence=0.95,
+    ),
+    _Secret(
+        name="jwt",
+        regex=re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}"),
+        confidence=0.9,
+    ),
+    _Secret(
+        name="bearer_token",
+        regex=re.compile(r"(?<![A-Za-z])[Bb]earer\s+[A-Za-z0-9._~+/=-]{16,}"),
+        confidence=0.85,
+    ),
+    _Secret(
+        name="vendor_key",
+        regex=re.compile(r"\bsk-(?:live|test)-[A-Za-z0-9]{16,}\b"),
+        confidence=0.9,
+    ),
+    _Secret(
+        name="labelled_credential",
+        regex=re.compile(
+            rf"(?<![\w-])(?:{_SECRET_LABELS}){_SECRET_GAP}({_SECRET_VALUE})",
+            re.IGNORECASE,
+        ),
+        confidence=0.8,
+        group=1,
+    ),
+)
+"""The ``SecretPIIDetector`` rule table, in precedence order.
+
+The most self-contained table in the module, and the one with the least room for
+error: ``SECRET`` is the **only** category the default policy ``BLOCK``s (plan
+§4.4), so every row here is a control that can stop a document, and a false
+positive here stops a document that was fine. The asymmetry is priced the other
+way from :class:`PatternPIIDetector`'s name rule, and deliberately so: recall
+means "a credential in an uploaded document reaches the extraction prompt", which
+is a security incident (IMPL_ARCH §2), while precision means "a legitimate
+document is halted for a human to clear", which is an inconvenience.
+
+Two families, and the split is the design:
+
+- **Prefixed formats** (``vendor_key``, ``aws_access_key_id``, ``github_token``,
+  ``private_key_block``, ``connection_string``, ``jwt``, ``bearer_token``) need
+  no label because the format *is* the evidence. They are high-confidence by
+  construction and cannot be reached by ordinary prose.
+- **The one labelled row** (``labelled_credential``) is the fallback for
+  credentials with no recognizable format — a corporate password manager's
+  ``password=…`` — and it is deliberately the *lowest* confidence in the table.
+  It is also the only row that can be made to misfire, which is why
+  :data:`_SECRET_LABELS` carries a letter requirement and no usernames.
+
+Overlap between the two families is the point, not a bug: ``sk-live-…`` behind an
+``api_key:`` label is found by both, produces the same value, and so produces
+one finding after aggregation's ``(category, value_fingerprint)`` dedup.
+
+What is deliberately **not** here: entropy heuristics, ``BEGIN OPENSSH PRIVATE
+KEY``-adjacent public keys, and any rule over *masked* values. Each was
+considered and rejected — an entropy threshold is a false-positive machine
+against clinical prose, and a credential is a *kind*, not a statistical property.
+A secret with no recognizable format and no labelling word is not detectable
+without a dictionary, and this table is not a dictionary.
+"""
+
 
 class SecretPIIDetector(PIIDetectorBase):
-    """Credential/secret detector (IMPL_ARCH §13) — implements in M5.
+    """Credential/secret detector (IMPL_ARCH §13) — implemented in M5 Phase 13.
 
-    Intended categories: ``SECRET`` only — API keys, passwords, private keys,
-    connection strings, bearer tokens. This is the *only* category the default
-    policy ``BLOCK``s (plan §4.4), because a secret in an uploaded document is
-    a security incident, not expected medical identity (IMPL_ARCH §2: PII presence
+    Categories: ``SECRET`` only — API keys, passwords, private keys, connection
+    strings, bearer tokens. This is the *only* category the default policy
+    ``BLOCK``s (plan §4.4), because a secret in an uploaded document is a
+    security incident, not expected medical identity (IMPL_ARCH §2: PII presence
     alone never blocks).
 
     Kept as its own detector, not a pattern rule inside
-    ``PatternPIIDetector``, so that "block on secret" is a separable,
+    :class:`PatternPIIDetector`, so that "block on secret" is a separable,
     independently testable control and so a false positive in medical pattern
-    matching can never block a document.
+    matching can never block a document. That separation is why
+    :data:`_SECRET_RULES` is calibrated to *recall* and :data:`_PATTERNS` to
+    precision: they are not allowed to be the same detector, so they must not
+    have the same error profile.
 
     Source: ``PIISource.PATTERN``. Detection must never be the sole control
     for a ``BLOCK``: the gate fails closed via ``PIIDecisionError`` if the
     detector cannot run at all.
     """
+
+    def detect(self, document: NormalizedDocument) -> list[PIIFinding]:
+        """Scan ``document.raw_text`` — the §7 decision 5 wrapper."""
+        return self.detect_text(document.raw_text)
+
+    def detect_text(self, text: str) -> list[PIIFinding]:
+        """Return every credential in ``text``, in rule order then position order.
+
+        Args:
+            text: Any string. Empty input yields ``[]`` for the same reason every
+                detector here does: nothing to find is a finding-shaped answer,
+                not an error.
+
+        Returns:
+            One :class:`~app.pii.models.PIIFinding` per matched credential,
+            already masked and fingerprinted. ``mask_pii_value`` gives ``SECRET``
+            a fixed mask, so no row here can emit any part of the value.
+        """
+        if not text:
+            return []
+        found: list[PIIFinding] = []
+        for row in _SECRET_RULES:
+            found.extend(
+                _findings_for_rule(
+                    text,
+                    row.regex,
+                    category=PIICategory.SECRET,
+                    group=row.group,
+                    confidence=row.confidence,
+                    source=PIISource.PATTERN,
+                    detector_name=f"secret.{row.name}",
+                    fingerprint=self.fingerprint,
+                )
+            )
+        return found
 
 
 class CompositePIIDetector(PIIDetectorBase):
@@ -683,45 +1482,6 @@ def build_detector_chain(settings: Settings) -> CompositePIIDetector:
     )
 
 
-def build_available_detector_chain(settings: Settings) -> CompositePIIDetector:
-    """The chain of detectors that are actually implemented — M5 Phase 11 wiring.
-
-    :func:`build_detector_chain` is the complete inventory and the right
-    target, but two of its three members raise ``NotImplementedError`` in
-    ``detect_text`` until Phase 13 writes them. A pipeline that used it today
-    would not degrade to a weaker control, it would fail *every* document with
-    an exception — the fail-closed posture taken past the point of being
-    useful, which in practice gets "fixed" by commenting the call out.
-
-    So the pipeline gets the implemented subset instead, and the missing
-    coverage is loud rather than silent:
-
-    * ``build_detector_chain`` is left exactly as M4/Phase 8 pinned it. Nothing
-      about the full inventory is softened, reordered or defaulted.
-    * The chain returned here is a *strict subset* in the same relative order,
-      and ``test_detector_chain.py`` asserts that subset relation — so when
-      Phase 13 lands, the failing test says "delete this function and call
-      :func:`build_detector_chain`" instead of leaving two inventories to drift.
-    * The one consequence that matters is a *narrower* gate, not a laxer one:
-      ``SecretPIIDetector`` is the only ``BLOCK`` source, so nothing reaches
-      ``BLOCK`` until Phase 13, and a document carrying a credential gets
-      ``ALLOW`` rather than being stopped. That is a real gap, it is the gap
-      Phase 13 exists to close, and it is not papered over here.
-
-    Args:
-        settings: Application settings carrying ``pii_fingerprint_secret``,
-            validated exactly as :func:`build_detector_chain` validates it.
-
-    Returns:
-        A :class:`CompositePIIDetector` over the implemented detectors.
-
-    Raises:
-        InvalidPIIInputError: If the secret is missing, empty or whitespace-only.
-    """
-    secret = _require_fingerprint_secret(settings)
-    return CompositePIIDetector((PatternPIIDetector(fingerprint_secret=secret),))
-
-
 __all__ = [
     "DETECTOR_VERSION",
     "PII_FINGERPRINT_SECRET_ENV",
@@ -731,6 +1491,5 @@ __all__ = [
     "PIIDetectorBase",
     "SecretPIIDetector",
     "StructuredFieldPIIDetector",
-    "build_available_detector_chain",
     "build_detector_chain",
 ]

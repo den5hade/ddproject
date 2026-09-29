@@ -9,11 +9,14 @@ rather than a shared one: the shapes differ (``expected_categories`` +
 ``expected_subtype`` there), and forcing them into a union would put three
 always-null fields on every PII entry.
 
-What these tests cannot do, and say so out loud: verify the ``expected_*``
-fields. There is no detector in M4, so those values are a specification for M5
-to confirm. The tests that matter here are the structural ones — shape, path
-resolution, enum validity — plus the checks that keep M4's synthetic-only state
-honest.
+What these tests deliberately do not do: verify the ``expected_*`` fields. That
+is not an oversight and it is not a Phase 13 regression — this module owns the
+*shape* of the manifest, and checking that a file it never scans finds what the
+manifest says it finds would put a second opinion about detection inside the
+structural contract, where a reviewer would not look for it. The semantic check
+lives in ``tests/unit/pii/test_manifest_verification.py``, which runs the real
+gate; this one asserts the file is well-formed, resolvable and honest about
+being synthetic, which is the part a reader of the dataset itself relies on.
 """
 
 from __future__ import annotations
@@ -66,6 +69,23 @@ def test_manifest_version_is_semver():
     assert len(parts) == 3 and all(part.isdigit() for part in parts)
 
 
+def test_manifest_notes_record_the_appointment_entry_provenance():
+    # Decision 9: a "real marker" entry reproduces the shape and invents every
+    # value. That rule is only auditable if the file says which real document the
+    # shape came from — and it must, without the contents, or a reader cannot
+    # tell a deliberate synthetic from an accidental copy.
+    notes = MANIFEST["notes"]
+    assert "2b8fdd0d" in notes
+    assert "appointment/synthetic-registration-01.md" in notes
+
+
+def test_manifest_notes_say_the_expectations_are_measured():
+    # The phase's whole point: expected_* stopped being a declaration and became
+    # an observation. A manifest that said nothing about which would be
+    # indistinguishable from the M4 file it replaced.
+    assert "test_manifest_verification.py" in MANIFEST["notes"]
+
+
 def test_manifest_notes_explain_the_assumed_policy_context():
     # expected_decision is context-dependent (Phase 5: a patient category is
     # ALLOW_WITH_WARNING internally and REVIEW at the external boundary) and
@@ -76,19 +96,20 @@ def test_manifest_notes_explain_the_assumed_policy_context():
     assert "external" in notes.lower()
 
 
-def test_manifest_has_the_three_seeded_fixtures():
-    assert len(FIXTURES) == 3
+def test_manifest_has_the_four_seeded_fixtures():
+    assert len(FIXTURES) == 4
 
 
-def test_manifest_covers_the_three_seeded_directories():
+def test_manifest_covers_the_four_seeded_directories():
     dirs = {fixture.file.split("/", 1)[0] for fixture in FIXTURES}
-    assert dirs == {"clean", "patient", "malicious"}
+    assert dirs == {"clean", "patient", "appointment", "malicious"}
 
 
 def test_seeded_directories_are_a_subset_of_the_planned_seven():
-    # The remaining four (laboratory, appointment, prescription, mixed) are M5's
-    # real-marker sweep; fixing the target set now means that sweep has a
-    # vocabulary and a mis-pathed file fails instead of extending the dataset.
+    # The remaining three (laboratory, prescription, mixed) are the rest of M5's
+    # sweep; fixing the target set up front means that sweep has a vocabulary and
+    # a mis-pathed file fails instead of extending the dataset. `appointment` is
+    # the one Phase 13 added, for the 2b8fdd0d shape and the G1 declined name.
     assert set(PII_FIXTURE_DIRECTORIES) == {
         "clean",
         "patient",

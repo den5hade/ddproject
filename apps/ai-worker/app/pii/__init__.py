@@ -34,7 +34,6 @@ from app.pii.detectors import (
     PIIDetectorBase,
     SecretPIIDetector,
     StructuredFieldPIIDetector,
-    build_available_detector_chain,
     build_detector_chain,
 )
 from app.pii.exceptions import (
@@ -176,7 +175,6 @@ __all__ = [
     "RedactorBase",
     "SecretPIIDetector",
     "StructuredFieldPIIDetector",
-    "build_available_detector_chain",
     "build_detector_chain",
     "build_document_gate",
     "build_pii_artifact",

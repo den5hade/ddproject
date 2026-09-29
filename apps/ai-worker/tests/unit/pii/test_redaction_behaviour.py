@@ -475,58 +475,92 @@ def test_redacting_the_consultation_fixture_removes_every_detected_value():
     assert redacted == _expected_redacted(markdown, findings)
 
 
-def test_one_manifest_category_is_still_undetected_and_that_is_a_phase_13_gap():
-    """The accept criterion is **not** fully met today, and this says so.
+def test_the_consultation_fixtures_declared_categories_are_all_detected():
+    """The Phase 12 criterion, now complete — and asserted in both directions.
 
-    The manifest declares seven ``expected_categories`` for the consultation
-    fixture; the Phase 11 chain finds six. The missing one is ``doctor_name``:
-    ``Петров И. С.`` is a surname plus two initials, and
-    :class:`~app.pii.detectors.PatternPIIDetector` deliberately has no two-token
-    ФИО rule because it would also match ``Уважаемые жильцы``-style prose and
-    organisation names. Finding it is
-    :class:`~app.pii.detectors.StructuredFieldPIIDetector`'s job — the fixture
-    writes ``**Врач:** Петров И. С.``, a labelled form — and that detector is
-    Phase 13.
-
-    So the gap is a **detection** gap, not a redaction gap, and it will be
-    closed by adding a detector, not by changing the redactor. This test exists
-    so the gap cannot quietly widen: when Phase 13 lands, ``uncovered`` becomes
-    empty, the assertion below fails, and the fix is to fold
-    ``expected_categories`` straight into
-    ``test_redacting_the_consultation_fixture_removes_every_detected_value``.
-    Until then the accept criterion is met for six of seven categories, which is
-    a partial pass and is reported as one.
+    This was a tripwire: through M5 Phase 12 the chain found six of the seven
+    categories the manifest declared, the missing one being ``doctor_name``,
+    because ``Петров И. С.`` is a surname plus two initials and only
+    :class:`~app.pii.detectors.StructuredFieldPIIDetector` claims a labelled
+    two-part ФИО. Phase 13 closed the gap, so the assertion inverts from
+    ``uncovered == {"doctor_name"}`` to equality, and the *reverse* containment
+    is now part of it: a chain that invented a category the manifest does not
+    declare for this fixture would be inventing ground truth.
     """
     markdown, _ = _consultation_fixture()
     expected = _expected_categories()
-
     detected = {finding.category.value for finding in _gate_findings(markdown)}
-    uncovered = expected - detected
 
-    assert uncovered == {"doctor_name"}
-    # Nothing unexpected: the chain must not be inventing categories the
-    # manifest does not declare for this fixture.
-    assert detected <= expected
+    assert detected == expected
+    # The gap this replaced, kept as an explicit statement of what Phase 13 added.
+    assert "doctor_name" in detected
+
+
+def test_no_phase_13_detector_reads_a_redaction_placeholder_as_a_value():
+    """A second pass must stay a fixed point for the *new* rules too.
+
+    ``**Адрес:** [address]`` is what a redacted document looks like, and
+    ``address.labelled`` is a free-text rule: without a guard it takes
+    ``[address]`` as the address, reports it, and the pipeline's second pass
+    finds PII in its own output. The same document then has to be redacted
+    again, to a document that is again detected, and nothing converges.
+
+    Asserted over the whole chain rather than per rule because the placeholder
+    is the *output* of Phase 12 meeting the *input* of Phase 13; the bug lives
+    in the seam, and a per-rule test would only ever cover the rules its author
+    remembered.
+    """
+    markdown, _ = _consultation_fixture()
+    settings = Settings(_env_file=None, pii_fingerprint_secret=SECRET)
+    gate = build_document_gate(settings)
+    scan = lambda text: gate.aggregator.aggregate(  # noqa: E731
+        gate.detector.detect(MarkdownNormalizer().normalize(text, metadata={}))
+    )
+
+    first = scan(markdown)
+    assert first
+    redacted = PlaceholderRedactor().redact(markdown, first)
+
+    assert scan(redacted) == []
 
 
 def _expected_redacted(markdown: str, findings: list[PIIFinding]) -> str:
     """Build the expected redaction independently, to compare the redactor against.
 
     Deliberately *not* the redactor's algorithm: one case-insensitive search per
-    finding, spliced right-to-left, with no offset verification, no merging and
-    no confidence logic. Two implementations that agree are evidence; a
+    finding, spans resolved by value alone, merged by intersection with the
+    highest-confidence finding naming the placeholder, then spliced
+    right-to-left. No offset verification, no confidence logic beyond picking a
+    winner, no shared code. Two implementations that agree are evidence; a
     disagreement localises the bug to whichever one is simpler.
+
+    The merge is not optional bookkeeping. M5 Phase 13 added
+    ``structured.address.labelled``, so the consultation fixture now yields two
+    ``ADDRESS`` findings that overlap — ``address.locality`` claims ``г. москва``
+    inside the full value the labelled rule claims — and the redactor's contract
+    is that intersecting spans become one span carrying one placeholder. A helper
+    that asserted the spans were disjoint would have kept passing right up to the
+    day a real overlap arrived, which is exactly the day it stops being useful.
     """
-    spans = []
+    spans: list[list] = []
     for finding in findings:
         match = re.search(re.escape(finding.value), markdown, re.IGNORECASE)
         assert match, f"fixture does not contain {finding.category.value}"
-        spans.append((match.start(), match.end(), finding))
-    spans.sort(key=lambda span: span[0])
-    for (_, earlier_end, _), (later_start, _, _) in zip(spans, spans[1:], strict=False):
-        assert earlier_end <= later_start, "this helper assumes non-overlapping spans"
+        spans.append([match.start(), match.end(), finding])
+
+    spans.sort(key=lambda span: (span[0], span[1], -span[2].confidence, span[2].category.value))
+
+    merged: list[list] = []
+    for span in spans:
+        if merged and span[0] < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], span[1])
+            if span[2].confidence > merged[-1][2].confidence:
+                merged[-1][2] = span[2]
+        else:
+            merged.append(span)
+
     result = markdown
-    for start, end, finding in reversed(spans):
+    for start, end, finding in reversed(merged):
         result = result[:start] + placeholder_for(finding.category) + result[end:]
     return result
 

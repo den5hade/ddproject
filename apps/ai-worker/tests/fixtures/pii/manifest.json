@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "notes": "Regression dataset for the PII gate (plan §4.10). M4 seeds three SYNTHETIC fixtures to prove the manifest shape before any detector exists: the clean/patient/malicious trio covers allow, review and block, which is the widest decision spread obtainable without a real marker. All values are invented and none are copied from .dev/flow_upload_test/ — a real marker is added in M5, and duplicating a real patient's data into a new file would create a second copy of the very leak this milestone exists to prevent. expected_* are declared ground truth in M4: with no detectors, no test can verify them, so they are a specification for M5 to confirm. expected_decision is context-dependent (a patient category is ALLOW_WITH_WARNING at an internal destination and REVIEW at an external one, per Phase 5), and §4.10 fixes the entry keys without a destination field, so the notes here state the assumed context: the external boundary. The clean and malicious fixtures are context-independent (no findings; a secret blocks at every destination). Notes on individual fixtures: clean/generic-notice-01.md carries a bare maintenance date on purpose, since PIICategory has no date member and a service date is not PII. patient/synthetic-consultation-01.md peaks at medical_record_number (high), not critical — only SECRET is critical, so 'critical' is a property of a credential, not of a sensitive identifier. malicious/synthetic-injection-01.md pairs a secret with a prompt-injection attempt, so it proves the block decision is driven by the credential rather than by the injection text itself.",
+  "notes": "Regression dataset for the PII gate (plan §4.10). M4 seeded three SYNTHETIC fixtures to prove the manifest shape before any detector existed: the clean/patient/malicious trio covers allow, review and block, which is the widest decision spread obtainable without a real marker. M5 Phase 13 added the appointment entry and, more importantly, turned every expected_* field from a declared specification into a MEASURED value: tests/unit/pii/test_manifest_verification.py runs each fixture through the real document gate and asserts equality, so a detector change that shifts a finding fails here instead of quietly contradicting the ground truth. All values are invented and none are copied from .dev/flow_upload_test/ - a real marker added as a second copy of a real patient's data would create a new instance of the very leak this milestone exists to prevent. expected_decision is context-dependent (a patient category is ALLOW_WITH_WARNING at an internal destination and REVIEW at an external one where no redactor is available, per Phase 5), and §4.10 fixes the entry keys without a destination field, so the notes here state the assumed context: the external boundary with redaction unavailable, which is the fail-closed direction. The clean and malicious fixtures are context-independent (no findings; a secret blocks at every destination). Notes on individual fixtures: clean/generic-notice-01.md carries a bare maintenance date on purpose, since PIICategory has no date member and a service date is not PII. patient/synthetic-consultation-01.md peaks at medical_record_number (high), not critical - only SECRET is critical, so 'critical' is a property of a credential, not of a sensitive identifier. appointment/synthetic-registration-01.md reproduces the SHAPE of the real 2b8fdd0d registration marker (its label/value contour, its table layout, and the declined genitive name form of §7 gotcha G1) with every value invented, per decision 9. Its expected_categories are the plan's locked acceptance pair - person_name + ticket_number and nothing else - which is a real constraint on the fixture and not on the detector: the document is a DECLINED booking, so the rows that would add a category (СНИЛС, Полис, Дата рождения, Адрес, ФИО врача) are absent because a patient who refused collected nothing. malicious/synthetic-injection-01.md pairs a secret with a prompt-injection attempt, so it proves the block decision is driven by the credential rather than by the injection text itself; its expected_categories also name ticket_number, which is a known false positive: the 28-digit API key is one unbroken digit run, and pattern.ticket_number.long_digits claims any run of 12 or more. It is recorded rather than hidden because the manifest is the ground truth, and ground truth that quietly omits a finding is worse than a false positive - the artifact for that document is supposed to be checkable against this file.",
   "fixtures": [
     {
       "file": "clean/generic-notice-01.md",
@@ -25,9 +25,22 @@
       "expected_risk_level": "high"
     },
     {
+      "file": "appointment/synthetic-registration-01.md",
+      "source": "synthetic",
+      "expected_categories": [
+        "person_name",
+        "ticket_number"
+      ],
+      "expected_decision": "review",
+      "expected_risk_level": "high"
+    },
+    {
       "file": "malicious/synthetic-injection-01.md",
       "source": "synthetic",
-      "expected_categories": ["secret"],
+      "expected_categories": [
+        "secret",
+        "ticket_number"
+      ],
       "expected_decision": "block",
       "expected_risk_level": "critical",
       "contains_secret": true

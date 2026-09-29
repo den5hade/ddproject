@@ -8,9 +8,12 @@ The manifest shape is fixed by plan §4.10: top-level ``version`` + ``notes`` +
 ``fixtures[]``, each entry carrying ``file``, ``source``, ``expected_categories``,
 ``expected_decision`` and ``expected_risk_level``, with ``contains_secret``
 optional. M4 seeds ``clean/``, ``patient/`` and ``malicious/`` synthetically to
-prove the shape; the real-marker sweep (copies of ``.dev/flow_upload_test/``)
-belongs to M5, which also has a detector to check expectations against — until
-then ``expected_*`` are declared ground truth that no test can verify.
+prove the shape; M5 Phase 13 added ``appointment/``, the ``2b8fdd0d`` shape with
+invented values, and with it the detector that makes the ``expected_*`` fields
+checkable — ``tests/unit/pii/test_manifest_verification.py`` now asserts them
+against the real gate, so they are observations rather than a specification. No
+fixture carries real patient data: see plan §7 decision 9, and the manifest's own
+``notes``, which record the provenance of each shape without its contents.
 
 The loader stays free of the pipeline and is stdlib-only.
 """

@@ -42,7 +42,6 @@ from app.pii import (
     PIISource,
     SecretPIIDetector,
     StructuredFieldPIIDetector,
-    build_available_detector_chain,
     build_detector_chain,
     build_policy_context,
     hash_pii_value,
@@ -144,47 +143,58 @@ def test_chain_order_puts_the_strongest_signal_first():
     assert names[-1] == "SecretPIIDetector"
 
 
-# --- 1b. the Phase 11 chain is a strict subset until Phase 13 ----------------
+# --- 1b. the Phase 13 chain is whole, and the pipeline uses it ----------------
 
 
-def test_available_chain_is_a_strict_subset_of_the_full_chain():
-    """The tripwire for Phase 13.
+def test_full_chain_carries_every_detector_and_no_interim_inventory_remains():
+    """Phase 11 shipped a second, smaller constructor so the pipeline could run
+    before ``StructuredFieldPIIDetector`` and ``SecretPIIDetector`` existed.
 
-    ``build_detector_chain`` is the complete inventory but two of its members
-    raise until Phase 13 writes them, so the pipeline uses
-    ``build_available_detector_chain``. When Phase 13 lands these two chains
-    become equal, and *this* assertion is what says so — a reviewer then deletes
-    the interim constructor rather than leaving two inventories to drift.
+    Phase 13 landed them, and the interim constructor is **gone**: two
+    inventories of the same detectors is one too many, because the one nobody
+    edits is the one the pipeline uses. The inventory is asserted here as a list
+    rather than a set, so the "strongest signal first" order is part of the
+    contract instead of a comment nobody checks.
     """
-    full = build_detector_chain(_settings(pii_fingerprint_secret=_SECRET))
-    available = build_available_detector_chain(_settings(pii_fingerprint_secret=_SECRET))
+    chain = build_detector_chain(_settings(pii_fingerprint_secret=_SECRET))
 
-    available_types = [type(detector) for detector in available.detectors]
-    full_types = [type(detector) for detector in full.detectors]
-
-    assert available_types != full_types, "Phase 13 landed: drop build_available_detector_chain"
-    assert len(available_types) < len(full_types)
-    assert set(available_types) < set(full_types)
-    # Same relative order, so the "strongest signal first" tie-break still holds.
-    assert available_types == [t for t in full_types if t in set(available_types)]
+    assert [type(detector) for detector in chain.detectors] == [
+        StructuredFieldPIIDetector,
+        PatternPIIDetector,
+        SecretPIIDetector,
+    ]
 
 
-def test_available_chain_carries_no_unimplemented_detector():
+def test_available_detector_chain_is_no_longer_exported():
+    """The interim constructor must not survive as a name.
+
+    Deleting the function is the point; leaving an alias or a private helper
+    behind would let the next contributor wire the pipeline to a subset again,
+    and a subset fails *silently* — it just finds less. The import is attempted
+    by name so the test fails with the actual reason if it comes back.
+    """
+    import app.pii as pii_package
+
+    assert not hasattr(pii_package, "build_available_detector_chain")
+    assert "build_available_detector_chain" not in pii_package.__all__
+
+
+def test_full_chain_validates_the_secret_before_any_detector_runs():
     """Every member must actually scan; a stub in the chain fails every document."""
-    chain = build_available_detector_chain(_settings(pii_fingerprint_secret=_SECRET))
+    chain = build_detector_chain(_settings(pii_fingerprint_secret=_SECRET))
     for detector in chain.detectors:
         findings = detector.detect_text("СНИЛС 123-456-789 00")
         assert isinstance(findings, list)
 
 
-def test_available_chain_validates_the_secret_exactly_like_the_full_chain():
-    """Two constructors, one choke point — otherwise one of them forgets."""
-    for blank in ("", "   ", "\t\n"):
-        with pytest.raises(InvalidPIIInputError):
-            build_available_detector_chain(_settings(pii_fingerprint_secret=blank))
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_full_chain_rejects_a_blank_fingerprint_secret(blank):
+    """One constructor, one choke point — so there is nowhere to forget it."""
+    with pytest.raises(InvalidPIIInputError):
+        build_detector_chain(_settings(pii_fingerprint_secret=blank))
 
 
-def test_pipeline_gate_is_built_from_the_available_chain():
+def test_pipeline_gate_is_built_from_the_full_chain():
     """The wiring, asserted at the boundary rather than described in a comment."""
     from app.config.settings import Settings as _S
     from app.pii import build_document_gate
@@ -192,7 +202,7 @@ def test_pipeline_gate_is_built_from_the_available_chain():
     gate = build_document_gate(_S(_env_file=None, pii_fingerprint_secret=_SECRET))
     assert [type(d) for d in gate.detector.detectors] == [
         type(d)
-        for d in build_available_detector_chain(
+        for d in build_detector_chain(
             _S(_env_file=None, pii_fingerprint_secret=_SECRET)
         ).detectors
     ]

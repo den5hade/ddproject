@@ -160,7 +160,7 @@ change — which is exactly why Phase 14 costs a version bump and not a refactor
 | 10 | M5 | Persistence surface (`pii_result.json`, `MARKDOWN_KIND_PII`, `PIIMeta`, frontmatter) | [x] |
 | 11 | M5 | Contour 1 wiring — `inspect` after classification, artifact before publish | [ ] |
 | 12 | M5 | Markdown redaction (`PIIRedactor.redact`) | [ ] |
-| 13 | M5 | Marker-shape fixture + structured-field and secret detectors | [ ] |
+| 13 | M5 | Marker-shape fixture + structured-field and secret detectors | [x] |
 | 14 | M5 | Canonical guard — escalation policy, per-category sanitizer, both dump points | [ ] |
 | 15 | M5 | `EXTERNAL_LLM` destination + redaction on the extraction path | [ ] |
 | 16 | M5 | NER detector (P1) | [ ] |
@@ -170,18 +170,22 @@ change — which is exactly why Phase 14 costs a version bump and not a refactor
 passed (174 baseline + 262 PII contract tests). `make lint` reports only 4 pre-existing
 `packages/storage` errors, unrelated to this milestone and present before M4 began.
 
-**M5 status: in progress — Phases 8–12 done, 13–17 pending.** `uv run pytest` → 625 passed
-(436 baseline + 189 new). The gate now *works* in memory — `await gate.inspect(document, context)`
+**M5 status: in progress — Phases 8–13 done, 14–17 pending.** `uv run pytest` → 663 passed
+(436 baseline + 227 new). The gate now *works* in memory — `await gate.inspect(document, context)`
 detects, deduplicates, evaluates policy and returns a verdict — and it is now **in production**:
 `DocumentPipeline` builds it at start-up, inspects every document after classification and before
 extraction, halts on `REVIEW`/`BLOCK` before a single byte is written, and on the allow path uploads
 `pii_result.json` and carries the §4.7 block in both the frontmatter and the event payload.
 Redaction is implemented, tested against the real fixture, and reported to the policy as available —
 and stays dormant, because at the trusted internal destination the policy issues no `REDACT` action.
-Three limits are recorded rather than hidden: contour 1 uses the *implemented* detector subset, so
-**nothing can reach `BLOCK` until Phase 13**; `doctor_name` is undetected until the labelled detector
-lands; and the canonical-guard contour is not wired, so the observed `canonical.json` leak is still
-open.
+
+Since Phase 13 the detector chain is the whole chain, so the risk R13 is **closed**: a document
+carrying a credential reaches `BLOCK`, and `doctor_name` is detected by the labelled detector rather
+than left to a two-token ФИО rule that would also match `Уважаемые жильцы`. The two remaining
+limits are recorded rather than hidden: the canonical-guard contour is not wired, so the observed
+`canonical.json` leak is still open (Phase 14 is the phase that closes it); and the manifest's
+`expected_decision` is measured at one named boundary rather than all three, because §4.10's entry
+keys have no `destination` field (Deviation 1, Phase 13 status).
 
 **M5 is complete when** Phases 8–17 are `[x]`, the full ai-worker suite is green on the 436-test
 baseline, `packages/storage` is green, and — the criterion that actually distinguishes M5 from M4 —
@@ -1473,7 +1477,7 @@ the fix is to fold `expected_categories` into the full assertion.
 
 Tests: `uv run pytest` → **625 passed**; `make lint` → the same 4 pre-existing storage failures.
 
-### Phase 13 — Marker-shape fixture + structured & secret detectors [ ]
+### Phase 13 — Marker-shape fixture + structured & secret detectors [x]
 
 `StructuredFieldPIIDetector` (labelled fields: `ФИО:`, `СНИЛС:`, `Полис №:`, `Дата рождения:`,
 `Номер талона:`) and `SecretPIIDetector` (credentials only — the sole source of `BLOCK`). One
@@ -1485,6 +1489,95 @@ regression fails the manifest test.
 Deps: Phase 9. (§45.13–14)
 **Accept:** every `expected_*` in `manifest.json` is machine-verified; the declined-name marker
 shape yields `person_name` + `ticket_number` and nothing else.
+
+#### Phase 13 Implementation Status
+
+**Changes.**
+
+```text
+app/pii/detectors.py       StructuredFieldPIIDetector (19 rows / 17 categories) and
+                          SecretPIIDetector (10 rules) implemented; _CYR_WORD, _NAME_VALUE,
+                          _standalone_digits, _LONG_DIGIT_RUN, _CELL_END, _NAME_LABELS,
+                          _NAME_BOUND_WORDS and the placeholder guard are new or revised
+app/pii/gate.py           build_document_gate wires all three detectors; the interim
+                          constructor is deleted
+app/pii/__init__.py       exports the two new detectors; build_available_detector_chain
+                          is no longer exported
+app/pii/fixtures.py       loader docstring no longer describes expected_* as unverifiable
+tests/fixtures/pii/       appointment/synthetic-registration-01.md (the 2b8fdd0d shape,
+                          invented values); manifest.json rewritten with measured expectations
+tests/unit/pii/           new test_manifest_verification.py (25 tests);
+                          test_fixture_manifest.py, test_detectors.py,
+                          test_detectors_behaviour.py, test_redaction_behaviour.py and
+                          test_settings_boundary.py: the Phase 9–12 tripwires that asserted the
+                          *un*implemented state are replaced by live assertions
+tests/unit/pipeline/      test_pipeline.py: SECRET_MARKER split into IDENTIFIER_MARKER and
+                          CREDENTIAL_MARKER, with a real BLOCK path and an identifier-allow path
+```
+
+**The three changes of substance, in the order the plan forced them.**
+
+1. *The chain is whole, so the interim constructor is gone.* `build_available_detector_chain`
+   existed to return the implemented subset while the two live detectors raised
+   `NotImplementedError`; with both scanning, the subset is the full set and the constructor is a
+   second thing that can disagree with `build_detector_chain`. The pipeline now wires
+   `build_document_gate(settings)` directly, and `test_settings_boundary.py` asserts the chain
+   inventory instead of a subset tripwire. `DETECTOR_VERSION` stays `1.1.0`: §4.8 makes a minor bump
+   an *additive* change, and this phase adds no `PIICategory` and no field to `PIIFinding` — it
+   fills in the categories the locked table already declared.
+2. *The fixture is the real marker reproduced, and the manifest is now an observation.* The entry
+   is `appointment/synthetic-registration-01.md`: the `2b8fdd0d` **shape** with every value
+   invented, per §7 decision 9 and ORDER §13.3. It yields exactly `person_name` +
+   `ticket_number`, which is the accept criterion, and the test that asserts it is called out by
+   name so a reader does not have to infer it from a category set.
+3. *The declined genitive name is the reason the phase has a hard part.* The registration marker's
+   "Электронная запись на прием для пациента Кузнецова Александра Петровича" is mid-sentence, has
+   no colon and arrives already case-folded, so a nominative `ФИО:` rule cannot match it. Widening
+   the label rule to catch it produced `Пациент отказался от приёма` as a `person_name`; the fix is
+   a construction-aware label rule — a colon/dash separator, the declined binder
+   `для|у|от пациента…`, or a bold `**Пациент**` label — plus `_NAME_BOUND_WORDS` rejecting a leading
+   preposition or particle. Both halves are pinned by name in
+   `test_manifest_verification.py::test_prose_after_a_patient_label_is_not_a_person_name`.
+
+**Deviation 1 — the manifest's `expected_decision` is measured at one boundary, and the manifest
+says which.** §4.10's entry keys have no `destination` field, but the same findings decide
+`ALLOW` internally, `ALLOW_WITH_WARNING` where a redactor exists, and `REVIEW` where redaction is
+required and unavailable. Rather than add a field to a locked shape, the manifest's `notes` name
+`EXTERNAL_LLM` + `redaction_available=False` (the fail-closed direction, which is the one that
+distinguishes three decisions from one) and
+`test_manifest_verification.py::test_every_fixture_is_also_allow_at_the_production_boundary` covers
+the other end. The cost: a manifest edited for a different boundary fails loudly rather than
+quietly, which is the intended direction for that failure.
+
+**Deviation 2 — a false positive is recorded in the manifest rather than suppressed.** The 28-digit
+API key in the malicious fixture is one unbroken digit run, and
+`pattern.ticket_number.long_digits` claims any run of twelve or more, so it is reported as
+`ticket_number` as well as `secret`. Narrowing the rule to "not exactly 28" would fit this one
+fixture and generalize to nothing. The manifest declares
+`expected_categories: ["secret", "ticket_number"]`, the note explains it, and
+`test_manifest_names_the_known_ticket_false_positive` keeps the explanation attached to the
+behaviour. A documented false positive on a credential is a cost worth paying; an undocumented one
+is a bug report filed against a detector that is behaving as designed.
+
+**Equality, not containment, in the manifest test.** The verification module asserts
+`found == set(expected_categories)`, not `expected <= found`. A subset assertion cannot fail when a
+detector starts inventing categories, and an invented category is a wrong masked value in a
+persisted artifact. The cost is that every recall improvement shows up as a red test; the fix is to
+record the newly-observed behaviour in the manifest, where the diff is visible to a reviewer.
+
+**Tests.** `cd apps/ai-worker && uv run pytest` → **663 passed**, 5 warnings. `ruff check` in
+`apps/ai-worker` → 13 `UP042`, all in `app/classification/models.py`,
+`app/pii/canonical_guard.py` and `app/pii/models.py`, i.e. on lines this phase does not touch. From
+the repo root, `make lint` → 4 errors, all in `packages/storage/` and equally untouched. Recorded
+rather than fixed, per §5.
+
+**Deviation 3 — the monorepo-wide suite is not runnable on this platform, and the number above is
+not a monorepo number.** `make test` (`pytest apps tests packages/messaging/tests`) fails during
+*resolution*, before any test runs: `torch==2.13.0` publishes no wheel for `macosx_14_0_x86_64`.
+Nothing here can change that without editing another package's dependencies, which is out of scope
+and would be a bigger decision than this phase. So the 663 above is the ai-worker suite, which is
+where every Phase 13 change lives; the packages this phase does not touch (storage, messaging,
+account-api) are outside the measured set and are reported as such rather than counted.
 
 ### Phase 14 — Canonical guard [ ] · **VS#2**
 
@@ -1889,13 +1982,16 @@ detector output.
 `tests/unit/pipeline/test_pipeline_pii.py`; extended `tests/fixtures/pii/manifest.json` + the
 `laboratory/`, `appointment/`, `prescription/`, `mixed/` directories (declared in
 `PII_FIXTURE_DIRECTORIES` but not yet created); `tests/support/pii_fixtures.py` delegate once the
-dataset grows past the trio. `packages/storage/tests/test_keys.py` extended in Phase 10.
+dataset grows past the trio — and past it again: Phase 13 adds `appointment/`, the `2b8fdd0d` shape,
+so the set is now clean/patient/appointment/malicious. `packages/storage/tests/test_keys.py` extended
+in Phase 10.
 
 **Commands:**
 
 ```bash
-cd apps/ai-worker && uv run pytest tests/unit/pii -v          # focused
+cd apps/ai-worker && uv run pytest tests/unit/pii -v          # focused (477 after Phase 13)
 cd apps/ai-worker && uv run pytest                            # full: 436 baseline, must stay green
+                                                           #   (663 after Phase 13)
 cd apps/ai-worker && uv run pytest tests/unit/pipeline -v      # contour wiring, Phases 11/14/15
 uvx ruff check apps/ai-worker/app/pii apps/ai-worker/tests/unit/pii apps/ai-worker/app/pipeline
 uvx ruff format --check apps/ai-worker/app/pii
@@ -1940,7 +2036,7 @@ M5 (pending — the numbering is IMPL_ARCH §45's 19-step sequence folded into p
     (§45.10–11).
 12. **Phase 12 — Markdown redaction** [x] — needs the gate's findings; independent of the guard
     (§45.12).
-13. **Phase 13 — Marker-shape fixture + structured & secret detectors** [ ] — `SECRET` detection is
+13. **Phase 13 — Marker-shape fixture + structured & secret detectors** [x] — `SECRET` detection is
     the only `BLOCK` source, so it must exist before the guard is trusted (§45.13–14).
 14. **Phase 14 — Canonical guard** [ ] · VS#2 — the phase that closes the observed leak. After
     this, the milestone's purpose is met even if 15–17 slip (§45.15–16).
@@ -2146,6 +2242,12 @@ phase's Implementation Status block.
   `test_available_chain_is_a_strict_subset_of_the_full_chain`, which fails the moment the two chains
   are   equal. Phase 13 is the only thing that closes it, and the roadmap already orders Phase 13
   before the Phase 14 guard is trusted.
+  **Closed in Phase 13.** Both detectors scan, so `build_available_detector_chain` is deleted rather
+  than left to rot, the pipeline wires `build_document_gate` directly, and a credential-bearing
+  document halts: `test_pipeline.py` asserts `BLOCK` end to end, and
+  `test_manifest_verification.py::test_only_a_credential_blocks_at_every_boundary` asserts it at both
+  boundaries with the same patient fixture allowed alongside. A risk register that never closes is how
+  a register stops being read, so this entry is marked rather than left standing as if it applied.
 - **R14 — a redacted document that still carries the value.** The gate's findings index the
   *canonicalised* `raw_text`, not the markdown, so a redactor that trusted their offsets would
   replace unrelated text and leave the value in place. Mitigated in Phase 12 by verifying the offset

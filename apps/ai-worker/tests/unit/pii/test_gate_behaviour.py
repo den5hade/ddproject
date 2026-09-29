@@ -9,7 +9,11 @@ The two claims the plan makes for this phase are both here:
 
 1. the ``synthetic-consultation-01`` fixture's scan matches the manifest's
    declared ``expected_decision`` and ``expected_risk_level`` — ground truth M4
-   could only *state*, because nothing detected;
+   could only *state*, because nothing detected. Phase 13 added the detectors
+   that check that ground truth for real; this module keeps the Phase 9 slice it
+   was written to be, a chain of exactly one detector, so a regression in the
+   aggregator or the projection is still attributable to them rather than to
+   whichever detector happened to be added next;
 2. the result dumps with no ``value`` key at any depth.
 
 The second is walked recursively rather than checked on the top level, because
@@ -198,16 +202,19 @@ async def test_every_summary_is_masked_and_never_carries_a_value():
 
 @pytest.mark.asyncio
 async def test_the_fixture_declares_categories_the_detector_can_produce():
-    """Manifest expectations vs. what Phase 9 can actually see.
+    """Manifest expectations vs. what this one-detector chain can see.
 
-    Not an equality check: the manifest lists ``medical_record_number`` and
-    ``doctor_name``, which belong to Phase 13's labelled detector (a 10-digit
-    card number is deliberately not claimed by a digit-run rule, and a
-    two-token ``Петров И. С.`` is a doctor). What must hold is that every
-    expected category the detector does claim is correct, and that the categories
-    it does claim are among those the manifest expects — a *new* category
-    appearing in a real document is a finding the dataset has not blessed, and it
-    belongs in the manifest before it belongs in production.
+    Subset, not equality, and the reason is the chain: ``_gate`` wires
+    :class:`PatternPIIDetector` alone, so the manifest's
+    ``medical_record_number`` and ``doctor_name`` are structurally unreachable
+    here — a 10-digit card number is deliberately not claimed by a digit-run
+    rule, and a two-token ``Петров И. С.`` is a doctor. Equality for the full
+    production chain is
+    ``tests/unit/pii/test_manifest_verification.py``'s criterion, and this
+    assertion is not a weaker version of it: it says the *pattern* half claims
+    nothing the manifest has not blessed. A new category surfacing from a
+    digit-run rule is a finding the dataset has not blessed, and it belongs in
+    the manifest before it belongs in production.
     """
     result = await _scan()
     expected = set(FIXTURE.expected_categories)
@@ -251,11 +258,20 @@ async def test_the_same_document_decides_differently_per_destination():
 
 @pytest.mark.asyncio
 async def test_a_secret_fixture_blocks_only_once_a_detector_sees_it():
-    """Phase 9 has no secret detector, so the fixture is not yet blocked.
+    """The malicious fixture is allowed here, and must be.
 
-    Stated explicitly rather than asserted as ``BLOCK`` because the plan
-    schedules the secret detector for Phase 13: this test is the tripwire that
-    fails *loudly* if a later phase leaves the malicious fixture allowed.
+    ``_gate`` is a one-detector chain with no
+    :class:`~app.pii.detectors.SecretPIIDetector`, and ``SECRET`` is the only
+    category the policy blocks — so with the detector absent there is no finding
+    that could produce a block, and asserting ``BLOCK`` here would be asserting
+    the one thing this chain cannot do. Asserting ``not BLOCK`` is the
+    complementary property: it pins the single-source rule, so a future policy
+    change that let some other category halt would fail here as a change to a
+    claim this file has no business making.
+
+    Where the block is verified, on the real chain: ``test_pipeline.py``'s
+    credential-marker end-to-end test, and
+    ``test_manifest_verification.py::test_only_a_credential_blocks_at_every_boundary``.
     """
     malicious = next(f for f in iter_pii_fixtures() if f.file.startswith("malicious/"))
     result = await _scan(malicious)
