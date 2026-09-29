@@ -46,6 +46,7 @@ from app.pii import (
     PIIScanStage,
     build_policy_context,
 )
+from app.pii.detectors import build_detector_chain
 from app.pii.fixtures import iter_pii_fixtures
 from app.pii.policy import PIIPolicyContext
 
@@ -208,8 +209,11 @@ async def test_the_fixture_declares_categories_the_detector_can_produce():
     :class:`PatternPIIDetector` alone, so the manifest's
     ``medical_record_number`` and ``doctor_name`` are structurally unreachable
     here — a 10-digit card number is deliberately not claimed by a digit-run
-    rule, and a two-token ``Петров И. С.`` is a doctor. Equality for the full
-    production chain is
+    rule, and a two-token ``Петров И. С.`` is a doctor. ``date_of_birth`` joined
+    them in M5 Phase 14: ``date_of_birth.numeric`` was removed because a bare ISO
+    date claims every service date on the page, so the category is now reachable
+    only through :class:`StructuredFieldPIIDetector`'s labelled rows. Equality for
+    the full production chain is
     ``tests/unit/pii/test_manifest_verification.py``'s criterion, and this
     assertion is not a weaker version of it: it says the *pattern* half claims
     nothing the manifest has not blessed. A new category surfacing from a
@@ -224,7 +228,23 @@ async def test_the_fixture_declares_categories_the_detector_can_produce():
     assert PIICategory.PERSON_NAME.value in found
     assert PIICategory.EMAIL.value in found
     assert PIICategory.PHONE.value in found
-    assert PIICategory.DATE_OF_BIRTH.value in found
+
+
+async def test_the_narrow_chain_blindly_misses_a_date_of_birth_the_full_chain_sees():
+    """The gap the assertion above gave up, pinned so it cannot widen unnoticed.
+
+    The manifest blesses ``date_of_birth`` for this fixture, and the full chain
+    does produce it — via a *label* or a patient's ФИО, never a bare date. This
+    test exists so that moving the claim back into the pattern layer would be
+    caught from the other side: the narrow chain would start seeing it again, and
+    that would mean some date is being claimed without evidence.
+    """
+    found = {summary.category.value for summary in (await _scan()).findings}
+    assert PIICategory.DATE_OF_BIRTH.value not in found
+
+    full = build_detector_chain(Settings(pii_fingerprint_secret=SECRET))
+    seen = full.detect_text(_document(FIXTURE.path.read_text(encoding="utf-8")).raw_text)
+    assert PIICategory.DATE_OF_BIRTH.value in {finding.category.value for finding in seen}
 
 
 # --- decisions through the gate --------------------------------------------

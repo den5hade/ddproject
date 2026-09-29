@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -20,8 +21,10 @@ from app.pii import (
     PIIScanStage,
     build_pii_meta_block,
 )
+from app.pii.exceptions import PIIRedactionError
 from app.pipeline import DocumentPipeline
 from app.pipeline.pipeline import (
+    PII_CANONICAL_GATE_JOB_TYPE,
     PII_DECISION_ERROR_CODES,
     PII_GATE_JOB_TYPE,
 )
@@ -691,6 +694,280 @@ async def test_identifiers_alone_do_not_block_even_with_a_real_gate(
     completed = _published(mock_publisher, "document.analysis.completed")
     assert completed.data["pii"]["decision"] in {"allow", "allow_with_warning"}
     assert completed.data["pii"]["findings_count"] > 0
+
+
+# --- contour 2: the canonical-output guard (M5 Phase 14) ----------------------
+#
+# Contour 1's tests above all feed the *marker* to the gate, which is correct and
+# insufficient: the observed leak never appeared in `marker.md` as a field the
+# gate declined to read. It appeared in `canonical.json` because the extraction
+# model copied a declined patient's name into free prose, and it then reached
+# `document_extractions.data` because `DocumentAnalysisCompleted.data` is dumped
+# verbatim. Everything below therefore keeps the marker clean and puts the PII in
+# the *extraction result*, which is where the leak actually was.
+
+CANONICAL_FIXTURES = Path("tests/fixtures/pii/canonical")
+LEAKED_PATIENT = "Кузнецова Александра Петровича"
+LEAKED_TICKET = "2026030710155500000001"
+
+
+def _leak_notes() -> dict[str, str]:
+    """The two observed payload shapes, rebuilt with invented values (§7 decision 9)."""
+    return {
+        path.name: json.loads(path.read_text(encoding="utf-8"))["fields"]["note"]
+        for path in sorted(CANONICAL_FIXTURES.rglob("*.json"))
+    }
+
+
+def _pipeline_with_extraction(
+    mock_s3, mock_publisher, note: str, document_date: str = "2026-03-05"
+):
+    """A pipeline whose extraction returns ``note`` — the leak's actual position.
+
+    The marker stays clean, so contour 1 allows the document through and the test
+    measures contour 2 rather than re-testing contour 1. The date is set because
+    the payload shape has one, and Phase 14 had to decide what happens to it.
+    """
+    pipeline = _pipeline(mock_s3, mock_publisher)
+    pipeline._ai_client.extract_canonical = AsyncMock(
+        return_value=ExtractionResult(
+            content=json.dumps(
+                {
+                    "type": "generic",
+                    "subtype": "generic",
+                    "language": "ru",
+                    "document_date": document_date,
+                    "fields": {"note": note},
+                },
+                ensure_ascii=False,
+            ),
+            usage={"input": 10, "output": 5, "total": 15},
+        )
+    )
+    return pipeline
+
+
+@pytest.mark.parametrize("note", sorted(_leak_notes().values()), ids=sorted(_leak_notes()))
+@pytest.mark.asyncio
+async def test_canonical_guard_sanitizes_all_three_sinks(mock_s3, mock_publisher, note):
+    """The leak is masked in ``canonical.json``, ``structured.md`` *and* the event.
+
+    One loop over three surfaces rather than three tests, because the failure this
+    phase exists to prevent is precisely the kind that a per-surface test would
+    not catch: the guard could be wired after ``canonical.model_dump`` and every
+    one of the three would then have to be asserted separately, and a fourth sink
+    added later would have been forgotten. As written, the sink list is the
+    assertion — a new surface has to be added here to be covered at all.
+
+    The marker is clean, so the only thing that can have masked this note is the
+    canonical guard.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    pipeline = _pipeline_with_extraction(mock_s3, mock_publisher, note)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    canonical_blob = json.loads(_uploaded_body(mock_s3, "/canonical.json"))
+    markdown = _uploaded_body(mock_s3, "/structured.md").decode("utf-8")
+    completed = _published(mock_publisher, "document.analysis.completed")
+
+    surfaces = {
+        "canonical.json": canonical_blob["fields"]["note"],
+        "structured.md": markdown,
+        "event data": completed.data["fields"]["note"],
+    }
+    for name, surface in surfaces.items():
+        assert LEAKED_PATIENT not in surface, f"patient name reached {name}"
+        assert LEAKED_TICKET not in surface, f"ticket number reached {name}"
+        assert "[PERSON_NAME]" in surface, f"{name} lost the note entirely"
+
+
+@pytest.mark.asyncio
+async def test_canonical_guard_keeps_the_clinician_and_the_service_date(mock_s3, mock_publisher):
+    """A masked-everything document would pass the test above. This one would not.
+
+    The narrowness claim needs its own test, and it needs a surface that renders
+    the value *outside* the note: ``render_document`` writes
+    ``canonical.document_date`` into the frontmatter, so a guard that redacted the
+    service date would publish ``document_date: '[DATE_OF_BIRTH]'`` and leave the
+    note looking perfectly sanitized. A clinician's name is the other half — it is
+    in the payload on purpose (IMPL_ARCH §3.1) and is ``ALLOW`` at every
+    destination, so masking it is a fidelity loss with no privacy benefit.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    note = _leak_notes()["synthetic-analysis-note-01.json"]
+    pipeline = _pipeline_with_extraction(mock_s3, mock_publisher, note)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    canonical_blob = json.loads(_uploaded_body(mock_s3, "/canonical.json"))
+    markdown = _uploaded_body(mock_s3, "/structured.md").decode("utf-8")
+
+    assert canonical_blob["document_date"] == "2026-03-05"
+    # YAML quotes the date, so the assertion is on the value the frontmatter
+    # carries rather than on an unquoted rendering that would never appear.
+    assert "document_date: '2026-03-05'" in markdown
+    assert "[DATE_OF_BIRTH]" not in markdown
+
+    assert "Петров И. С." in canonical_blob["fields"]["note"]
+    assert "(М, 39 лет)" in canonical_blob["fields"]["note"]
+    assert "гипертоническая болезнь I стадии" in canonical_blob["fields"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_the_extracted_payload_the_pipeline_holds_is_the_sanitized_one(
+    mock_s3, mock_publisher
+):
+    """One object, rebound before any consumer reads it.
+
+    The three-sink test above proves the *outputs* are clean. This proves the
+    reason they can be, which is a claim about ordering: the guard's return value
+    is assigned back over the extracted model, so ``render_document`` and the event
+    cannot be reading a pre-guard object. A test that only checked the outputs
+    would still pass if the rebinding were dropped *and* a later sanitize-a-copy
+    step were added, and the object in the middle would be the leaking one.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    pipeline = _pipeline_with_extraction(
+        mock_s3, mock_publisher, _leak_notes()["synthetic-registration-note-01.json"]
+    )
+    rebuilt: list[object] = []
+    original = pipeline._build_frontmatter
+
+    def record(*args, **kwargs):
+        rebuilt.append(args[1] if len(args) > 1 else None)
+        return original(*args, **kwargs)
+
+    pipeline._build_frontmatter = record
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert rebuilt, "expected the frontmatter to have been rendered"
+    assert LEAKED_PATIENT not in json.dumps(rebuilt[0].model_dump(mode="json"), ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_canonical_guard_blocks_a_secret_reaching_any_sink(mock_s3, mock_publisher):
+    """A credential the *model* invented is still a credential, and it halts.
+
+    Contour 1's block test proves the gate stops a credential in the marker. This
+    proves contour 2 stops one the extraction step produced, which is the case a
+    document gate structurally cannot see. The marker is clean, so the only
+    thing that can produce this ``BLOCK`` is the canonical guard.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    pipeline = _pipeline_with_extraction(
+        mock_s3,
+        mock_publisher,
+        f"Пациент: {LEAKED_PATIENT}. Ключ доступа: sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert not any(k.endswith("/canonical.json") for k in keys)
+    assert not any(k.endswith("/structured.md") for k in keys)
+
+    published_keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+    assert published_keys == ["document.processing.failed"]
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_CANONICAL_GATE_JOB_TYPE
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.BLOCK]
+
+    serialised = json.dumps([c.args[1] for c in mock_publisher.publish.call_args_list], default=str)
+    assert "sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in serialised
+
+
+@pytest.mark.asyncio
+async def test_a_canonical_halt_keeps_the_contour_1_artifact_and_its_failure_is_its_own(
+    mock_s3, mock_publisher
+):
+    """The halt is contour-2's, and the audit trail says so.
+
+    Two things are easy to get wrong and both are asserted here. First, the
+    ``pii_result.json`` from contour 1 is *still on disk*: it is the gate's own
+    audit record, it carries no patient text, and "no artifacts at all" would be
+    the wrong claim. Second, the failure is filed under its own job type, so a
+    document stopped after a successful source scan is not filed as a source-scan
+    problem and sent to the wrong queue.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _pipeline_with_extraction(
+        mock_s3,
+        mock_publisher,
+        "Ключ доступа: sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert [k for k in keys if k.endswith("/pii_result.json")]  # contour 1's audit record
+    assert not any(k.endswith("/canonical.json") for k in keys)
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_CANONICAL_GATE_JOB_TYPE
+    assert failure.job_type != PII_GATE_JOB_TYPE
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.BLOCK]
+
+
+@pytest.mark.asyncio
+async def test_a_clean_extraction_is_uploaded_unchanged(mock_s3, mock_publisher):
+    """A guard that rewrote every document would pass every test above.
+
+    This is the counterpart: a payload with nothing to redact goes out byte for
+    byte as the model built it, and the pipeline does not even rebuild the model —
+    the "skip the rebuild when nothing is REDACT" fast path exists so that a
+    document carrying only ``ALLOW``-actioned findings (a doctor, a clinic) cannot
+    fail a validation it never needed to pass.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    note = "Осмотр проведен. Врач: Петров И. С. Диагноз: гипертоническая болезнь I стадии."
+    pipeline = _pipeline_with_extraction(mock_s3, mock_publisher, note)
+
+    await pipeline.handle_structuring(_converted(event))
+
+    canonical_blob = json.loads(_uploaded_body(mock_s3, "/canonical.json"))
+    assert canonical_blob["fields"]["note"] == note
+
+
+@pytest.mark.asyncio
+async def test_a_failing_rebuild_halts_rather_than_uploading_the_original(mock_s3, mock_publisher):
+    """A sanitizer that raises is a halt, never a pass-through.
+
+    The tempting failure mode is a ``except`` that logs and continues, which would
+    upload the *unsanitized* object with a reassuring log line. The guard's
+    contract is that the exception reaches the pipeline's fail-closed branch, so
+    the test replaces the redactor with one that always fails and asserts that
+    nothing is uploaded at all.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = b"# clean marker"
+    pipeline = _pipeline_with_extraction(
+        mock_s3, mock_publisher, _leak_notes()["synthetic-registration-note-01.json"]
+    )
+
+    class ExplodingRedactor:
+        def redact(self, markdown, findings):
+            raise PIIRedactionError("no span for this value")
+
+    pipeline._pii_guard.redactor = ExplodingRedactor()
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert not any(k.endswith("/canonical.json") for k in keys)
+    assert not any(k.endswith("/structured.md") for k in keys)
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_CANONICAL_GATE_JOB_TYPE
+    assert failure.error_code == "PII_CANONICAL_GUARD_FAILED"
 
 
 class _StubGate:

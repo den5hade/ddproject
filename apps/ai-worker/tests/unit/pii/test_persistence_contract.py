@@ -255,16 +255,26 @@ def test_version_constants_are_importable_from_their_home_modules():
 
 
 def test_versions_are_the_m4_baseline_and_the_phase_9_minor_bump():
-    """Detector 1.1.0 (M5 Phase 9), policy 1.0.0 — the two lines move apart.
+    """Detector 1.2.0 (M5 Phase 14), policy 2.0.0 (M5 Phase 14) — two bumps, one phase.
 
     Phase 9 changed the *detector* contract (``detect_text`` added, pattern
-    layer implemented) and left the policy table byte-identical, so pinning both
-    back to ``1.0.0`` would be asserting that nothing happened. The policy
-    constant staying at ``1.0.0`` is the load-bearing half: it proves Phase 9
-    touched no rule.
+    layer implemented) for 1.0.0 → 1.1.0. Phase 14 then changed both lines, and
+    for the same underlying reason: it made a *redaction* claim real.
+
+    - Policy 1.0.0 → **2.0.0**, major by §4.8. Identity/contact/government/
+      medical-id go to ``REDACT`` at ``canonical``+``persistence`` — a
+      decision-rule change, the major line by definition.
+    - Detector 1.1.0 → **1.2.0**, minor, and not the additive minor §4.8 means.
+      A rule left and a rule arrived, but no required field changed and no enum
+      member was removed, so the major line does not apply; what applies is the
+      clause the whole constant exists for — a stored result must name a
+      detector whose behaviour reproduces it.
+
+    Asserted as two separate numbers because that is what they are: two
+    independently-bumped contracts stamped into the same artifact.
     """
-    assert DETECTOR_VERSION == "1.1.0"
-    assert PII_POLICY_VERSION == "1.0.0"
+    assert DETECTOR_VERSION == "1.2.0"
+    assert PII_POLICY_VERSION == "2.0.0"
 
 
 def test_scan_result_stamps_both_versions():

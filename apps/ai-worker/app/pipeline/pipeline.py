@@ -17,6 +17,7 @@ from contracts.events import (
     DocumentProcessingFailed,
     DocumentUploaded,
 )
+from pydantic import ValidationError
 from storage import (
     MARKDOWN_KIND_CANONICAL,
     MARKDOWN_KIND_CLASSIFICATION,
@@ -54,7 +55,11 @@ from app.messaging import (
 )
 from app.pii import (
     HALTING_DECISIONS,
+    PIIAction,
     PIIDecision,
+    PIIDecisionError,
+    PIIRedactionError,
+    build_canonical_guard,
     build_document_gate,
     build_pii_artifact,
     build_pii_meta_block,
@@ -67,6 +72,17 @@ logger = logging.getLogger("ai_worker")
 
 PII_GATE_JOB_TYPE = "pii_gate"
 """``job_type`` on the failure event a halting PII decision produces."""
+
+PII_CANONICAL_GATE_JOB_TYPE = "pii_canonical_guard"
+"""``job_type`` for a halting **contour-2** decision — a second value, not a reuse.
+
+Sharing :data:`PII_GATE_JOB_TYPE` would make the two contours indistinguishable
+in the failure queue, and the distinction is the useful one: ``pii_gate`` means
+the *source* document was refused before extraction, ``pii_canonical_guard``
+means extraction produced something that must not be stored. The second is an
+upstream prompt defect, and an operator triaging it needs to know that without
+cross-referencing which stage produced the failure.
+"""
 
 PII_DECISION_ERROR_CODES: dict[PIIDecision, str] = {
     PIIDecision.REVIEW: "PII_REVIEW_REQUIRED",
@@ -94,6 +110,19 @@ document, mid-request, after a scan that must be acted on.
 """
 
 
+def _has_redaction(guard_result) -> bool:
+    """Whether the guard result asks for any leaf to be masked.
+
+    Checked against ``actions`` rather than ``violations``, because those answer
+    different questions: a payload whose only finding is an ``ALLOW``-actioned
+    doctor name *has* violations and needs *no* rewrite. Going by violations
+    would push every such document through a dump → sanitize → re-validate
+    round trip it did not need, and a round trip that can fail (R4) would then be
+    able to fail a perfectly good document.
+    """
+    return PIIAction.REDACT in set(guard_result.actions.values())
+
+
 class DocumentPipeline:
     """Convert documents to markdown and structure it via an LLM."""
 
@@ -116,6 +145,11 @@ class DocumentPipeline:
         # PII_FINGERPRINT_SECRET raises before it consumes a single message
         # rather than failing every document with the same exception.
         self._pii_gate = build_document_gate(settings)
+        # Contour 2, same start-up choke point and same chain. Built from the
+        # same settings so the two contours cannot disagree about which
+        # detectors run — the Phase 11 subset defect (risk R13) in the place
+        # the observed leak actually is.
+        self._pii_guard = build_canonical_guard(settings)
 
     async def handle_converting(self, event: DocumentUploaded) -> None:
         """Handle PDF/image -> unstructured markdown conversion."""
@@ -245,6 +279,16 @@ class DocumentPipeline:
             canonical = build_canonical(prompt_key, raw)
             page_count = count_pages(unstructured_markdown)
 
+            # Contour 2. Runs after build_canonical and **replaces** the binding
+            # below, so all three consumers -- canonical.json, render_document
+            # and event data -- read the sanitized object. Sanitizing a copy, or
+            # running this after the dump, leaves at least one surface leaking
+            # while the guard's own tests stay green: the observed leak reached
+            # three sinks from one object, so fixing one is not fixing any.
+            canonical = await self._guard_canonical(event, canonical)
+            if canonical is None:
+                return
+
             classification_meta = self._build_classification_meta(classification)
             # One build, used for the frontmatter *and* the event payload, so
             # the two surfaces cannot disagree about what the gate decided.
@@ -339,6 +383,119 @@ class DocumentPipeline:
                 "markdown_structuring",
                 str(exc),
             )
+
+    async def _guard_canonical(self, event, canonical):
+        """Contour 2: inspect the built payload and return the model to persist.
+
+        Three outcomes, and the caller branches only on ``None``:
+
+        * **clean or nothing to redact** — the original object, returned by
+          identity. No copy, no re-validation, because a document with only an
+          ``ALLOW``-actioned finding (a doctor name, a clinic) must not be able
+          to fail a rebuild it did not need: a guard that can break a good
+          document is a guard whose halts stop meaning anything.
+        * **redacted** — a rebuilt model. Sanitization is a rebuild rather than
+          a mutation (§7 decision 7), so the returned object is a *different*
+          one, which is why this method's return value has to be assigned back
+          and a local copy cannot do.
+        * **must not be persisted** — ``None``, with the failure already
+          published. No canonical JSON, no structured markdown, no completed
+          event: the guard runs before all three. (The contour-1
+          ``pii_result.json`` is already on disk by this point and stays there —
+          it is the gate's own audit record and carries no patient text, so
+          "nothing was uploaded" would be the wrong claim to make here.)
+
+        Args:
+            event: The incoming event, for the document ids and the tenant-keyed
+                failure.
+            canonical: The model ``build_canonical`` produced. Never mutated.
+
+        Returns:
+            The model to persist, or ``None`` if the document is refused.
+
+        Raises:
+            Nothing. Every failure mode — a halting decision, a policy that
+            cannot decide, a re-validation the sanitized payload does not
+            satisfy — is turned into a published failure and a ``None``, because
+            a raise here would be caught by the handler above and reported as a
+            markdown-structuring error, losing the fact that a security control
+            stopped the document.
+        """
+        try:
+            payload = canonical.model_dump(mode="json", by_alias=True)
+            guard_result = self._pii_guard.evaluate_payload(payload)
+        except PIIDecisionError as exc:
+            # The guard could not produce a verdict at all. Fail closed, and
+            # fail with the contour-2 job type so it is not filed as a
+            # structuring bug.
+            return await self._fail_canonical_guard(event, str(exc))
+
+        if guard_result.decision in HALTING_DECISIONS:
+            logger.warning(
+                "pii_canonical_guard_halted document_id=%s decision=%s risk_level=%s "
+                "violations=%s reasons=%s",
+                event.document_id,
+                guard_result.decision.value,
+                guard_result.risk_level.value,
+                [(v.field_path, v.category.value) for v in guard_result.violations],
+                guard_result.reasons,
+            )
+            return await self._fail_canonical_guard(
+                event,
+                f"PII canonical guard {guard_result.decision.value}: {guard_result.reasons}",
+                error_code=PII_DECISION_ERROR_CODES[guard_result.decision],
+            )
+
+        if not _has_redaction(guard_result):
+            # Findings exist but nothing is REDACT-actioned — a doctor name, a
+            # clinic, a clinical fact. The payload persists as the model built
+            # it, and the record that anything was seen is the log line, not a
+            # rewrite of a document that did not need one.
+            if guard_result.violations:
+                logger.info(
+                    "pii_canonical_guard_recorded document_id=%s decision=%s violations=%s",
+                    event.document_id,
+                    guard_result.decision.value,
+                    [(v.field_path, v.category.value) for v in guard_result.violations],
+                )
+            return canonical
+
+        logger.info(
+            "pii_canonical_guard_sanitized document_id=%s decision=%s risk_level=%s violations=%s",
+            event.document_id,
+            guard_result.decision.value,
+            guard_result.risk_level.value,
+            [(v.field_path, v.category.value) for v in guard_result.violations],
+        )
+        try:
+            sanitized = self._pii_guard.sanitize(payload, guard_result)
+            return type(canonical).model_validate(sanitized)
+        except (ValidationError, PIIRedactionError) as exc:
+            # A mask the schema rejects, or a span the redactor could not
+            # resolve. Either way the sanitized object is not trustworthy, and
+            # the *unsanitized* one must never be written to close the gap --
+            # that fallback is the leak with extra steps. R4 anticipated this
+            # case, and it is a loud failure by design.
+            return await self._fail_canonical_guard(
+                event,
+                f"canonical sanitization failed closed: {exc}",
+                error_code="PII_CANONICAL_GUARD_FAILED",
+            )
+
+    async def _fail_canonical_guard(self, event, message: str, error_code: str = "PII_GUARD_ERROR"):
+        """Publish a contour-2 failure and return ``None`` for the caller."""
+        logger.warning(
+            "pii_canonical_guard_failed document_id=%s message=%s", event.document_id, message
+        )
+        await self._fail(
+            event.document_id,
+            event.document_version_id,
+            event.patient_id,
+            PII_CANONICAL_GATE_JOB_TYPE,
+            message,
+            error_code=error_code,
+        )
+        return None
 
     def _build_frontmatter(
         self,

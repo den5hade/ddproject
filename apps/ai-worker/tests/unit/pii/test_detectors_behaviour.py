@@ -30,8 +30,10 @@ from app.pii import (
     PatternPIIDetector,
     PIICategory,
     PIISource,
+    SecretPIIDetector,
+    StructuredFieldPIIDetector,
 )
-from app.pii.detectors import _PATTERNS
+from app.pii.detectors import _FIELDS, _PATTERNS
 from app.pii.masking import FINGERPRINT_PREFIX, FIXED_MASKS
 
 SECRET = "phase-9-behaviour-test-secret"
@@ -50,6 +52,18 @@ def detector() -> PatternPIIDetector:
     return PatternPIIDetector(fingerprint_secret=SECRET)
 
 
+@pytest.fixture
+def chain() -> CompositePIIDetector:
+    """The production chain, for the rules that do not live in the pattern layer."""
+    return CompositePIIDetector(
+        detectors=(
+            PatternPIIDetector(fingerprint_secret=SECRET),
+            StructuredFieldPIIDetector(fingerprint_secret=SECRET),
+            SecretPIIDetector(fingerprint_secret=SECRET),
+        )
+    )
+
+
 def _categories(detector: PatternPIIDetector, text: str) -> set[PIICategory]:
     return {finding.category for finding in detector.detect_text(text)}
 
@@ -65,21 +79,83 @@ def _categories(detector: PatternPIIDetector, text: str) -> set[PIICategory]:
         ("Полис ОМС: 2203945854001234", PIICategory.INSURANCE_NUMBER),
         ("+7 (495) 000-11-22", PIICategory.PHONE),
         ("o.smirnova@example.invalid", PIICategory.EMAIL),
-        ("Дата рождения: 1974-03-12", PIICategory.DATE_OF_BIRTH),
         ("Номер талона: 2026030709303211960141", PIICategory.TICKET_NUMBER),
     ],
 )
-def test_each_phase_9_category_fires_on_its_own_shape(detector, text, expected):
-    """The seven categories Phase 9 names, one real shape each.
+def test_each_phase_9_pattern_category_fires_on_its_own_shape(detector, text, expected):
+    """The six categories Phase 9's *pattern* layer names, one real shape each.
 
     The examples are the real marker's label/value structure and the real note's
     values, with no real patient data (plan §7 decision 9).
+
+    ``DATE_OF_BIRTH`` left this list in M5 Phase 14 — it is no longer a pattern
+    category at all, and ``test_date_of_birth_is_only_claimed_with_evidence`` plus
+    the ``Дата рождения: 1974-03-12`` case in the structured table below are where
+    it is asserted now.
     """
     assert expected in _categories(detector, text)
 
 
-def test_all_seven_named_patterns_have_a_rule_row():
-    """Prose in a docstring is not a rule; assert the table itself."""
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Дата рождения: 1974-03-12", PIICategory.DATE_OF_BIRTH),
+        ("Дата рождения: 12.03.1974", PIICategory.DATE_OF_BIRTH),
+        ("Д.Р. 1974-03-12", PIICategory.DATE_OF_BIRTH),
+        ("Пациент: Смирнова Ольга Ивановна, 1974-03-12", PIICategory.DATE_OF_BIRTH),
+        ("Пол/возр.: М / 12.03.1974", PIICategory.DATE_OF_BIRTH),
+    ],
+)
+def test_date_of_birth_fires_only_on_its_evidence(chain, text, expected):
+    """Every shape that still earns ``DATE_OF_BIRTH``, on the full chain.
+
+    Asserted through the full chain rather than one detector because the split is
+    the point: the claim lives in :class:`StructuredFieldPIIDetector` because only
+    that table has a label to require. Each parametrisation is a label or a
+    patient's ФИО in front of the date — never a date on its own.
+    """
+    assert expected in _categories(chain, text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-03-05",
+        "Дата забора: 2026-03-05",
+        "Дата приёма: 2026-03-05, кабинет 214",
+        "Анализ крови, 2026-03-05",
+        "Исследование выполнено 2026-03-05 на автоматическом анализаторе",
+    ],
+)
+def test_a_service_date_is_never_a_date_of_birth(chain, text):
+    """The regression that made this a Phase 14 change, stated as its own test.
+
+    Every one of these strings is a **service** date, and IMPL_ARCH §34 says so
+    out loud: a service date is not patient PII. Under the removed pattern rule
+    each of them was ``DATE_OF_BIRTH`` at 0.8, and Phase 14's escalation to
+    ``REDACT`` at ``canonical``+``persistence`` turned that into
+    ``document_date: '[DATE_OF_BIRTH]'`` in the published frontmatter.
+
+    The last two are the ones that keep the rule honest going forward: a date
+    that merely follows two words, or follows a month of prose, still has no
+    evidence that it is anybody's birthday. A rule broad enough to catch them
+    would also catch ``document_date``, which is the corruption this test exists
+    to prevent.
+    """
+    assert PIICategory.DATE_OF_BIRTH not in _categories(chain, text)
+
+
+def test_all_six_named_patterns_have_a_rule_row():
+    """Prose in a docstring is not a rule; assert the table itself.
+
+    Six, not seven: M5 Phase 14 removed ``date_of_birth.numeric``. A bare ISO
+    date claims ``DATE_OF_BIRTH`` with nothing said about *whose* date it is, and
+    Phase 14 made ``DATE_OF_BIRTH`` ``REDACT`` at ``canonical``+``persistence``,
+    so the rule stopped costing a masked line and started costing
+    ``canonical.document_date`` — a service date rendered into the frontmatter of
+    every document that has one. ``DATE_OF_BIRTH`` is now claimed by three
+    :data:`_FIELDS` rows that each have to earn it, which is the assertion below.
+    """
     covered = {row.category for row in _PATTERNS}
     assert {
         PIICategory.PERSON_NAME,
@@ -87,9 +163,27 @@ def test_all_seven_named_patterns_have_a_rule_row():
         PIICategory.INSURANCE_NUMBER,
         PIICategory.PHONE,
         PIICategory.EMAIL,
-        PIICategory.DATE_OF_BIRTH,
         PIICategory.TICKET_NUMBER,
     } <= covered
+    assert PIICategory.DATE_OF_BIRTH not in covered
+
+
+def test_date_of_birth_is_only_claimed_with_evidence():
+    """Every ``DATE_OF_BIRTH`` rule must be anchored; none of them may be a bare date.
+
+    The property is one-directional on purpose: an *unanchored* rule is the bug
+    this guards, and an anchored rule that stops matching is a recall loss the
+    manifest catches separately. Written as a table assertion rather than three
+    examples so a fourth, unanchored row cannot be added later.
+    """
+    rows = [row for row in _FIELDS if row.category is PIICategory.DATE_OF_BIRTH]
+    assert {row.name for row in rows} == {
+        "date_of_birth.labelled",
+        "date_of_birth.dr_abbrev",
+        "date_of_birth.after_patient_name",
+        "date_of_birth.demographic_shape",
+    }
+    assert all(row.name.count(".") >= 1 for row in rows)
 
 
 def test_clean_prose_yields_nothing(detector):

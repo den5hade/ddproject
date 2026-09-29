@@ -162,7 +162,14 @@ def test_default_policy_accessors_agree_with_the_rules():
 
 
 def test_policy_version_is_stamped_from_a_single_source():
-    assert PII_POLICY_VERSION == "1.0.0"
+    """``2.0.0`` since M5 Phase 14 — the persistence escalation is a decision change.
+
+    The version and the table are asserted to be the *same* object twice, so a
+    bump cannot land in one place and be forgotten in the other: a stored
+    ``PIIScanResult`` names the policy that produced it, and a name that lies is
+    worse than no name.
+    """
+    assert PII_POLICY_VERSION == "2.0.0"
     assert DEFAULT_POLICY.version == PII_POLICY_VERSION
 
 

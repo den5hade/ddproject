@@ -41,8 +41,38 @@ Destination overrides
 * ``UNKNOWN`` forces ``REVIEW`` for every category. Failing closed is the whole
   point of the enum: a destination nobody can reason about is not a destination
   that may receive a document.
-* ``PERSISTENCE`` uses the base table; the Phase 6 guard evaluates with
-  ``stage=CANONICAL`` and this destination.
+* ``PERSISTENCE`` uses the base table, **except** under ``stage=CANONICAL``, where
+  it escalates the same 18 categories to ``REDACT`` — see
+  :data:`REDACT_ON_PERSIST` and the section below.
+
+Why persistence is the exception to "presence never blocks"
+----------------------------------------------------------
+
+The base table is right for the *source* contour and wrong for *persistence*. At
+the source the question is "is this document sensitive", and a medical record is
+expected to name a patient — so ``ALLOW`` is correct and blocking would halt
+every document the platform exists to process. At ``stage=CANONICAL`` the
+question is different: the extraction model has *already* chosen what the
+artifact needs to carry, and the observed leak (ORDER §13.1) is precisely that it
+chose to carry the patient's full name and ticket number in free prose inside
+``fields.note``. The M4 table would ``ALLOW`` both, and the document would
+persist them.
+
+So ``stage=CANONICAL`` + ``destination=PERSISTENCE`` escalates the four
+patient-identifying groups to ``REDACT`` (:data:`REDACT_ON_PERSIST`). Three things
+deliberately do **not** escalate:
+
+* ``practitioner`` — a doctor and a clinic are not the patient (IMPL_ARCH §3.1),
+  and :func:`~app.pii.detectors` writes ``Врач: …`` into the payload;
+* ``AGE``/``GENDER``/``NATIONALITY`` — clinical facts that make the note legible
+  (ORDER §13.7). Masking them destroys the artifact to protect nothing;
+* ``secret`` — a credential is not made safer by redacting it, and ``REDACT``
+  would replace a *security event* with a tidy string.
+
+This is policy data, not a branch in the guard: one row set and one version
+bump, reversible without touching a single line of detection code
+(IMPL_ARCH §17). It is why the escalation costs a ``policy_version`` and not a
+code change.
 
 The redact-unavailable escalation
 ---------------------------------
@@ -107,12 +137,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CATEGORY_RISK",
+    "CLINICAL_FACTS",
     "DEFAULT_DESTINATION",
     "DEFAULT_POLICY",
     "DEFAULT_POLICY_VERSION",
     "PII_CATEGORY_GROUPS",
     "PII_POLICY_VERSION",
     "REDACT_ON_EXTERNAL",
+    "REDACT_ON_PERSIST",
     "RISK_ORDER",
     "DefaultPolicyEngine",
     "PolicyEngine",
@@ -123,8 +155,16 @@ __all__ = [
     "build_policy_context",
 ]
 
-DEFAULT_POLICY_VERSION = "1.0.0"
+DEFAULT_POLICY_VERSION = "2.0.0"
 """Version of the locked baseline table, stamped onto every scan result.
+
+``2.0.0`` is the persistence escalation (M5 Phase 14). It is **major** because it
+changes a decision: at ``stage=CANONICAL, destination=PERSISTENCE`` the
+identity/contact/government/medical-id categories move from ``ALLOW`` to
+``REDACT`` (:data:`REDACT_ON_PERSIST`), so a document that previously persisted a
+patient's name now persists a placeholder. A stored ``policy_version`` has to be
+able to say which of those two worlds produced it, which is the whole reason the
+constant exists.
 
 Single source of truth: :data:`PII_POLICY_VERSION` reads from
 ``DEFAULT_POLICY.version`` rather than repeating the literal, because two
@@ -198,6 +238,55 @@ because a doctor and a clinic are not the patient (IMPL_ARCH §3), and ``secret`
 excluded because redaction is the wrong tool for a leaked credential — it stays
 ``BLOCK``.
 """
+
+CLINICAL_FACTS: frozenset[PIICategory] = frozenset(
+    {PIICategory.AGE, PIICategory.GENDER, PIICategory.NATIONALITY}
+)
+"""Demographics that are the *content* of a medical document, not identifiers.
+
+Distinct from their absence in the risk table — these are real, low-risk PII
+categories that a detector deliberately finds (a bare ``39`` is an age as often
+as a lab value, which is exactly why §34 warns about false positives). What
+separates them is what *removing* them costs: mask the age in
+``"(М, 39 лет)"`` and the note stops saying how old the patient is, which is the
+clinical fact the document exists to carry (ORDER §13.7).
+
+So they are found, recorded, and kept. §7 decision 13 states the intended
+behaviour as one sentence, and the tension in it is worth quoting rather than
+paraphrasing: the age "must survive sanitization", and masking the ``GENDER``/
+``AGE`` *tokens* is "the intended behaviour". Those hold together only if the
+token is a finding and the fact is the sentence — and the resolution this phase
+takes is the conservative one, because a test can only assert what survives.
+``(М, 39 лет)`` survives whole.
+"""
+
+REDACT_ON_PERSIST: frozenset[PIICategory] = REDACT_ON_EXTERNAL - CLINICAL_FACTS
+"""The 15 categories redacted for a **canonical payload heading to storage** (§4.11).
+
+Identity + contact + government + medical-id (:data:`REDACT_ON_EXTERNAL`) **minus**
+:data:`CLINICAL_FACTS`. It is derived from the external set rather than restated
+as a fourth literal, because the two overrides answer the same question — "may
+this identifier leave the process?" — and a copied literal would be a second
+place to forget a category, with the failure mode being a category redacted in
+one destination and not the other.
+
+The subtraction is the whole difference, and it is a decision, not an oversight:
+
+* ``AGE``/``GENDER``/``NATIONALITY`` stay legible, because masking them destroys
+  the note (ORDER §13.7) and Phase 14's accept criterion is literally
+  ``(М, 39 лет)`` surviving;
+* ``practitioner`` is absent from both sets — a doctor and a clinic are not the
+  patient (IMPL_ARCH §3.1), and ``Врач: …`` is in the payload on purpose;
+* ``SECRET`` is absent and stays ``BLOCK``, because a credential is not made
+  safer by being replaced with a tidy ``[SECRET]``.
+
+What differs from the external override is the surrounding condition, and that
+is the point: ``REDACT_ON_EXTERNAL`` fires on ``destination=EXTERNAL_LLM`` at any
+stage, while this one fires on ``destination=PERSISTENCE`` **and**
+``stage=CANONICAL``. The source contour still ``ALLOW``s, because presence at the
+source must never block.
+"""
+
 
 CATEGORY_RISK: dict[PIICategory, PIIRiskLevel] = {
     PIICategory.SECRET: PIIRiskLevel.CRITICAL,
@@ -598,6 +687,14 @@ class DefaultPolicyEngine(PolicyEngineBase):
     ) -> PIIAction:
         """Resolve one finding's action: base rule, then override, then escalation.
 
+        ``stage`` participates only in the persistence override, and that is
+        deliberate asymmetry: ``destination`` alone cannot express the leak, since
+        a canonical payload and a source document can be headed for the same
+        place and must not resolve to the same action. Both overrides are
+        mutually exclusive on ``destination``, so their order relative to each
+        other is not load-bearing — a category that matched both would be the one
+        case this table cannot describe, and there is no such destination.
+
         Records why the action changed in ``reasons``, because the artifact is
         the only account of a review a human will ever see: a ``REVIEW`` that
         does not say "external destination, redaction unavailable" is a review
@@ -619,6 +716,17 @@ class DefaultPolicyEngine(PolicyEngineBase):
         ):
             action = PIIAction.REDACT
             reasons.append(f"{category.value}: external destination, redact before sending")
+
+        if (
+            context.destination is PIIDestination.PERSISTENCE
+            and context.stage is PIIScanStage.CANONICAL
+            and category in REDACT_ON_PERSIST
+            and action is not PIIAction.BLOCK
+        ):
+            action = PIIAction.REDACT
+            reasons.append(
+                f"{category.value}: canonical payload heading to persistence, redact before storing"
+            )
 
         if action is PIIAction.REDACT and not context.redaction_available:
             action = PIIAction.REVIEW

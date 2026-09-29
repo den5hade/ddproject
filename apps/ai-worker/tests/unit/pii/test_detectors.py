@@ -177,14 +177,16 @@ def test_composite_accepts_any_detector_count():
 
 
 def test_detector_version_is_the_locked_baseline():
-    """``1.1.0`` from M5 Phase 9 — the minor line, for a contract addition.
+    """``1.2.0`` from M5 Phase 14 — a rule left, so the minor line is spent.
 
-    The bump added ``detect_text`` to the protocol and gave the pattern layer an
-    implementation. It did not add, remove or re-label a category, so the major
-    line — "which findings are produced changed" — does not apply, and asserting
-    ``1.0.0`` here again would only re-freeze the constant.
+    The version's job is that a stored ``PIIScanResult`` can be read against the
+    detector that produced it. Phase 14 removed ``date_of_birth.numeric`` and
+    added ``date_of_birth.after_patient_name``, so a ``1.1.0`` result carrying a
+    date of birth is a verdict nobody can reproduce any more. That is the reason
+    for the bump; the reasoning, including why it is minor and not major, is on
+    the constant.
     """
-    assert DETECTOR_VERSION == "1.1.0"
+    assert DETECTOR_VERSION == "1.2.0"
 
 
 def test_finding_carries_the_detector_version_it_was_stamped_with():

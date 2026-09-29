@@ -251,27 +251,56 @@ def test_remediation_covers_every_decision():
     assert set(DECISION_REMEDIATION) == {d.value for d in PIIDecision}
 
 
-def test_remediation_mapping_matches_the_proposal():
-    assert DECISION_REMEDIATION["allow"] is PIIRemediation.WARN
-    assert DECISION_REMEDIATION["allow_with_warning"] is PIIRemediation.SANITIZE
-    assert DECISION_REMEDIATION["review"] is PIIRemediation.SANITIZE
-    assert DECISION_REMEDIATION["block"] is PIIRemediation.RETRY_THEN_FAIL
-
-
-def test_only_block_retries_and_fails():
-    retrying = {d for d, r in DECISION_REMEDIATION.items() if r is PIIRemediation.RETRY_THEN_FAIL}
-    assert retrying == {PIIDecision.BLOCK.value}
-
-
-def test_remediation_mapping_is_marked_unlocked():
-    """M4 names the actions; M5 owns the mapping. The module must not imply otherwise."""
+def test_remediation_mapping_is_confirmed_by_phase_14():
+    """M4 left the mapping open; Phase 14 closed it, and the module must say so."""
     from app.pii import canonical_guard
 
     doc = inspect.getdoc(canonical_guard) or ""
     mapping_doc = _constant_docstring(canonical_guard, "DECISION_REMEDIATION")
-    assert "Not locked" in mapping_doc
-    assert "M5" in mapping_doc
+    assert "M5 Phase 14" in mapping_doc
+    assert "M4's proposal was wrong" in mapping_doc
     assert "retry" in doc
+
+
+def test_both_halting_decisions_retry_and_fail():
+    """The correction Phase 14 made to M4's proposal, and the one that matters.
+
+    M4 mapped ``review`` to ``SANITIZE``; Phase 14 maps it to halt like ``block``.
+    A reviewer who wants to see the disagreement resolved should be able to read
+    the mapping and see both halting decisions on the same side of it.
+    """
+    retrying = {d for d, r in DECISION_REMEDIATION.items() if r is PIIRemediation.RETRY_THEN_FAIL}
+    assert retrying == {PIIDecision.REVIEW.value, PIIDecision.BLOCK.value}
+    assert all(
+        DECISION_REMEDIATION[decision] is not PIIRemediation.SANITIZE
+        for decision in (PIIDecision.REVIEW, PIIDecision.BLOCK)
+    )
+
+
+def test_the_retry_itself_is_not_implemented():
+    """``RETRY_THEN_FAIL`` names the outcome; no phase has built the retry.
+
+    Asserted against the module docstring rather than a flag, because the honest
+    way to prevent someone reading the constant as "extraction is re-run" is to
+    make the absence of the re-run visible at the definition.
+    """
+    from app.pii import canonical_guard
+
+    mapping_doc = _constant_docstring(canonical_guard, "DECISION_REMEDIATION")
+    assert "no retry is implemented" in mapping_doc
+    assert "RETRY_THEN_FAIL" in mapping_doc
+
+
+def test_the_sanitizing_decision_is_the_warned_one():
+    """``ALLOW_WITH_WARNING`` is the only decision that rewrites a payload.
+
+    The escalation (§4.11) resolves a redacted name to ``ALLOW_WITH_WARNING``, so
+    this is the mapping that the whole phase runs on — and it is a stronger
+    statement than "nothing else sanitizes", because it pins the pairing rather
+    than only the exclusions.
+    """
+    sanitizing = {d for d, r in DECISION_REMEDIATION.items() if r is PIIRemediation.SANITIZE}
+    assert sanitizing == {PIIDecision.ALLOW_WITH_WARNING.value}
 
 
 # --- protocol ----------------------------------------------------------------
@@ -327,7 +356,7 @@ def test_module_documents_the_numeric_blind_spot():
 def test_guard_imports_nothing_outside_the_package():
     from tests.support.pii_imports import PII_PACKAGE_DIR, module_names
 
-    allowed = {"__future__", "collections", "enum", "typing", "pydantic"}
+    allowed = {"__future__", "collections", "copy", "enum", "typing", "pydantic"}
     outside = {
         module
         for module in module_names(PII_PACKAGE_DIR / "canonical_guard.py")

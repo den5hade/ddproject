@@ -181,9 +181,10 @@ and stays dormant, because at the trusted internal destination the policy issues
 
 Since Phase 13 the detector chain is the whole chain, so the risk R13 is **closed**: a document
 carrying a credential reaches `BLOCK`, and `doctor_name` is detected by the labelled detector rather
-than left to a two-token ФИО rule that would also match `Уважаемые жильцы`. The two remaining
-limits are recorded rather than hidden: the canonical-guard contour is not wired, so the observed
-`canonical.json` leak is still open (Phase 14 is the phase that closes it); and the manifest's
+than left to a two-token ФИО rule that would also match `Уважаемые жильцы`. **Since Phase 14** the
+canonical-guard contour is wired and the observed `canonical.json` leak is **closed**: the sanitized
+model replaces `canonical` before all three consumers, and the two leak shapes are asserted clean at
+all three dump points. The remaining limit is recorded rather than hidden — the manifest's
 `expected_decision` is measured at one named boundary rather than all three, because §4.10's entry
 keys have no `destination` field (Deviation 1, Phase 13 status).
 
@@ -1579,7 +1580,14 @@ and would be a bigger decision than this phase. So the 663 above is the ai-worke
 where every Phase 13 change lives; the packages this phase does not touch (storage, messaging,
 account-api) are outside the measured set and are reported as such rather than counted.
 
-### Phase 14 — Canonical guard [ ] · **VS#2**
+### Phase 14 — Canonical guard [x] · **VS#2**
+
+**Status: implemented.** `apps/ai-worker/app/pii/canonical_guard.py`,
+`app/pii/policy.py`, `app/pii/detectors.py`, `app/pipeline/pipeline.py`; tests in
+`tests/unit/pii/test_canonical_guard_behaviour.py` (new, 31) and `tests/unit/pipeline/test_pipeline.py`
+(+8). Suite: 714 passed. `DETECTOR_VERSION` **1.2.0**, `PII_POLICY_VERSION` **2.0.0**. Two fixtures
+under `tests/fixtures/pii/canonical/` reproduce the two observed payload *shapes* with invented
+values (§7 decision 9); nothing was committed from `.dev/flow_upload_test/`.
 
 `CanonicalPIIInspector.inspect` implemented: `walk_string_leaves(payload)` → `detect_text` per leaf
 → `aggregate` **per leaf** → violations carrying `field_path`. **Escalation policy** (§4.11):
@@ -1598,6 +1606,33 @@ re-validation failure.
 Deps: Phases 9, 10, 11. (§45.15–16)
 **Accept:** `2b8fdd0d` and `fbbcb675` payloads produce a `canonical.json` and `structured.md` with
 no patient name, and an event `data` with no patient name — three tests, not one.
+
+**Deviations from the plan as written**, all decided during implementation:
+
+1. **§4.11's category set is 15, not 18.** The plan's prose said "the same 18 categories as
+   `REDACT_ON_EXTERNAL`", which is inconsistent with its own accept criterion and with ORDER §13.7:
+   `AGE`/`GENDER`/`NATIONALITY` are in the external set, and masking them destroys the note. The
+   implementable reading — `REDACT_ON_EXTERNAL - CLINICAL_FACTS` — is what shipped, because the
+   accept criterion (`(М, 39 лет)` survives) is testable and the 18 is not. The subtraction is
+   derived in code rather than restated, so there is no fourth literal to forget a category in.
+2. **`review` halts rather than sanitizes** (decision 16). M4's `DECISION_REMEDIATION` mapped
+   `review → SANITIZE`; both halting decisions now map to `RETRY_THEN_FAIL`, and **no retry is
+   implemented** in this phase.
+3. **`CanonicalPIIViolation` has no value-less `inspect` projection problem** — the plan's signature
+   `sanitize_canonical_payload(payload, violations, actions, redactor)` would not work: the redactor
+   needs the raw *span*, which a value-less violation does not carry. `inspect` keeps the locked
+   projection; `evaluate_payload` returns the richer result whose `findings_by_path` feeds
+   `sanitize`, and `Field(exclude=True)` keeps those values out of every dump.
+4. **The verdict is not written to a second artifact** (§4.7 offered both readings). The contour-2
+   verdict is recorded through the structured log and the failure event only — no
+   `pii_canonical.json`, no new storage kind, no migration.
+5. **`pattern.date_of_birth.numeric` was removed and `DETECTOR_VERSION` moved to 1.2.0** — the
+   unplanned change described in decision 17 and R7. Not in the plan: implementing §4.11 made the
+   escalation real, and a rule claiming every bare ISO date then destroyed `document_date`. The
+   §7 roadmap's `1.2.0 (Phase 16)` becomes `1.3.0`.
+6. **`document_date` is asserted to survive** in both the guard and pipeline suites. It is a service
+   date by construction of `BaseCanonical` and `render_document` writes it into the frontmatter, so
+   it is the field a `DATE_OF_BIRTH` false positive destroys first.
 
 ### Phase 15 — `EXTERNAL_LLM` destination + redaction on the extraction path [ ] · **VS#3**
 
@@ -1801,7 +1836,7 @@ event, no new DB table, no new migration**:
   "category_counts": { "person_name": 1, "date_of_birth": 1, "medical_record_number": 1,
                        "doctor_name": 1, "organization_name": 1, "address": 2 },
   "categories": ["person_name", "date_of_birth", "medical_record_number"],
-  "detector_version": "1.1.0",
+  "detector_version": "1.3.0",
   "policy_version": "2.0.0",
   "reasons": ["expected_medical_identity"],
   "warnings": []
@@ -1983,7 +2018,12 @@ detector output.
 `laboratory/`, `appointment/`, `prescription/`, `mixed/` directories (declared in
 `PII_FIXTURE_DIRECTORIES` but not yet created); `tests/support/pii_fixtures.py` delegate once the
 dataset grows past the trio — and past it again: Phase 13 adds `appointment/`, the `2b8fdd0d` shape,
-so the set is now clean/patient/appointment/malicious. `packages/storage/tests/test_keys.py` extended
+so the set is now clean/patient/appointment/malicious. **Phase 14 adds a second dataset**,
+`tests/fixtures/pii/canonical/{appointment,laboratory}/` — canonical *payloads* rather than markdown,
+because the leak did not happen in `marker.md`. It is deliberately outside the manifest: that
+manifest's `expected_decision` is a document-stage property and its loader enumerates markdown
+files, so canonical payloads are loaded directly by the guard and pipeline tests rather than
+inventing a second manifest schema. `packages/storage/tests/test_keys.py` extended
 in Phase 10.
 
 **Commands:**
@@ -2005,7 +2045,7 @@ make lint                                                      # uvx ruff check 
 uv run python -c "from app.pii import PIICategory, PIIScanResult, PIIGate, DETECTOR_VERSION, PII_POLICY_VERSION; print(DETECTOR_VERSION, PII_POLICY_VERSION)"
 ```
 
-Expected after Phase 14: `1.1.0 2.0.0`. M5 introduces **no** new runtime dependency (stdlib
+Expected after Phase 14: `1.2.0 2.0.0`. M5 introduces **no** new runtime dependency (stdlib
 `re`/`hmac`/`hashlib` + Pydantic only) and **no** migration.
 
 ---
@@ -2038,8 +2078,10 @@ M5 (pending — the numbering is IMPL_ARCH §45's 19-step sequence folded into p
     (§45.12).
 13. **Phase 13 — Marker-shape fixture + structured & secret detectors** [x] — `SECRET` detection is
     the only `BLOCK` source, so it must exist before the guard is trusted (§45.13–14).
-14. **Phase 14 — Canonical guard** [ ] · VS#2 — the phase that closes the observed leak. After
-    this, the milestone's purpose is met even if 15–17 slip (§45.15–16).
+14. **Phase 14 — Canonical guard** [x] · VS#2 — the phase that closes the observed leak. After
+    this, the milestone's purpose is met even if 15–17 slip (§45.15–16). Shipped with six recorded
+    deviations, one of them unplanned: `date_of_birth.numeric` removed and `DETECTOR_VERSION` at
+    **1.2.0** because §4.11's escalation made its recall claim load-bearing (R7, decision 17).
 15. **Phase 15 — `EXTERNAL_LLM` destination + redaction** [ ] · VS#3 — dormant until a second
     provider exists; safe to defer without regressing anything (§45.17).
 16. **Phase 16 — NER detector** [ ] · P1 — widens coverage, never overrides (§45.18).
@@ -2181,6 +2223,21 @@ phase's Implementation Status block.
   calibration guess destructive. `REVIEW` halts for a human.
 - **15. NER is P1 and may stay off.** It is the least deterministic detector and the most expensive;
   M6 may decide the pattern + structured coverage is sufficient. Nothing else in M5 depends on it.
+- **16. Contour 2 halts on `REVIEW` as well as `BLOCK`.** M4's `DECISION_REMEDIATION` table mapped
+  `review → SANITIZE`, and Phase 14 changed that to `RETRY_THEN_FAIL` for both. The reason is
+  decision 14: a document at `REVIEW` is one a human must look at, and rewriting it instead would
+  mean the thing a human was asked to review is not the thing that was published. The name
+  `RETRY_THEN_FAIL` is the *outcome*; **no retry is implemented** — there is no re-extraction path
+  in this phase, and a constant that reads as "extraction is re-run" is corrected by a test that
+  says so at the definition.
+- **17. A date is not a `DATE_OF_BIRTH` unless something says whose it is.** Phase 14's escalation
+  turned `pattern.date_of_birth.numeric` — which claimed *every* bare `YYYY-MM-DD` — into data
+  loss, because `canonical.document_date` is a service date (IMPL_ARCH §34) that
+  `render_document` writes into the frontmatter. The rule is removed and the claim moves to three
+  anchored `_FIELDS` rows: a label, the `д.р.` abbreviation, and a patient's ФИO immediately in
+  front of the date. Recall given up, deliberately: a date of birth in the *declined* construction
+  (`для пациента Смирнова Ольга Ивановна, 1974-03-12`) is no longer found, because there is no
+  field label to anchor to. See R7.
 
 ### Risks (mitigations in place)
 
@@ -2215,7 +2272,16 @@ phase's Implementation Status block.
 - **R7 — false positives degrading extraction** (IMPL_ARCH §34): e.g. `Москва` as address vs clinic
   address; a three-word capitalised run as a ФИО. Mitigated by `ALLOW` being the default for
   identity/contact, by `masked_value` + offsets + `detector` in every finding (so M6 can triage),
-  and by `REVIEW` never auto-redacting.
+  and by `REVIEW` never auto-redacting. **Phase 14 turned this from a fidelity risk into a data-loss
+  risk** and it is the phase's one unplanned change: once `DATE_OF_BIRTH` became `REDACT` at
+  `canonical`+`persistence`, a detector rule that claims every bare ISO date stopped costing a
+  masked line and started destroying `document_date` — a typed envelope field the frontmatter
+  renders verbatim. The rule is removed and the category is claimed only by anchored rules
+  (decision 17), with `test_a_service_date_is_never_a_date_of_birth` and
+  `test_canonical_guard_keeps_the_clinician_and_the_service_date` as the tripwires. The general
+  lesson, recorded because it generalises: **escalating a category makes its detector's recall
+  claims load-bearing in a way they were not before**, and any rule claiming a whole document's
+  dates is a rule about service dates too.
 - **R8 — fingerprint treated as a safe hash.** Mitigated by locking HMAC+salt, keeping fingerprints
   out of logs and the persisted block, and asserting both.
 - **R9 — a `REVIEW` decision with no consumer.** `REVIEW` halts the document and there is no human
@@ -2271,7 +2337,7 @@ independently, mirroring `classifier_version` (currently `2.1.0`).
 M5 version roadmap:
 
 ```text
-DETECTOR_VERSION    1.0.0 ──(Ph 9, additive detect_text)──▶ 1.1.0 ──(Ph 16, NER)──▶ 1.2.0
+DETECTOR_VERSION    1.0.0 ──(Ph 9, additive detect_text)──▶ 1.1.0 ──(Ph 14)──▶ 1.2.0 ──(Ph 16, NER)──▶ 1.3.0
 PII_POLICY_VERSION  1.0.0 ──(Ph 14, persistence escalation)▶ 2.0.0 ──(Ph 17, thresholds)▶ 2.1.0
 ```
 
@@ -2280,6 +2346,15 @@ destination=persistence`, identity/contact/government/medical_id move from `allo
 (§4.11). A document that would previously have been persisted with a name in it is now masked. That
 is the milestone's entire point, and it is exactly the change a stored `policy_version` exists to
 make interpretable.
+
+`1.1.0 → 1.2.0` is a **deviation from the roadmap this section originally stated**, where Phase 16's
+NER was the step that earned `1.2.0`. Phase 14 removed `date_of_birth.numeric` and added
+`date_of_birth.after_patient_name` (§14.4, "a date that is only a date"), which is a rule leaving
+and a rule arriving: not the additive minor §4.8 describes, and not major either, since no required
+field changed and no enum member was removed. What settles it is the reason the constant exists at
+all — a stored `PIIScanResult` must name a detector whose behaviour reproduces it, and a `1.1.0`
+result carrying a date of birth nobody can re-derive is a historical verdict that has become a lie.
+Phase 16's NER is still additive; it simply earns `1.3.0`.
 
 ### Conventions
 

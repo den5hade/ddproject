@@ -61,12 +61,12 @@ have failed by construction. Both remaining tables —
 tests assert the tables and their class docstrings agree, so a rule can no longer
 be added without saying which category it serves.
 
-``DETECTOR_VERSION`` stays ``1.1.0`` through this phase: §4.8 makes a *minor*
-bump an **additive** change (new optional fields, new ``PIICategory`` values) and
-Phase 13 adds neither — it fills in the categories the locked table already
-declared. §8's acceptance smoke check ("expected after Phase 14: ``1.1.0
-2.0.0``") is the same fact stated as a number, and Phase 16's NER is the additive
-step that earns ``1.2.0``.
+``DETECTOR_VERSION`` moves to ``1.2.0`` in this phase: ``date_of_birth.numeric``
+is **removed** from :data:`_PATTERNS` and ``date_of_birth.after_patient_name``
+is added to :data:`_FIELDS` (§4.11). A rule leaving is not an additive change, so
+the minor is spent here rather than on Phase 16's NER; the reasoning, including
+the recall the swap gives up, is on the constant. §8's acceptance smoke check
+("expected after Phase 14: ``1.2.0 2.0.0``") is the same fact stated as a number.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ if TYPE_CHECKING:
     from app.classification.normalize import NormalizedDocument
     from app.config.settings import Settings
 
-DETECTOR_VERSION = "1.1.0"
+DETECTOR_VERSION = "1.2.0"
 """Contract version of the detector layer, stamped into every finding.
 
 Independent of ``PII_POLICY_VERSION`` (mirroring ``classifier_version``): a
@@ -98,8 +98,22 @@ produced it, so a historical verdict stays interpretable.
 detector protocol gained ``detect_text`` and a concrete pattern detector exists
 where only a stub did. **M5 Phase 13 does not move it** — the two new detectors
 populate the categories the locked table already declared, and §4.8 admits no
-new ``PIICategory`` value, so the additive line is not spent. Phase 16's NER is
-the additive step that earns ``1.2.0`` (§7's roadmap).
+new ``PIICategory`` value, so the additive line is not spent.
+
+**``1.2.0`` in M5 Phase 14**, and this one is the §4.8 rule being applied where it
+is least comfortable. The phase removed ``date_of_birth.numeric`` and added
+``date_of_birth.after_patient_name``: a rule leaves and a rule arrives, so neither
+half of the rule is satisfied — *minor* is additive, and this is not; *major* is
+for required-field changes, enum removals and decision-rule changes, and this is
+none of those. What settles it is the test §4.8 actually cares about: a stored
+``PIIScanResult`` names the detector version that produced it, so a historical
+verdict stays interpretable. A ``1.1.0`` result that carries a date of birth
+somebody can no longer reproduce is a historical verdict that has become a lie,
+and the honest cost of that is a minor bump.
+
+The minor is therefore *not* spent on Phase 16's NER as §7's roadmap assumed, and
+the roadmap's ``1.1.0 → 1.2.0 (Phase 16)`` becomes ``1.2.0 → 1.3.0``. NER is still
+additive; it simply earns the next number.
 """
 
 PII_FINGERPRINT_SECRET_ENV = "PII_FINGERPRINT_SECRET"
@@ -269,6 +283,8 @@ aggregator. It is not cross-category suppression: a 22-digit ticket is still
 claimed, and the 28-digit API key is still misread as one (see the manifest's
 notes on ``malicious/synthetic-injection-01.md``).
 """
+
+
 def _standalone_digits(pattern: str) -> str:
     """Wrap ``pattern`` in boundaries that keep it from matching inside a token.
 
@@ -286,7 +302,6 @@ def _standalone_digits(pattern: str) -> str:
     says "standalone token" instead of "adjacent digits".
     """
     return rf"(?<![\d\w])(?:{pattern})(?![\d\w])"
-
 
 
 _NAME_BOUND_WORDS = (
@@ -433,12 +448,6 @@ _PATTERNS: tuple[_Pattern, ...] = (
         name="phone.e164",
         regex=re.compile(r"(?<![\d+])\+\d[\d\s()-]{9,17}\d"),
         confidence=0.9,
-    ),
-    _Pattern(
-        category=PIICategory.DATE_OF_BIRTH,
-        name="date_of_birth.numeric",
-        regex=re.compile(r"(?<![\d-])\d{4}-\d{2}-\d{2}(?![\d-])"),
-        confidence=0.8,
     ),
     _Pattern(
         category=PIICategory.TICKET_NUMBER,
@@ -802,6 +811,61 @@ _TICKET_VALUE = r"(?<!\d)\d{6,}(?!\d)"
 _POLICY_VALUE = r"(?<![\d-])\d{16}(?![\d-])"
 _SNILS_VALUE = r"(?<!\d)\d{3}-\d{3}-\d{3}\s*\d{2}"
 _DOB_VALUE = r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)"
+_ISO_DATE_VALUE = r"(?<![\d-])\d{4}-\d{2}-\d{2}(?![\d-])"
+"""An ISO ``YYYY-MM-DD`` date — the *shape*, with nothing said about whose date it is.
+
+The shape on its own is not evidence of a birth date, and Phase 14 learned that
+the expensive way: this was once a :data:`_PATTERNS` row (``date_of_birth.numeric``,
+0.8) that claimed **every** bare ISO date, and once ``DATE_OF_BIRTH`` became
+``REDACT`` at ``canonical``+``persistence`` that turned the claim into data loss —
+``canonical.document_date`` is a *service* date by construction of
+``BaseCanonical``, and the structured-markdown frontmatter is rendered from it, so
+every document with an ISO date would have been published with
+``document_date: '[DATE_OF_BIRTH]'``. A PII control must not corrupt a field that
+was never PII.
+
+So the shape stays and the *claim* moves to two rules that have to earn it, both
+in :data:`_FIELDS` and both anchored on evidence the shape does not carry:
+``date_of_birth.labelled`` (a label, accepting either spelling) and
+``date_of_birth.after_patient_name`` (the patient's ФИО immediately in front of
+the date). The digit guards are the ones the removed pattern row used, so a
+labelled ISO birth date and the old rule produce the same ``value`` and
+aggregation collapses them instead of double-counting.
+
+The recall this trades away is stated rather than hidden: a date of birth in the
+**declined** construction (``для пациента Смирнова Ольга Ивановна, 1974-03-12``)
+is no longer a finding, because there is no field label to anchor to and the
+label is the entire mechanism. Its ФИО still is — :data:`_NAME_LABELS` owns that
+construction — and a declined booking is the shape that carries the least
+demographic weight. The alternative was keeping a rule that claims every date on
+the page, which is the one that corrupts real output.
+"""
+"""An ISO ``YYYY-MM-DD`` date — the *shape*, with nothing said about whose date it is.
+
+The shape on its own is not evidence of a birth date, and Phase 14 learned that
+the expensive way: this was once a :data:`_PATTERNS` row (``date_of_birth.numeric``,
+0.8) that claimed **every** bare ISO date, and once ``DATE_OF_BIRTH`` became
+``REDACT`` at ``canonical``+``persistence`` that turned the claim into data loss —
+``canonical.document_date`` is a *service* date by construction of
+``BaseCanonical``, and the structured-markdown frontmatter is rendered from it, so
+every document with an ISO date would have been published with
+``document_date: '[DATE_OF_BIRTH]'``. A PII control must not corrupt a field that
+was never PII.
+
+So the shape stays and the *claim* moves to a rule that has to earn it:
+:data:`_FIELDS`' ``date_of_birth.after_patient_name``, which only matches when a
+patient's ФИО is right there in front of the date. The digit guards are the ones
+the removed pattern row used, kept so the two rules produce the same ``value``
+and aggregation collapses them instead of double-counting.
+
+The recall this trades away is stated rather than hidden: a date of birth in the
+**declined** construction (``для пациента Смирнова Ольга Ивановна, 1974-03-12``)
+is no longer a finding, because there is no field label to anchor to and the
+label is the entire mechanism. Its ФИО still is — :data:`_NAME_LABELS` owns that
+construction — and a declined booking is the shape that carries the least
+demographic weight. The alternative was keeping a rule that claims every date on
+the page, which is the one that corrupts real output.
+"""
 _PHONE_VALUE = r"(?<![\d+])\+\d[\d\s()\-]{9,17}\d"
 _EMAIL_VALUE = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
 _AGE_VALUE = r"(?<!\d)\d{1,3}(?!\d)\s*(?:лет|года|год|г\.)"
@@ -908,6 +972,21 @@ date of birth and the age are three readings of one cell, and a change to the
 cell's spelling is a change to all three or to none.
 """
 
+_PATIENT_FIELD_LABEL = r"ф\.\s*и\.\s*о\.|фамилия[,\s]+имя|пациент\w*|больн\w*|фио"
+"""Labels that introduce **the patient's** ФИО as a field value, colon required.
+
+Named once for the same reason as :data:`_DEMOGRAPHIC_PREFIX`, and for a reason
+that has since grown: two rows need it — ``person_name.labelled``, which claims
+the ФИО itself, and ``date_of_birth.after_patient_name``, which claims the ISO
+date that follows it. Those two are one reading of one cell, and a ФИО whose
+date of birth is not found is a patient left half-identified in the output.
+
+The label carries a colon, unlike :data:`_NAME_LABELS`: this table reads
+*fields*, and a field has a label with a colon. The declined-construction forms
+(``для пациента``, no colon) are deliberately not here — they belong to
+:data:`_PATTERNS`, which is the case-folded contour and scans whole prose.
+"""
+
 
 _FIELDS: tuple[_Field, ...] = (
     _field(
@@ -921,16 +1000,32 @@ _FIELDS: tuple[_Field, ...] = (
     _field(
         PIICategory.PERSON_NAME,
         "person_name.labelled",
-        r"ф\.\s*и\.\s*о\.|фамилия[,\s]+имя|пациент\w*|больн\w*|фио",
+        _PATIENT_FIELD_LABEL,
         _NAME_VALUE,
         0.95,
     ),
     _field(
         PIICategory.DATE_OF_BIRTH,
+        "date_of_birth.after_patient_name",
+        rf"(?:{_PATIENT_FIELD_LABEL}){_FIELD_GAP}{_NAME_VALUE},\s*",
+        _ISO_DATE_VALUE,
+        0.85,
+        gap=_NO_GAP,
+    ),
+    _field(
+        PIICategory.DATE_OF_BIRTH,
         "date_of_birth.labelled",
         r"дата\s+рождения|д\.\s*р\.|рождени\w*",
-        _DOB_VALUE,
+        rf"(?:{_DOB_VALUE}|{_ISO_DATE_VALUE})",
         0.95,
+    ),
+    _field(
+        PIICategory.DATE_OF_BIRTH,
+        "date_of_birth.dr_abbrev",
+        r"д\.\s*р\.[\s*]*",
+        rf"(?:{_DOB_VALUE}|{_ISO_DATE_VALUE})",
+        0.9,
+        gap=_NO_GAP,
     ),
     _field(
         PIICategory.DATE_OF_BIRTH,
