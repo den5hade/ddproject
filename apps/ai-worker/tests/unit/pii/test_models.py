@@ -32,9 +32,13 @@ from app.pii import (
 )
 from pydantic import ValidationError
 from tests.support.pii_imports import (
+    PII_PACKAGE_DIR,
+    RUNTIME_EDGE_EXEMPT,
     imports_forbidden_domains,
     imports_forbidden_infrastructure,
     pii_source_files,
+    runtime_edge_exempt,
+    runtime_edge_guarded_files,
     unexpected_type_only_imports,
 )
 
@@ -371,10 +375,33 @@ def test_pii_package_imports_no_classification_or_canonical():
     (``NormalizedDocument``), so the scan became an AST walk that classifies
     imports: runtime imports must be clean, type-only imports are checked
     separately by ``test_pii_package_type_only_imports_are_narrow``.
+
+    The evaluation CLI is exempt from this one guard (see
+    ``RUNTIME_EDGE_EXEMPT`` for why, and
+    ``test_the_runtime_edge_exemption_is_exactly_the_harness`` for the bound).
     """
-    for path in pii_source_files():
+    for path in runtime_edge_guarded_files():
         offenders = imports_forbidden_domains(path)
         assert not offenders, f"{path.name} must not import domain types at runtime: {offenders}"
+
+
+def test_the_runtime_edge_exemption_is_exactly_the_harness():
+    """One file name, and it is the offline CLI — not a pattern or a package.
+
+    Stated as its own test so widening the exemption is a visible edit here
+    rather than a silent one inside a loop over the package.
+    """
+    exempt = {path.name for path in pii_source_files() if runtime_edge_exempt(path)}
+    assert exempt == RUNTIME_EDGE_EXEMPT == {"evaluate.py"}
+    assert runtime_edge_guarded_files(), "the guard must still cover most of the package"
+    assert len(runtime_edge_guarded_files()) == len(pii_source_files()) - 1
+
+
+def test_the_evaluation_harness_still_imports_no_infrastructure():
+    """The exemption covers the two runtime-edge guards only, never this one."""
+    harness = PII_PACKAGE_DIR / "evaluate.py"
+    assert harness.exists()
+    assert not imports_forbidden_infrastructure(harness)
 
 
 def test_pii_package_type_only_imports_are_narrow():

@@ -25,6 +25,33 @@ from pathlib import Path
 PII_PACKAGE_DIR = Path(__file__).resolve().parents[2] / "app" / "pii"
 """``apps/ai-worker/app/pii`` — every ``*.py`` in it is under the guards."""
 
+RUNTIME_EDGE_EXEMPT = frozenset({"evaluate.py"})
+"""Modules exempt from the two **runtime-edge** guards, and only those.
+
+``app/pii/evaluate.py`` is the offline evaluation CLI (EVAL_IMPL_PLAN Phase 1,
+mandated entry point ``python -m app.pii.evaluate`` with no arguments). Two
+requirements of that entry point are irreconcilable with a package-wide ban:
+a blank ``Settings`` has to be constructed from ``app.config``, and
+``.md`` fixtures have to be normalized by the one normalizer that
+``app.classification.normalize`` owns. The CLI is not a library the pipeline
+imports, and the property the ban exists to protect is asserted *end to end* and
+independently of this list by
+``test_settings_boundary.py::test_app_pii_imports_with_app_config_blocked``,
+which imports ``app.pii`` in a subprocess with ``app.config`` and ``messaging``
+blocked. That test still passes with the harness present, because
+``app/pii/__init__.py`` does not import ``evaluate``: the gate itself stays
+importable with no environment at all.
+
+The exemption is deliberately narrow — a file *name*, not a package, and not a
+substring — and ``test_the_runtime_edge_exemption_is_exactly_the_harness``
+fails if a second module ever joins it. The infrastructure guard is **not**
+exempted for anyone: the harness may not reach S3, RabbitMQ or storage either.
+
+The alternative — hiding the import in a function body — was rejected: the AST
+walk would still see it, and suppressing it deliberately would make the control
+lie about what it covers.
+"""
+
 FORBIDDEN_INFRA_SUBSTRINGS = ("s3", "rabbit", "storage")
 """Substrings that mark a persistence/messaging import (mirrors the M1 guard)."""
 
@@ -124,6 +151,16 @@ def _imported_names(tree: ast.Module, type_only: bool) -> set[tuple[str, str]]:
 def pii_source_files() -> list[Path]:
     """Every ``app/pii/*.py`` file, so the guards cover the whole package."""
     return sorted(PII_PACKAGE_DIR.glob("*.py"))
+
+
+def runtime_edge_exempt(path: Path) -> bool:
+    """Whether ``path`` is exempt from the two runtime-edge guards."""
+    return path.name in RUNTIME_EDGE_EXEMPT
+
+
+def runtime_edge_guarded_files() -> list[Path]:
+    """The ``app/pii/*.py`` files the runtime-edge guards apply to."""
+    return [path for path in pii_source_files() if not runtime_edge_exempt(path)]
 
 
 def runtime_imports(path: Path) -> set[tuple[str, str]]:

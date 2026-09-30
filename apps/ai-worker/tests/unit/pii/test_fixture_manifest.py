@@ -25,28 +25,38 @@ import json
 
 import pytest
 from app.pii.fixtures import (
-    FIXTURES_DIR,
-    MANIFEST_PATH,
+    CONTOUR_CANONICAL,
+    CONTOUR_DOCUMENT,
     PII_FIXTURE_DIRECTORIES,
+    SYNTHETIC_FIXTURES_DIR,
+    SYNTHETIC_MANIFEST_PATH,
     PIIFixture,
+    iter_canonical_fixtures,
     iter_pii_fixtures,
 )
-from app.pii.models import PIICategory, PIIDecision, PIIRiskLevel
+from app.pii.models import PIICategory, PIIDecision, PIIRiskLevel, PIISource
 
-MANIFEST = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+MANIFEST = json.loads(SYNTHETIC_MANIFEST_PATH.read_text(encoding="utf-8"))
 FIXTURES = iter_pii_fixtures()
 
 # §4.10 fixes the entry keys: file, source, expected_categories,
 # expected_decision, expected_risk_level, with contains_secret optional.
+# M6 (Phase 1) adds id, contour and expected_detector_source. `contour` is
+# required rather than derived from the extension because the two corpora use
+# different extensions, so a payload in the document section has to be a
+# manifest bug the loader rejects rather than a silently different evaluation.
 REQUIRED_ENTRY_KEYS = {
     "file",
     "source",
     "expected_categories",
     "expected_decision",
     "expected_risk_level",
+    "id",
+    "contour",
+    "expected_detector_source",
 }
-OPTIONAL_ENTRY_KEYS = {"contains_secret"}
-# Tolerated but not required by §4.10 — a future M5 entry may carry them, and
+OPTIONAL_ENTRY_KEYS = {"contains_secret", "derived_from", "provenance"}
+# Tolerated but not required by §4.10 — a future entry may carry them, and
 # failing an unknown key is how a manifest silently grows a second contract.
 ALLOWED_EXTRA_KEYS: set[str] = set()
 
@@ -55,13 +65,13 @@ ALLOWED_EXTRA_KEYS: set[str] = set()
 
 
 def test_manifest_exists_at_the_planned_path():
-    assert MANIFEST_PATH.name == "manifest.json"
-    assert MANIFEST_PATH.parent.name == "pii"
-    assert MANIFEST_PATH.parent == FIXTURES_DIR
+    assert SYNTHETIC_MANIFEST_PATH.name == "manifest.json"
+    assert SYNTHETIC_MANIFEST_PATH.parent.name == "pii"
+    assert SYNTHETIC_MANIFEST_PATH.parent == SYNTHETIC_FIXTURES_DIR
 
 
-def test_manifest_top_level_keys_are_version_notes_fixtures():
-    assert set(MANIFEST) == {"version", "notes", "fixtures"}
+def test_manifest_top_level_keys_are_version_notes_fixtures_canonical():
+    assert set(MANIFEST) == {"version", "notes", "fixtures", "canonical_fixtures"}
 
 
 def test_manifest_version_is_semver():
@@ -196,6 +206,85 @@ def test_every_source_is_real_or_synthetic():
         assert fixture.source in {"real", "synthetic"}
 
 
+# --- M6: ids, contours and detector sources -------------------------------
+
+
+def test_every_entry_has_a_unique_id():
+    # Report rows are keyed by id, so a duplicate would silently merge two
+    # fixtures into one row and halve a denominator.
+    ids = [f.id for f in FIXTURES] + [f.id for f in iter_canonical_fixtures()]
+    assert len(set(ids)) == len(ids)
+
+
+def test_document_entries_declare_the_document_contour():
+    # The two sections describe different boundaries, so a payload filed under
+    # `fixtures` would be scored at the source contour and compared against
+    # expectations measured at persistence — wrong without ever raising.
+    assert all(f.contour == CONTOUR_DOCUMENT for f in FIXTURES)
+    assert all(f.contour == CONTOUR_CANONICAL for f in iter_canonical_fixtures())
+
+
+def test_contour_agrees_with_the_file_extension():
+    for fixture in iter_pii_fixtures():
+        assert fixture.path.suffix == (".md" if fixture.contour == CONTOUR_DOCUMENT else ".json")
+
+
+def test_every_entry_declares_its_detector_source():
+    # The machine-checkable form of "the structured detector went silent on a
+    # real layout": the expected set is per category, not per fixture, because
+    # a single category can legitimately be reachable from two layers. The
+    # clean fixture maps nothing, which is the honest answer for a document
+    # with no categories — the keys have to line up with the categories exactly,
+    # so an extra key would be a category no detector is expected to find.
+    for fixture in iter_pii_fixtures():
+        assert set(fixture.expected_detector_source) == set(fixture.expected_categories), fixture.id
+        assert bool(fixture.expected_detector_source) == bool(fixture.expected_categories), (
+            fixture.id
+        )
+
+
+def test_detector_source_layers_are_known():
+    known = {s.value for s in PIISource}
+    for fixture in iter_pii_fixtures():
+        for category, sources in fixture.expected_detector_source.items():
+            assert set(sources) <= known, (fixture.id, category)
+
+
+def test_expected_detector_source_is_immutable():
+    # The manifest is the ground truth; a test that could edit it would be
+    # asserting an expectation it had just rewritten.
+    fixture = FIXTURES[0]
+    with pytest.raises(TypeError):
+        fixture.expected_detector_source["phone"] = ()  # type: ignore[index]
+
+
+def test_derived_entries_record_where_their_shape_came_from():
+    # Decision 9 lets a fixture reproduce a real document's shape; that is only
+    # auditable if it names the shape's origin without reproducing its contents.
+    derived = [f for f in iter_pii_fixtures() if f.derived_from]
+    assert derived, "expected at least one layout-derived entry"
+    for fixture in derived:
+        assert "layout only" in fixture.derived_from.lower(), fixture.id
+
+
+def test_clean_entry_is_not_derived():
+    assert next(f for f in iter_pii_fixtures() if f.file.startswith("clean/")).derived_from is None
+
+
+def test_canonical_section_is_not_empty_and_uses_its_own_extension():
+    canonical = iter_canonical_fixtures()
+    assert canonical
+    assert all(f.path.suffix == ".json" for f in canonical)
+
+
+def test_canonical_entries_measure_the_persistence_boundary():
+    # Contour 2's decision differs from the source contour's for the same bytes
+    # (REVIEW -> ALLOW_WITH_WARNING), so its expected_decision is not a restated
+    # document expectation and is stored against the canonical section.
+    for fixture in iter_canonical_fixtures():
+        assert fixture.expected_decision == PIIDecision.ALLOW_WITH_WARNING.value, fixture.id
+
+
 # --- the M4 synthetic-only state -----------------------------------------
 
 
@@ -219,8 +308,8 @@ def test_no_fixture_contains_a_known_real_marker_name():
 
 def test_manifest_matches_on_disk_fixture_set():
     on_disk = {
-        str(path.relative_to(MANIFEST_PATH.parent)).replace("\\", "/")
-        for path in MANIFEST_PATH.parent.rglob("*.md")
+        str(path.relative_to(SYNTHETIC_MANIFEST_PATH.parent)).replace("\\", "/")
+        for path in SYNTHETIC_MANIFEST_PATH.parent.rglob("*.md")
     }
     assert on_disk == {fixture.file for fixture in FIXTURES}
 
@@ -236,9 +325,9 @@ def test_every_fixture_file_is_non_empty_and_readable():
         assert text.strip(), fixture.file
 
 
-def test_fixture_paths_resolve_under_the_fixtures_dir():
+def test_fixture_paths_resolve_under_the_synthetic_fixtures_dir():
     for fixture in FIXTURES:
-        assert fixture.path.resolve().is_relative_to(FIXTURES_DIR.resolve())
+        assert fixture.path.resolve().is_relative_to(SYNTHETIC_FIXTURES_DIR.resolve())
 
 
 def test_fixtures_are_immutable_records():
@@ -294,7 +383,16 @@ def test_loader_returns_fixtures_in_manifest_order():
 def test_fixture_dataclass_field_names_match_the_entry_keys():
     # A reader should be able to go from the manifest entry to the dataclass
     # without consulting the loader; this fails if one side gains a field.
-    assert set(PIIFixture.__dataclass_fields__) == REQUIRED_ENTRY_KEYS | {
-        "path",
-        "contains_secret",
-    }
+    # `dataset` is the one field that is in no manifest — it is derived from
+    # which of the two manifests the entry was read out of, which is exactly
+    # why it cannot be an entry key.
+    assert set(PIIFixture.__dataclass_fields__) == (
+        REQUIRED_ENTRY_KEYS | OPTIONAL_ENTRY_KEYS | {"path", "dataset"}
+    )
+
+
+def test_expected_detector_source_is_a_frozen_mapping_not_a_plain_dict():
+    # Provenance and the detector-source map are the two fields a test would
+    # most plausibly edit to make an assertion pass.
+    fixture = FIXTURES[0]
+    assert type(fixture.expected_detector_source).__name__ == "mappingproxy"

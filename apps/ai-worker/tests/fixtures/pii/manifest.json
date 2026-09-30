@@ -1,16 +1,21 @@
 {
-  "version": "1.0.0",
-  "notes": "Regression dataset for the PII gate (plan §4.10). M4 seeded three SYNTHETIC fixtures to prove the manifest shape before any detector existed: the clean/patient/malicious trio covers allow, review and block, which is the widest decision spread obtainable without a real marker. M5 Phase 13 added the appointment entry and, more importantly, turned every expected_* field from a declared specification into a MEASURED value: tests/unit/pii/test_manifest_verification.py runs each fixture through the real document gate and asserts equality, so a detector change that shifts a finding fails here instead of quietly contradicting the ground truth. All values are invented and none are copied from .dev/flow_upload_test/ - a real marker added as a second copy of a real patient's data would create a new instance of the very leak this milestone exists to prevent. expected_decision is context-dependent (a patient category is ALLOW_WITH_WARNING at an internal destination and REVIEW at an external one where no redactor is available, per Phase 5), and §4.10 fixes the entry keys without a destination field, so the notes here state the assumed context: the external boundary with redaction unavailable, which is the fail-closed direction. The clean and malicious fixtures are context-independent (no findings; a secret blocks at every destination). Notes on individual fixtures: clean/generic-notice-01.md carries a bare maintenance date on purpose, since PIICategory has no date member and a service date is not PII. patient/synthetic-consultation-01.md peaks at medical_record_number (high), not critical - only SECRET is critical, so 'critical' is a property of a credential, not of a sensitive identifier. appointment/synthetic-registration-01.md reproduces the SHAPE of the real 2b8fdd0d registration marker (its label/value contour, its table layout, and the declined genitive name form of §7 gotcha G1) with every value invented, per decision 9. Its expected_categories are the plan's locked acceptance pair - person_name + ticket_number and nothing else - which is a real constraint on the fixture and not on the detector: the document is a DECLINED booking, so the rows that would add a category (СНИЛС, Полис, Дата рождения, Адрес, ФИО врача) are absent because a patient who refused collected nothing. malicious/synthetic-injection-01.md pairs a secret with a prompt-injection attempt, so it proves the block decision is driven by the credential rather than by the injection text itself; its expected_categories also name ticket_number, which is a known false positive: the 28-digit API key is one unbroken digit run, and pattern.ticket_number.long_digits claims any run of 12 or more. It is recorded rather than hidden because the manifest is the ground truth, and ground truth that quietly omits a finding is worse than a false positive - the artifact for that document is supposed to be checkable against this file.",
+  "version": "2.0.0",
+  "notes": "Regression dataset for the PII gate (plan §4.10). M4 seeded three SYNTHETIC fixtures to prove the manifest shape before any detector existed: the clean/patient/malicious trio covers allow, review and block, which is the widest decision spread obtainable without a real marker. M5 Phase 13 added the appointment entry and, more importantly, turned every expected_* field from a declared specification into a MEASURED value: tests/unit/pii/test_manifest_verification.py runs each fixture through the real document gate and asserts equality, so a detector change that shifts a finding fails here instead of quietly contradicting the ground truth. All values are invented and none are copied from .dev/flow_upload_test/ - a real marker added as a second copy of a real patient's data would create a new instance of the very leak this milestone exists to prevent. expected_decision is context-dependent (a patient category is ALLOW_WITH_WARNING at an internal destination and REVIEW at an external one where no redactor is available, per Phase 5), and §4.10 fixes the entry keys without a destination field, so the notes here state the assumed context: the external boundary with redaction unavailable, which is the fail-closed direction. The clean and malicious fixtures are context-independent (no findings; a secret blocks at every destination). Notes on individual fixtures: clean/generic-notice-01.md carries a bare maintenance date on purpose, since PIICategory has no date member and a service date is not PII. patient/synthetic-consultation-01.md peaks at medical_record_number (high), not critical - only SECRET is critical, so 'critical' is a property of a credential, not of a sensitive identifier. appointment/synthetic-registration-01.md reproduces the SHAPE of the real 2b8fdd0d registration marker (its label/value contour, its table layout, and the declined genitive name form of §7 gotcha G1) with every value invented, per decision 9. Its expected_categories are the plan's locked acceptance pair - person_name + ticket_number and nothing else - which is a real constraint on the fixture and not on the detector: the document is a DECLINED booking, so the rows that would add a category (СНИЛС, Полис, Дата рождения, Адрес, ФИО врача) are absent because a patient who refused collected nothing. malicious/synthetic-injection-01.md pairs a secret with a prompt-injection attempt, so it proves the block decision is driven by the credential rather than by the injection text itself; its expected_categories also name ticket_number, which is a known false positive: the 28-digit API key is one unbroken digit run, and pattern.ticket_number.long_digits claims any run of 12 or more. It is recorded rather than hidden because the manifest is the ground truth, and ground truth that quietly omits a finding is worse than a false positive - the artifact for that document is supposed to be checkable against this file. M6 (EVAL_IMPL_PLAN Phase 1) took the manifest to 2.0.0. Three changes, and none of them moves an existing expectation: every entry gained an id (report rows are keyed by it), an explicit contour (so a payload in the document section is a manifest bug rather than a silently different evaluation), and expected_detector_source; and the canonical payloads moved IN from outside the manifest into their own canonical_fixtures section. The canonical section describes a DIFFERENT boundary from the fixtures section - contour 2, stage=canonical, destination=persistence, with the working redactor that build_canonical_guard wires - because the same bytes are not the same document: at persistence §4.11 escalates 15 categories to REDACT, so a payload that would be ALLOW on the source contour is ALLOW_WITH_WARNING here. The canonical entries' expected_categories were MEASURED on 2026-09-30 through build_canonical_guard and are pending the Phase 2 ground-truth audit; they are additions, not corrections, and before this version the payloads carried no expectations at all, which made them unmeasurable and - worse - made a payload built to contain a leaked name indistinguishable from a negative one. Two properties of those entries are worth stating because they look like mistakes otherwise: doctor_name is detected but expected to survive, since §4.12 per-category remediation keeps practitioner and organization names ALLOW-actioned at every destination and blanking them would destroy the note; and the laboratory payload's age is expected, because the note states the patient's age in prose and that is the category the taxonomy has for it. The synthetic corpus remains the only corpus any CI regression gate may assert on; the local real corpus ($PII_FIXTURES_DIR, conventionally .dev/pii-fixtures/) uses the same entry vocabulary with provenance required, expected_risk_level optional and NO raw PII values anywhere - its ground truth is which category is present, never what it is.",
   "fixtures": [
     {
+      "id": "clean-generic-notice-01",
       "file": "clean/generic-notice-01.md",
+      "contour": "document",
       "source": "synthetic",
       "expected_categories": [],
+      "expected_detector_source": {},
       "expected_decision": "allow",
       "expected_risk_level": "low"
     },
     {
+      "id": "patient-synthetic-consultation-01",
       "file": "patient/synthetic-consultation-01.md",
+      "contour": "document",
       "source": "synthetic",
       "expected_categories": [
         "person_name",
@@ -21,29 +26,93 @@
         "medical_record_number",
         "doctor_name"
       ],
+      "expected_detector_source": {
+        "person_name": ["structured_field"],
+        "date_of_birth": ["structured_field"],
+        "phone": ["structured_field"],
+        "email": ["structured_field"],
+        "address": ["pattern", "structured_field"],
+        "medical_record_number": ["structured_field"],
+        "doctor_name": ["structured_field"]
+      },
       "expected_decision": "review",
       "expected_risk_level": "high"
     },
     {
+      "id": "appointment-synthetic-registration-01",
       "file": "appointment/synthetic-registration-01.md",
+      "contour": "document",
       "source": "synthetic",
+      "derived_from": "2b8fdd0d (layout only)",
       "expected_categories": [
         "person_name",
         "ticket_number"
       ],
+      "expected_detector_source": {
+        "person_name": ["structured_field"],
+        "ticket_number": ["structured_field"]
+      },
       "expected_decision": "review",
       "expected_risk_level": "high"
     },
     {
+      "id": "malicious-synthetic-injection-01",
       "file": "malicious/synthetic-injection-01.md",
+      "contour": "document",
       "source": "synthetic",
       "expected_categories": [
         "secret",
         "ticket_number"
       ],
+      "expected_detector_source": {
+        "secret": ["pattern"],
+        "ticket_number": ["pattern"]
+      },
       "expected_decision": "block",
       "expected_risk_level": "critical",
       "contains_secret": true
+    }
+  ],
+  "canonical_fixtures": [
+    {
+      "id": "appointment-synthetic-registration-note-01",
+      "file": "canonical/appointment/synthetic-registration-note-01.json",
+      "contour": "canonical",
+      "source": "synthetic",
+      "derived_from": "ORDER §13.1 fields.note leak + 2b8fdd0d (layout only)",
+      "expected_categories": [
+        "doctor_name",
+        "person_name",
+        "ticket_number"
+      ],
+      "expected_detector_source": {
+        "doctor_name": ["structured_field"],
+        "person_name": ["pattern"],
+        "ticket_number": ["structured_field"]
+      },
+      "expected_decision": "allow_with_warning",
+      "expected_risk_level": "high"
+    },
+    {
+      "id": "laboratory-synthetic-analysis-note-01",
+      "file": "canonical/laboratory/synthetic-analysis-note-01.json",
+      "contour": "canonical",
+      "source": "synthetic",
+      "derived_from": "ORDER §13.1 fields.note leak (layout only)",
+      "expected_categories": [
+        "age",
+        "doctor_name",
+        "lab_order_id",
+        "person_name"
+      ],
+      "expected_detector_source": {
+        "age": ["structured_field"],
+        "doctor_name": ["structured_field"],
+        "lab_order_id": ["pattern"],
+        "person_name": ["pattern"]
+      },
+      "expected_decision": "allow_with_warning",
+      "expected_risk_level": "high"
     }
   ]
 }

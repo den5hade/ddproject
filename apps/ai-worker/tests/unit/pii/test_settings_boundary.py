@@ -51,6 +51,7 @@ from tests.support.pii_imports import (
     ALLOWED_TYPE_ONLY_IMPORTS,
     module_names,
     pii_source_files,
+    runtime_edge_guarded_files,
     type_only_imports,
     unexpected_type_only_imports,
 )
@@ -396,10 +397,26 @@ def test_the_destination_is_a_settings_read_not_a_constant():
 
 
 def test_no_pii_module_imports_app_config_at_runtime():
-    for path in pii_source_files():
+    # The offline evaluation CLI (`app/pii/evaluate.py`) is exempt: its mandated
+    # no-argument entry point has to build a blank Settings, and it is not a
+    # module the pipeline imports. The property this guard protects is asserted
+    # independently and end to end by
+    # test_app_pii_imports_with_app_config_blocked below, which is unaffected by
+    # the exemption because `app/pii/__init__.py` does not import the harness.
+    for path in runtime_edge_guarded_files():
         assert not any(module.startswith("app.config") for module in module_names(path)), (
             f"{path.name} imports app.config at runtime"
         )
+
+
+def test_the_harness_is_the_only_module_allowed_a_settings_runtime_import():
+    """Named explicitly, so a second one is a decision rather than an accident."""
+    offenders = {
+        path.name
+        for path in pii_source_files()
+        if any(module.startswith("app.config") for module in module_names(path))
+    }
+    assert offenders == {"evaluate.py"}
 
 
 def test_type_only_borrows_are_exactly_the_approved_ones():
