@@ -162,14 +162,17 @@ def test_default_policy_accessors_agree_with_the_rules():
 
 
 def test_policy_version_is_stamped_from_a_single_source():
-    """``2.0.0`` since M5 Phase 14 — the persistence escalation is a decision change.
+    """``3.0.0`` since M5 Phase 17 — the combination threshold is a decision change.
 
     The version and the table are asserted to be the *same* object twice, so a
     bump cannot land in one place and be forgotten in the other: a stored
     ``PIIScanResult`` names the policy that produced it, and a name that lies is
-    worse than no name.
+    worse than no name. This is also what makes acceptance criterion 9 true —
+    the combination table is reachable *through* the version, because
+    ``combinations`` lives on :class:`PIIPolicy` and the version is that
+    policy's, rather than being a module constant the version cannot name.
     """
-    assert PII_POLICY_VERSION == "2.0.0"
+    assert PII_POLICY_VERSION == "3.0.0"
     assert DEFAULT_POLICY.version == PII_POLICY_VERSION
 
 

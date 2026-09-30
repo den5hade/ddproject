@@ -751,7 +751,7 @@ M3 — Classification evaluation
     ↓
 M4 — PII Gate specification
     ↓
-M5 — PII Gate implementation   ← открытая проблема: утечка в fields.note, см. §13
+M5 — PII Gate implementation
     ↓
 M6 — PII Gate evaluation
     ↓

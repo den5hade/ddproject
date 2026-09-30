@@ -37,7 +37,25 @@ including a formatting drift from Revision 1: Phases 4–7 omit the `**Status.**
 four carry their verification as a `**Verification recap:**` bullet instead. Recorded rather than
 reformatted, per schema rule 4; M5 phases use the §4 grammar consistently.
 
-Status legend: `[ ]` pending · `[x]` done.
+**Revision 3** — (2026-09-30) **Phase 16 DEFERRED, Phase 17 scoped and shipped.** What changed:
+(a) **Phase 16 (NER) is DEFERRED** — a separate ML evaluation task, not a partial implementation. No
+ML/torch/transformers/spaCy dependency, no NER backend, no change to the detector chain;
+`PIISource.NER` and `DETECTOR_VERSION = 1.2.0` both stay exactly as they are. Revisit conditions in
+§3 Phase 16 and §7 open decision 15. (b) **Phase 17 expanded** from a three-line stub into a full
+implementation plan, and shipped — §4.13 (combination rules) added, R15 added, `PII_POLICY_VERSION`
+2.0.0→**3.0.0**. (c) **The roadmap number `2.1.0` for Phase 17 is corrected to `3.0.0`**: §4.8 makes
+major = "any change that alters a decision for any input", and the combination rule turns `ALLOW` into
+`REVIEW` for inputs that return `ALLOW` today. Preserving `2.1.0` would have shipped a version
+violating the SemVer rule two sections above it. Precedent: Phase 14 already corrected the detector
+roadmap the same way. (d) §4.7's example block corrected — it read `detector_version "1.3.0"`, written
+when Phase 16 was expected to land, and `policy_version "2.0.0"`. (e) **Corrected a pre-existing
+drift**: the §1 table carried Phases 9, 11, 12 and 14 as `[ ]` while their §3 headings and status
+blocks read `[x]` — the revisions that closed them updated the heading and prose but not the table,
+so the schema's "update status in all three places" rule had been broken since Phase 14. Repaired
+here rather than left as a second inconsistency in the same file as a deferral record. Phase 17's own
+status update was applied to all three places correctly.
+
+Status legend: `[ ]` pending · `[x]` done · `[~]` deferred (out of the current milestone).
 
 ---
 
@@ -156,43 +174,49 @@ change — which is exactly why Phase 14 costs a version bump and not a refactor
 | 6 | M4 | Canonical-output guard contract (post-extraction leak boundary) | [x] |
 | 7 | M4 | Persistence, provenance, versioning contract (+ M5 hand-off touch lists) | [x] |
 | 8 | M5 | HMAC secret in settings + `PIIPolicyContext` boundary validation | [x] |
-| 9 | M5 | Pattern detector → aggregator → policy engine → `PIIGate.inspect` | [ ] |
+| 9 | M5 | Pattern detector → aggregator → policy engine → `PIIGate.inspect` | [x] |
 | 10 | M5 | Persistence surface (`pii_result.json`, `MARKDOWN_KIND_PII`, `PIIMeta`, frontmatter) | [x] |
-| 11 | M5 | Contour 1 wiring — `inspect` after classification, artifact before publish | [ ] |
-| 12 | M5 | Markdown redaction (`PIIRedactor.redact`) | [ ] |
+| 11 | M5 | Contour 1 wiring — `inspect` after classification, artifact before publish | [x] |
+| 12 | M5 | Markdown redaction (`PIIRedactor.redact`) | [x] |
 | 13 | M5 | Marker-shape fixture + structured-field and secret detectors | [x] |
-| 14 | M5 | Canonical guard — escalation policy, per-category sanitizer, both dump points | [ ] |
+| 14 | M5 | Canonical guard — escalation policy, per-category sanitizer, both dump points | [x] |
 | 15 | M5 | `EXTERNAL_LLM` destination + redaction on the extraction path | [x] |
-| 16 | M5 | NER detector (P1) | [ ] |
-| 17 | M5 | `REVIEW` combination threshold (P1) | [ ] |
+| 16 | M5 | NER detector (P1) — **DEFERRED** to a separate ML evaluation task | [~] |
+| 17 | M5 | `REVIEW` combination threshold (P1) — narrow government-identifier rule | [x] |
 
 **M4 status: complete.** All seven phases `[x]`, committed as `ef412d2`. `uv run pytest` → 436
 passed (174 baseline + 262 PII contract tests). `make lint` reports only 4 pre-existing
 `packages/storage` errors, unrelated to this milestone and present before M4 began.
 
-**M5 status: in progress — Phases 8–13 done, 14–17 pending.** `uv run pytest` → 663 passed
-(436 baseline + 227 new). The gate now *works* in memory — `await gate.inspect(document, context)`
-detects, deduplicates, evaluates policy and returns a verdict — and it is now **in production**:
-`DocumentPipeline` builds it at start-up, inspects every document after classification and before
-extraction, halts on `REVIEW`/`BLOCK` before a single byte is written, and on the allow path uploads
-`pii_result.json` and carries the §4.7 block in both the frontmatter and the event payload.
-Redaction is implemented, tested against the real fixture, and reported to the policy as available —
-and stays dormant, because at the trusted internal destination the policy issues no `REDACT` action.
+**M5 status: complete — Phases 8–15 and 17 done, 16 deferred.** `uv run pytest` → 809 passed.
+The gate now *works* in memory — `await gate.inspect(document, context)` detects, deduplicates,
+evaluates policy and returns a verdict — and it is now **in production**: `DocumentPipeline` builds it
+at start-up, inspects every document after classification and before extraction, halts on
+`REVIEW`/`BLOCK` before a single byte is written, and on the allow path uploads `pii_result.json` and
+carries the §4.7 block in both the frontmatter and the event payload. Redaction is implemented, tested
+against the real fixture, and reported to the policy as available — and stays mostly dormant, because
+at the trusted internal destination the policy issues no `REDACT` action.
 
 Since Phase 13 the detector chain is the whole chain, so the risk R13 is **closed**: a document
 carrying a credential reaches `BLOCK`, and `doctor_name` is detected by the labelled detector rather
 than left to a two-token ФИО rule that would also match `Уважаемые жильцы`. **Since Phase 14** the
 canonical-guard contour is wired and the observed `canonical.json` leak is **closed**: the sanitized
 model replaces `canonical` before all three consumers, and the two leak shapes are asserted clean at
-all three dump points. The remaining limit is recorded rather than hidden — the manifest's
+all three dump points. **Since Phase 17** `REVIEW` is reachable at the production boundary for the
+first time: the narrow government-identifier rule (§4.13) escalates a document carrying two distinct
+state identifiers, and the pipeline halt path executes end to end in production for the first time
+since it was written. The remaining limits are recorded rather than hidden — the manifest's
 `expected_decision` is measured at one named boundary rather than all three, because §4.10's entry
-keys have no `destination` field (Deviation 1, Phase 13 status).
+keys have no `destination` field (Deviation 1, Phase 13 status), and a `REVIEW` halt still has no human
+consumer (R9, R15).
 
-**M5 is complete when** Phases 8–17 are `[x]`, the full ai-worker suite is green on the 436-test
-baseline, `packages/storage` is green, and — the criterion that actually distinguishes M5 from M4 —
-**the two real leaks from `.dev/flow_upload_test/` produce a clean `canonical.json`, a clean
-`structured.md`, and a clean event `data`**, asserted in three separate tests, one per dump point.
-A green suite that does not include that assertion does not count as M5 done.
+**M5 is complete when** Phases 8–15 and 17 are `[x]` **and Phase 16 is deferred with its revisit
+conditions recorded** — a deferral is an outcome, not an omission, and M5 does not reopen to add a
+model — the full ai-worker suite is green on the 436-test baseline, `packages/storage` is green, and —
+the criterion that actually distinguishes M5 from M4 — **the two real leaks from
+`.dev/flow_upload_test/` produce a clean `canonical.json`, a clean `structured.md`, and a clean event
+`data`**, asserted in three separate tests, one per dump point. A green suite that does not include
+that assertion does not count as M5 done.
 
 ---
 
@@ -1740,26 +1764,202 @@ behaviour, because the alternative is a reader assuming a survival guarantee tha
 here. Whether masking an age is the right trade on an external boundary is M6 calibration with real
 findings, and that test is where the argument starts.
 
-### Phase 16 — NER detector [ ] · P1
+### Phase 16 — NER detector [~] · P1 · **DEFERRED**
 
-`PIISource.NER` populated by a detector behind the existing protocol, added **after** the
-deterministic detectors so it can only widen coverage, never override a `BLOCK`. A graceful no-op
-when no model is configured — M6 may decide to leave it off entirely. Tests: protocol conformance,
-it composes through `CompositePIIDetector`, absence of a model changes nothing.
-Deps: Phase 9. (§45.18)
-**Accept:** the NER detector is never the sole control — a `SECRET` detected only by NER still
-yields `BLOCK`, and a document NER finds nothing in still passes.
+**Status.** Deferred, not partially implemented and not stubbed. This is a scope decision, not a
+schedule slip: the deterministic chain is the whole chain as of Phase 13, and shipping an ML
+detector would have meant adding a runtime dependency and an uncalibrated detector to a gate whose
+entire value proposition is that its verdict is reproducible from a version string.
 
-### Phase 17 — `REVIEW` combination threshold [ ] · P1
+**What is deliberately left in place, unchanged:**
 
-The §13.1 "unknown limitation" closed: unexpected high-risk **combinations** (e.g. ≥2 distinct HIGH
-categories, or identity + government ID in one free-text leaf) escalate to `REVIEW` instead of
-`ALLOW`. Policy data, not code (IMPL_ARCH §17). `PII_POLICY_VERSION` 2.0.0→**2.1.0**. `REVIEW`
-still never auto-redacts (§7 open decision, M4). Tests: the combination table, both sides of every
-threshold, and that a single HIGH category alone stays `ALLOW`.
-Deps: Phase 14. (§45.19)
-**Accept:** a leaf with `SNILS` + `INSURANCE_NUMBER` + `PERSON_NAME` is `REVIEW`; the same leaf with
-only `PERSON_NAME` is `ALLOW`.
+- `PIISource.NER` stays in `app/pii/models.py` — the enum member is part of the Phase 1 schema and
+  `test_schemas.py` pins it. Removing it would be an enum removal, which §4.8 makes **breaking**.
+  Keeping it costs nothing and keeps a later NER from being a breaking change to the artifact schema.
+- `DETECTOR_VERSION` stays `1.2.0`. It is not bumped for a detector that does not exist.
+- **No ML dependency**: no `torch`, `transformers`, `spacy`, `onnxruntime`, no model weights, no
+  network model loading in `apps/ai-worker`. The `torch`/`transformers` entries in `uv.lock` arrive
+  through `marker_pdf`/`marker-worker` and are OCR infrastructure, not NER.
+- **No NER backend** and no model-configuration setting.
+- **No change to the detector chain.** `build_detector_chain` keeps its three members in the same
+  order. No NER detector is appended "disabled" — an unwired detector is untested code, and
+  `test_chain_wires_every_declared_detector_in_a_fixed_order` is what records the absence.
+- **No test changes to represent the deferral.** The existing chain test asserting three members *is*
+  the record. Adding an assertion that NER is absent would be a tripwire that fires when Phase 16
+  eventually lands, encoding a deferral as if it were a constraint.
+
+Original scope, preserved for the record: `PIISource.NER` populated by a detector behind the existing
+protocol, added **after** the deterministic detectors so it can only widen coverage, never override a
+`BLOCK`; graceful no-op when no model is configured. (§45.18)
+
+**Revisit conditions — all four must hold before any NER work is accepted:**
+
+1. It is scoped as a **separate ML evaluation task**, not a M5 phase. M5 does not reopen.
+2. An **environment capable of running the selected model** — the current dev/CI environment is not
+   one, and pretending otherwise is how a phase "ships" untested.
+3. **Evaluation on a real PII fixture dataset** — real documents with real PII, not synthetic
+   positives, because a synthetic set cannot produce a false-positive rate and the false-positive
+   rate is the only number that decides whether this detector is affordable.
+4. **Acceptance on measured precision and recall** against that dataset, with the numbers in the
+   phase status. Recall alone disqualifies it: a NER that claims every name in a note is not better
+   than the pattern chain, it is slower.
+
+**NER may remain disabled until those conditions are satisfied.** Nothing in the gate is blocked on
+it: §7 open decision 15 already recorded that NER is P1, may stay off, and that nothing else in M5
+depends on it. The coverage it would add — free-prose names the pattern chain misses — is a
+detection-recall question, and detection recall is M6's subject, not M5's.
+
+#### Phase 16 Deferral Status
+
+`PIISource.NER` present and schema-pinned, `DETECTOR_VERSION` at `1.2.0`, chain at three members
+(`StructuredFieldPIIDetector → PatternPIIDetector → SecretPIIDetector`), no ML dependency in
+`apps/ai-worker/pyproject.toml`, no NER detector class in `app/pii/detectors.py`. No code change was
+made to defer this phase, which is the point: a deferral that needed a commit would have been a
+change. Status synchronized across all three places (§1 table `[~]`, this heading, §6 item 16).
+
+### Phase 17 — `REVIEW` combination threshold [x] · P1
+
+The §13.1 "unknown limitation" closed: unexpected high-risk **combinations** escalate to `REVIEW`
+instead of `ALLOW`. Policy data, not code (IMPL_ARCH §17) — a new `PIICombinationRule` table owned by
+`PIIPolicy` (§4.13). `PII_POLICY_VERSION` 2.0.0→**3.0.0**, **not** the `2.1.0` this block originally
+stated: §4.8 makes major = "any change that alters a decision for any input", and the rule turns
+`ALLOW` into `REVIEW` for inputs that return `ALLOW` today (Revision 3 (c)). `REVIEW` still never
+auto-redacts (§7 open decision 14). Deps: Phase 14. (§45.19)
+
+**The shipped rule, and why it is the narrow one.** ORDER §13.1 offers two example thresholds — "≥2
+distinct HIGH categories" and "identity + government ID in one free-text leaf". Both were measured
+against the whole existing dataset and **both were rejected**, which is the substance of this phase:
+
+| candidate rule | why not |
+|---|---|
+| ≥2 distinct HIGH categories | СНИЛС + ОМС + № карты is **three** HIGH categories and the normal shape of a Russian medical record. This halts routine care — the exact failure §0's "presence never blocks" invariant exists to prevent. |
+| identity + government ID | Fires on `IDENTIFIER_MARKER` (`PERSON_NAME` + `SNILS`), which is Phase 13's **deliberate allow path**. ФИО + СНИЛС is the single most normal pair in the domain. |
+| **≥2 distinct government identifiers** → `REVIEW` | **Shipped.** Two state identifiers in one document is a combination worth a human, fires on the §45.19 accept case exactly, and is silent on all six existing fixtures. |
+
+Measured evidence for the "no existing fixture changes" claim, from the real chain, real aggregator
+and real `walk_string_leaves` over all six fixtures (`CATEGORY_RISK`, `PII_CATEGORY_GROUPS['government']`):
+
+| fixture | categories | HIGH | government |
+|---|---|---|---|
+| `clean/generic-notice-01.md` | — | 0 | 0 |
+| `patient/synthetic-consultation-01.md` | 7 | 1 | 0 |
+| `appointment/synthetic-registration-01.md` | 2 | 1 | 0 |
+| `malicious/synthetic-injection-01.md` | 2 | 1 | 0 |
+| `canonical/appointment/…-note-01.json` | 3 | 1 | 0 |
+| `canonical/laboratory/…-note-01.json` | 4 | 1 | 0 |
+
+No fixture has a single government identifier, so the shipped rule is dormant on the entire dataset
+and no expected decision moved. That is a test, not a comment.
+
+**`REVIEW` reaches production for the first time in this phase.** M4 Phase 5 recorded it as gap 1: at
+`INTERNAL_LLM` the engine could only return `ALLOW`/`ALLOW_WITH_WARNING`/`BLOCK`, so Phase 11's
+`PII_REVIEW_REQUIRED` halt path had never executed. It does now, and it is asserted end to end.
+
+**Accept:** `SNILS` + `INSURANCE_NUMBER` + `PERSON_NAME` is `REVIEW`; the same leaf with only
+`PERSON_NAME` is `ALLOW`. Tightened at implementation: `PERSON_NAME` + `SNILS` is also asserted
+`ALLOW` (the narrowness assertion, and the `IDENTIFIER_MARKER` regression), `REVIEW` never writes a
+`REDACT` into `actions`, the pipeline halts before the LLM is called with zero artifacts, all six
+fixtures keep their decisions, and `PII_POLICY_VERSION == "3.0.0"`.
+
+#### Phase 17 Implementation Status
+
+Implemented and shipped. Policy data only — no detector, aggregator, guard or pipeline logic changed.
+`PII_POLICY_VERSION` **3.0.0** (was 2.0.0), `DETECTOR_VERSION` **1.2.0** (unmoved). Suite: **809
+passed** (770 before the phase, +39). `make lint` reports the same 4 pre-existing `packages/storage`
+errors and nothing else; `uvx ruff format --check apps/ai-worker/app/pii` clean; `packages/storage` 19
+passed. Smoke check: `1.2.0 3.0.0`. Status synchronized across all three places (§1 table `[x]`, this
+heading, §6 item 17).
+
+**Files changed**
+
+| file | change |
+|---|---|
+| `app/pii/policy.py` | `PIICombinationRule` (3 validators + `matches` + `reason`); `PIIPolicy.combinations` + `_require_known_groups`; `_default_combinations()`; `DEFAULT_POLICY.combinations`; `DefaultPolicyEngine._combination()`; `_decide(actions, escalation)`; `DEFAULT_POLICY_VERSION` 2.0.0→3.0.0; `__all__` |
+| `app/pii/__init__.py` | `PIICombinationRule` exported (import + `__all__`) |
+| `app/pii/detectors.py` | docstring only — the `1.2.0 2.0.0` smoke-check claim is now `1.2.0 3.0.0` |
+| `tests/unit/pii/test_combination_policy.py` | **new**, 27 tests |
+| `tests/unit/pipeline/test_pipeline.py` | `COMBINATION_MARKER` fixture + 3 tests (contour 1 review, allow/review separation, contour 2 halt) |
+| `tests/unit/pii/test_manifest_verification.py` | +2 tests: the combination never fires on a fixture (×2 boundaries), and the dataset carries no government identifier |
+| `tests/unit/pii/{test_external_boundary,test_persistence_contract,test_policy_gate}.py` | the three `2.0.0` pins → `3.0.0`, with the reasoning rewritten (one test renamed: "did not move" was no longer true) |
+| `IMPL_PLAN.md` | Revision 3, §1, §3, §4.7, §4.8, §4.13, §5, §6, §7 |
+
+**Acceptance criteria, all ten verified**
+
+| # | criterion | verified by |
+|---|---|---|
+| 1 | `PERSON_NAME + SNILS` does not trigger `REVIEW` | `test_person_name_and_snils_stay_allow`; `test_identifiers_alone_do_not_block_even_with_a_real_gate` (pre-existing) |
+| 2 | `PERSON_NAME + SNILS + INSURANCE_NUMBER` triggers `REVIEW` | `test_person_name_and_snils_and_insurance_number_is_review`; `test_two_government_identifiers_review_through_the_real_gate` |
+| 3 | `REVIEW` never introduces `REDACT` actions | `test_review_never_adds_a_redact_action` (compares the `actions` map against a combination-free policy) |
+| 4 | `REVIEW` halts before LLM execution | `test_two_government_identifiers_review_through_the_real_gate` — `extract_canonical.called is False` |
+| 5 | no downstream artifacts for a `REVIEW` halt | same test, `upload_bytes.call_args_list == []`; contour 2 in `test_a_combination_halts_contour_2_before_any_dump` |
+| 6 | all existing fixtures keep their decisions | `test_no_fixture_trips_the_combination_threshold` (4 fixtures × 2 boundaries) + the pre-existing per-fixture equality assertions; `test_no_fixture_carries_a_government_identifier_at_all` |
+| 7 | `PII_POLICY_VERSION == "3.0.0"` | `test_the_rule_is_reachable_through_the_stamped_policy_version` + the three rewritten pins |
+| 8 | version reflected consistently in metadata/tests/docs | 3 test pins, `detectors.py` docstring, §4.7 example, §4.8, §7 roadmap — all corrected; artifact/frontmatter carry the live constant (pre-existing test) |
+| 9 | the rule is reproducible from the persisted version | `test_the_rule_is_reachable_through_the_stamped_policy_version` — the table lives on `PIIPolicy`, and `PII_POLICY_VERSION` *is* `DEFAULT_POLICY.version` |
+| 10 | Phase 16 absent from the runtime chain | pre-existing `test_chain_wires_every_declared_detector_in_a_fixed_order` pins exactly three detectors, and was **not modified**; no NER class, no ML dependency, no setting |
+
+**Decision matrix, measured** (real engine, a `combinations=()` policy for "before"):
+
+| input | before 2.0.0 | after 3.0.0 |
+|---|---|---|
+| no findings | `allow` | `allow` |
+| one government id (`SNILS`) | `allow` | `allow` |
+| `PERSON_NAME` alone | `allow` | `allow` |
+| `PERSON_NAME + SNILS` | `allow` | `allow` |
+| `SNILS + INSURANCE_NUMBER` | `allow` | **`review`** |
+| `SNILS + INSURANCE_NUMBER + PERSON_NAME` | `allow` | **`review`** |
+| `SNILS + PASSPORT + INN` | `allow` | **`review`** |
+| `MRN + TICKET_NUMBER` (2 HIGH, not government) | `allow` | `allow` |
+| `SNILS + SECRET` | `block` | `block` |
+| `SNILS + INSURANCE_NUMBER + SECRET` | `block` | `block` |
+| `SNILS` (external_llm) | `allow_with_warning` | `allow_with_warning` |
+| `SNILS + INSURANCE_NUMBER` (external_llm) | `allow_with_warning` | **`review`** |
+| `SNILS` (unknown destination) | `review` | `review` |
+| `SNILS + INSURANCE_NUMBER` (unknown destination) | `review` | `review` |
+| `SNILS` (canonical+persistence) | `allow_with_warning` | `allow_with_warning` |
+| `SNILS + INSURANCE_NUMBER` (canonical+persistence) | `allow_with_warning` | **`review`** |
+| `SNILS + INSURANCE_NUMBER` (internal, no redactor) | `allow` | **`review`** |
+
+Read the last four rows together, because they are the two design decisions rather than consequences.
+At `canonical`+`persistence` the `REVIEW` arrives **with** the `REDACT` actions intact — the escalation
+outranks the save, so the document halts before either dump point instead of being written masked. At
+`external_llm` the same split appears in the other direction: a `REVIEW` that would otherwise be
+`allow_with_warning`, with the redaction still in `actions`. `BLOCK` is unmoved in every row, which is
+what keeps `SECRET` the only block source.
+
+**The tests were mutation-tested, because a narrowness rule is only as real as the assertions holding
+it in place.** Two mutations were applied to the shipped table and the suite re-run:
+
+| mutation | result |
+|---|---|
+| `combinations=()` — the rule removed | **10 failures** across `test_combination_policy.py` and `test_pipeline.py`, including both pipeline tests and every `actions`-preservation assertion |
+| `requires_groups={"government", "identity"}` — the **rejected** "identity + government" rule from ORDER §13.1 | **21 failures**: the 4 narrowness tests, the canonical-guard contour, and the entire Phase 15 external-redaction path |
+
+The second row is the concrete answer to "why not the wider rule": it does not merely trip the new
+tests, it takes down the canonical guard and every redaction test Phase 15 shipped, because ФИО +
+one identifier is the shape of essentially every patient document in the dataset. Both mutations were
+reverted and the suite re-verified at 809.
+
+**Deviations**
+
+1. **`2.1.0` → `3.0.0`**, approved and argued in §4.13 and §7. The roadmap number was wrong under
+   §4.8's own definition, and Phase 14 is the precedent for correcting a roadmap rather than shipping a
+   version that misdescribes the change.
+2. **Document-scoped, not leaf-scoped.** ORDER §13.1 says "in one free-text leaf"; §4.13 records why
+   the locked `PolicyEngine.evaluate` signature cannot express it, and that document scope is the
+   conservative direction. `test_a_combination_applies_at_every_destination` makes the deviation visible.
+3. **The rule narrows ORDER §13.1's examples rather than implementing one of them.** Recorded with the
+   measurement in the Phase 17 block; the rejected rules are asserted as *not*-the-behaviour in
+   `test_two_high_categories_that_are_not_government_still_allow` and
+   `test_identity_plus_a_government_identifier_still_allows`, so the decision cannot be quietly undone.
+
+**Residual risk:** R15, unchanged by this phase and now sharper — `REVIEW` is production-reachable, so
+a tripping document halts with zero artifacts, one `document.processing.failed`, and no human consumer.
+The mitigating evidence is `test_no_fixture_carries_a_government_identifier_at_all`: the rule is dormant
+across the whole dataset, and the day that stops being true the alarm fires before production does.
+Real-world Russian records with СНИЛС *and* ОМС are the untested population; M6 measures them.
+
+
 
 ---
 
@@ -1928,8 +2128,8 @@ event, no new DB table, no new migration**:
   "category_counts": { "person_name": 1, "date_of_birth": 1, "medical_record_number": 1,
                        "doctor_name": 1, "organization_name": 1, "address": 2 },
   "categories": ["person_name", "date_of_birth", "medical_record_number"],
-  "detector_version": "1.3.0",
-  "policy_version": "2.0.0",
+  "detector_version": "1.2.0",
+  "policy_version": "3.0.0",
   "reasons": ["expected_medical_identity"],
   "warnings": []
 }
@@ -1941,8 +2141,10 @@ sibling in the same file, and `FrontmatterMeta.pii` its optional field (`:93` ha
 `classification: ClassificationMeta | None = None`). Full findings (masked) live only in
 `pii_result.json`, mirroring `classification_result.json`. `categories` is a convenience list for
 UI/metrics; `category_counts` is authoritative. The versions above are the end-of-M5 values from
-the §7 roadmap; Phase 10 emits whatever is current at the time, and a test asserts the block
-carries the live constants rather than a copy.
+the §7 roadmap — corrected in Revision 3 (d): the block originally read `detector_version "1.3.0"`,
+which was written when Phase 16's NER was expected to land and which that phase's deferral made wrong.
+Phase 10 emits whatever is current at the time, and a test asserts the block carries the live
+constants rather than a copy.
 
 **Audit events** (IMPL_ARCH Phase 9, no values): `pii.scan.completed`, `pii.blocked`,
 `pii.review.required`, `pii.redacted`. Audit must be written (IMPL_ARCH §22) but must never carry
@@ -1956,8 +2158,10 @@ docs/comments; minor = additive (new optional fields, new `PIICategory` values) 
 category also requires a policy row, or it inherits no action**; major = breaking (required field
 changes, enum removals, decision-rule changes). Any change that alters a decision bumps the
 policy version, so a stored `PIIScanResult` can always be interpreted by the policy that produced it.
-The M5 roadmap that moves both constants — `1.0.0 → 1.1.0 → 1.2.0` and `1.0.0 → 2.0.0 → 2.1.0` —
-is in §7 (Versioning policy).
+The M5 roadmap that moves both constants — `1.0.0 → 1.1.0 → 1.2.0` and `1.0.0 → 2.0.0 → 3.0.0` —
+is in §7 (Versioning policy). The second chain's last step was originally written as `2.1.0` and is
+corrected in Revision 3 (c); §7 records why, and Phase 16's deferral means the detector chain ends M5
+at `1.2.0`.
 
 ### 4.9 M5 touch lists (documented in M4, executed in M5 — Phases 10, 11, 14)
 
@@ -2061,6 +2265,68 @@ instead would blank every finding in a run that happened to contain one redactio
 does not widen the boundary — the sanitizer needs the *category*, and already holds the value it is
 replacing, in the same process, on the same string.
 
+### 4.13 Combination rules (new in M5, Phase 17)
+
+ORDER §13.1's "unknown limitation": every rule so far is **per category**, so the base table has no
+way to say that one finding is fine and two together are not. The two natural candidate thresholds
+were both measured and rejected (Phase 17 block: ≥2 HIGH halts routine medical records; identity +
+government ID fires on `IDENTIFIER_MARKER`, Phase 13's deliberate allow path). What ships is one row:
+
+```text
+PIICombinationRule(requires_groups={"government"}, min_count=2, decision=REVIEW)
+  fires when >= 2 DISTINCT categories from the "government" group appear in one document
+  -> document decision escalates to REVIEW
+```
+
+`PII_CATEGORY_GROUPS["government"]` = `PASSPORT NATIONAL_ID INSURANCE_NUMBER SNILS INN` — the five
+categories the §4.11 persistence escalation already treats as a set, so the rule references the group
+by name and cannot drift from it.
+
+**Three properties this design holds, each because of a specific alternative that was wrong:**
+
+1. **The rule lives in `PIIPolicy`, not in a module constant.** `PII_POLICY_VERSION` is
+   `DEFAULT_POLICY.version`, and the entire reason the constant exists is that a stored
+   `PIIScanResult` must be re-derivable from the version it names (Phase 14's §7 argument). A
+   threshold table that the version does not name is a table a stored verdict cannot be reproduced
+   from — which is acceptance criterion 9. `PIIPolicy.combinations` defaults to `()`, which keeps every
+   existing hand-built policy in the tests valid.
+2. **The combination escalates the *decision* and never touches `actions`.** §4.12 makes
+   `actions[category]` the remediation channel, and the canonical sanitizer masks a leaf iff that
+   action is `REDACT`. Writing `REVIEW` into the participating categories would stop the sanitizer
+   masking those leaves in any future where `REVIEW` does not halt, and would make the per-category
+   table lie about what it decided. So `evaluate` derives the escalation separately, `_decide` applies
+   it, and the escalation is recorded in **`reasons`** — the field §4.12's triage story already names
+   as "the only account of a review a human will ever see". A `REVIEW` that does not say *why* is a
+   review nobody can triage. This is decision 14 (§7) holding structurally: `REVIEW` adds no `REDACT`,
+   so a review still cannot rewrite the document it is asking about.
+3. **`decision` on a combination rule may only be `REVIEW`.** Validated at construction. A rule that
+   could emit `BLOCK` would make itself the second `BLOCK` source and contradict the invariant
+   stated in `_default_rules()` — `SECRET` is the only thing that blocks, because a credential is a
+   vulnerability rather than a fact about the document's subject. Constructing a `BLOCK` rule is a
+   `PIIPolicyError` at import time, not a latent policy change.
+
+**Document-scoped, not leaf-scoped — a recorded deviation.** ORDER §13.1's examples say "in one
+free-text leaf". That is not expressible under the locked `PolicyEngine.evaluate(findings, context)`
+signature: it receives one flat list, `PIIFinding` carries no path, and `canonical_guard.py`'s
+docstring states the rationale for evaluating once over the union of all leaves — per-leaf verdicts
+would have no defined precedence against each other. Document scope is therefore used, and **this is
+recorded as a deviation from §13.1's wording rather than silently narrowed**. It is also strictly the
+more conservative of the two: document scope catches a superset of the leaf-scoped cases, and with the
+narrow threshold above, the wider scope costs nothing on the dataset (no fixture carries two
+government identifiers at all).
+
+**Version.** `PII_POLICY_VERSION` 2.0.0 → **3.0.0**. §4.8: minor = additive *and backward-compatible*;
+major = "any change that alters a decision for any input". This rule returns `REVIEW` where the same
+input returns `ALLOW` today, which is a decision change by the plan's own words, so minor is wrong and
+the `2.1.0` this section's predecessor stated was inconsistent with the SemVer rule two sections above
+it. Keeping `2.1.0` to preserve a roadmap number would have shipped a version that misdescribes the
+change. Policy data, reversible without touching detection (IMPL_ARCH §17).
+
+**No operator lever, deliberately.** There is no setting for this threshold, matching
+`REDACTION_AVAILABLE`'s precedent that an operator must not be able to disable a security control
+with an environment variable. The only way to soften the rule is a versioned edit to the policy data,
+which is a reviewable commit rather than a config push. R15 records what that costs.
+
 ---
 
 ## 5. Tests
@@ -2105,7 +2371,26 @@ fail-closed on re-validation failure, artifact-uploaded-before-publish ordering,
 pipeline outcome, `EXTERNAL_LLM` redaction, and manifest `expected_*` verified against real
 detector output.
 
-**Files (new in M5).** `tests/unit/pii/{test_detectors_behaviour,test_aggregation_behaviour,test_policy_behaviour,test_redactor_behaviour,test_guard_behaviour,test_artifact,test_settings_boundary}.py`;
+**Phase 17's tests — the combination table and the narrowness assertion.** The threshold is the one
+rule whose failure mode is *over-firing*, so the tests that carry the security value here are the
+negative ones, and the phase adds a new file rather than growing an existing one:
+
+| test | asserts |
+|---|---|
+| `test_person_name_and_snils_stay_allow` | `PERSON_NAME` + `SNILS` → `ALLOW` (the `IDENTIFIER_MARKER` regression) |
+| `test_three_categories_escalate_to_review` | `SNILS` + `INSURANCE_NUMBER` + `PERSON_NAME` → `REVIEW` (§45.19) |
+| `test_single_government_identifier_does_not_escalate` | one government ID alone → `ALLOW` (the "both sides of the threshold") |
+| `test_review_never_adds_a_redact_action` | the escalation reaches the decision and `reasons`, and `actions` is byte-identical to the pre-combination map |
+| `test_combination_loses_to_block` | `SECRET` + two government IDs → `BLOCK`, not `REVIEW` (precedence) |
+| `test_combination_is_recorded_in_reasons` | the reason string names the groups and the count |
+| `test_combination_does_not_weaken_the_persistence_escalation` | at `stage=canonical, destination=persistence` a combination keeps the `REDACT` in `actions` |
+| `test_no_fixture_changes_decision` | all six fixtures keep their measured decision at both boundaries — the availability guard, a test not a comment |
+| `test_a_combination_rule_may_not_block` | a `BLOCK` combination is a `PIIPolicyError` at construction |
+| `test_policy_with_no_combinations_is_unaffected` | `combinations=()` is the rollback switch and changes nothing |
+| `test_pipeline_halts_on_review_before_the_llm_runs` | first production-reachable `REVIEW`: `error_code=PII_REVIEW_REQUIRED`, zero artifacts, LLM never called |
+| `test_a_combination_halts_before_any_dump` | contour 2: the halt precedes both dump points (decision 16) |
+
+**Files (new in M5).** `tests/unit/pii/{test_detectors_behaviour,test_aggregation_behaviour,test_policy_behaviour,test_redactor_behaviour,test_guard_behaviour,test_artifact,test_settings_boundary,test_combination_policy}.py`;
 `tests/unit/pipeline/test_pipeline_pii.py`; extended `tests/fixtures/pii/manifest.json` + the
 `laboratory/`, `appointment/`, `prescription/`, `mixed/` directories (declared in
 `PII_FIXTURE_DIRECTORIES` but not yet created); `tests/support/pii_fixtures.py` delegate once the
@@ -2121,10 +2406,10 @@ in Phase 10.
 **Commands:**
 
 ```bash
-cd apps/ai-worker && uv run pytest tests/unit/pii -v          # focused (477 after Phase 13)
+cd apps/ai-worker && uv run pytest tests/unit/pii -v          # focused (598 after Phase 17)
 cd apps/ai-worker && uv run pytest                            # full: 436 baseline, must stay green
-                                                           #   (663 after Phase 13)
-cd apps/ai-worker && uv run pytest tests/unit/pipeline -v      # contour wiring, Phases 11/14/15
+                                                           #   (809 after Phase 17)
+cd apps/ai-worker && uv run pytest tests/unit/pipeline -v      # contour wiring, Phases 11/14/15/17
 uvx ruff check apps/ai-worker/app/pii apps/ai-worker/tests/unit/pii apps/ai-worker/app/pipeline
 uvx ruff format --check apps/ai-worker/app/pii
 uv run --project packages/storage pytest packages/storage     # required from Phase 10 on
@@ -2137,8 +2422,9 @@ make lint                                                      # uvx ruff check 
 uv run python -c "from app.pii import PIICategory, PIIScanResult, PIIGate, DETECTOR_VERSION, PII_POLICY_VERSION; print(DETECTOR_VERSION, PII_POLICY_VERSION)"
 ```
 
-Expected after Phase 14: `1.2.0 2.0.0`. M5 introduces **no** new runtime dependency (stdlib
-`re`/`hmac`/`hashlib` + Pydantic only) and **no** migration.
+Expected after Phase 17: `1.2.0 3.0.0`. M5 introduces **no** new runtime dependency (stdlib
+`re`/`hmac`/`hashlib` + Pydantic only) and **no** migration — and Phase 16's deferral keeps that true
+for the whole milestone, since the deferred phase was the only one that would have added one.
 
 ---
 
@@ -2178,13 +2464,18 @@ M5 (pending — the numbering is IMPL_ARCH §45's 19-step sequence folded into p
     operator switch, with a hotfix in front of it: a repeated-value leak in contour 2 was found
     **live** while writing the phase and closed as a separate commit (H-1, `bfaf89d`) rather than
     left as the dormancy the plan had filed it as (§45.17).
-16. **Phase 16 — NER detector** [ ] · P1 — widens coverage, never overrides (§45.18).
-17. **Phase 17 — `REVIEW` combination threshold** [ ] · P1 — policy data on top of Phase 14 (§45.19).
+16. **Phase 16 — NER detector** [~] · P1 · **DEFERRED** — out of M5. All four revisit conditions in the
+    Phase 16 block must hold first, and the phase is a separate ML evaluation task, not a M5
+    reopening (§45.18).
+17. **Phase 17 — `REVIEW` combination threshold** [x] · P1 — policy data on top of Phase 14 (§45.19).
+    Shipped as one narrow government-identifier rule (§4.13), `PII_POLICY_VERSION` → 3.0.0. Made
+    `REVIEW` reachable at the production boundary for the first time.
 
-Phases 12 and 13 are independent of each other and can run in either order. Phase 16 is
-independent of everything after 9. Each phase: implement → update status in all three places
-(§1 table, §3 heading, §6 list) → pause for confirmation. Deviations labeled `Deviation:` in the
-phase's Implementation Status block.
+Phases 12 and 13 are independent of each other and can run in either order. Each phase: implement →
+update status in all three places (§1 table, §3 heading, §6 list) → pause for confirmation.
+Deviations labeled `Deviation:` in the phase's Implementation Status block. Revision 3 found the
+three-places rule broken for Phases 9, 11, 12 and 14 — the table lagged the headings — and repaired
+it, which is the reason that rule is restated here rather than assumed.
 
 ---
 
@@ -2317,6 +2608,10 @@ phase's Implementation Status block.
   calibration guess destructive. `REVIEW` halts for a human.
 - **15. NER is P1 and may stay off.** It is the least deterministic detector and the most expensive;
   M6 may decide the pattern + structured coverage is sufficient. Nothing else in M5 depends on it.
+  **Taken in Revision 3: Phase 16 is deferred outright** (see the Phase 16 block for the four revisit
+  conditions). Nothing in the gate is blocked on it — the chain has been the whole chain since Phase
+  13, and the coverage NER would add is a detection-recall question that belongs to M6's calibration,
+  not to a gate whose contract is that a verdict is reproducible from a version string.
 - **16. Contour 2 halts on `REVIEW` as well as `BLOCK`.** M4's `DECISION_REMEDIATION` table mapped
   `review → SANITIZE`, and Phase 14 changed that to `RETRY_THEN_FAIL` for both. The reason is
   decision 14: a document at `REVIEW` is one a human must look at, and rewriting it instead would
@@ -2416,8 +2711,26 @@ phase's Implementation Status block.
   **not** fixed by redaction: a value the detector found only *partially* (the fixture's address is
   detected as `г. Москва`, so `ул. Примерная, д. 1, кв. 2` survives) and a value appearing **twice**
   in one document, which the aggregator's dedup collapses to one finding and therefore one
-  replacement. Both are detection-side limits; the second becomes a live leak when Phase 15 makes
+  replacement. Both are detection-side limits;   the second becomes a live leak when Phase 15 makes
   `destination=EXTERNAL_LLM` reachable, and is filed there.
+- **R15 — `REVIEW` becomes production-reachable, and still has no consumer.** Phase 17 makes the first
+  real `REVIEW` fire in production, which is the point, and it inherits R9 wholesale: no human UI, no
+  audit sink, no durable `needs_review` state. A tripping document halts with **zero artifacts** and
+  a single `document.processing.failed` carrying `error_code="PII_REVIEW_REQUIRED"` — so the evidence
+  a reviewer needs exists only in the logs, and the document is neither queued anywhere nor recoverable
+  without a re-upload. Phase 17 deliberately does **not** add a durable review state (that needs the
+  audit sink M4 deferred); it makes the gap visible instead of leaving `REVIEW` unreachable, which
+  would have been the worse outcome. Two further costs, both accepted rather than hidden:
+  - **No operator lever.** Following `REDACTION_AVAILABLE`'s precedent, there is no setting to soften
+    the threshold — an operator must not be able to disable a control with an environment variable.
+    The only path is a versioned edit to `PIIPolicy.combinations`, which is a reviewable commit rather
+    than a config push. If a tripping volume proves unacceptable, that is a policy change with a
+    version bump, deliberately.
+  - **Availability depends on the rule staying narrow.** Mitigated by measurement rather than by
+    assertion: no fixture in the dataset carries *any* government identifier, so the rule is dormant
+    across all six and `test_no_fixture_changes_decision` fails the day one starts tripping. The
+    residual risk is real-world data this repo does not have, and it is M6's to measure.
+  Residual and **not** fixed in Phase 17: everything above. Filed against R9 rather than duplicated.
 
 ### Versioning policy (locked)
 
@@ -2431,8 +2744,8 @@ independently, mirroring `classifier_version` (currently `2.1.0`).
 M5 version roadmap:
 
 ```text
-DETECTOR_VERSION    1.0.0 ──(Ph 9, additive detect_text)──▶ 1.1.0 ──(Ph 14)──▶ 1.2.0 ──(Ph 16, NER)──▶ 1.3.0
-PII_POLICY_VERSION  1.0.0 ──(Ph 14, persistence escalation)▶ 2.0.0 ──(Ph 17, thresholds)▶ 2.1.0
+DETECTOR_VERSION    1.0.0 ──(Ph 9, additive detect_text)──▶ 1.1.0 ──(Ph 14)──▶ 1.2.0 ──(Ph 16, NER)──▶ 1.3.0  [DEFERRED]
+PII_POLICY_VERSION  1.0.0 ──(Ph 14, persistence escalation)▶ 2.0.0 ──(Ph 17, combinations)▶ 3.0.0
 ```
 
 `1.0.0 → 2.0.0` is **major** because it changes a decision: at `stage=canonical,
@@ -2441,6 +2754,20 @@ destination=persistence`, identity/contact/government/medical_id move from `allo
 is the milestone's entire point, and it is exactly the change a stored `policy_version` exists to
 make interpretable.
 
+`2.0.0 → 3.0.0` is **major for the same reason**, and Revision 3 corrects this roadmap's own
+`2.1.0` (c). §4.8 defines minor as additive *and backward-compatible* and major as "any change that
+alters a decision for any input". Phase 17's rule returns `REVIEW` for a document that returns `ALLOW`
+today, so it fails the backward-compatible half of minor by the plan's own definition. The reason to
+care about the distinction, rather than treating it as bookkeeping: the number's whole job is to let a
+stored `PIIScanResult` name the policy that produced it, and a `2.1.0` that means "additive and
+backward-compatible" attached to a rule that changed a decision makes that name a lie — the same
+argument that settled `1.1.0 → 1.2.0` below. Preserving the roadmap number would have been cheaper
+than being right.
+
+The detector chain ends M5 at `1.2.0` because Phase 16 is deferred. The `1.3.0` step above stays on
+the roadmap: a NER detector, if the revisit conditions are ever met, is additive to a chain that
+already detects `PIISource`, so minor remains the right magnitude then.
+
 `1.1.0 → 1.2.0` is a **deviation from the roadmap this section originally stated**, where Phase 16's
 NER was the step that earned `1.2.0`. Phase 14 removed `date_of_birth.numeric` and added
 `date_of_birth.after_patient_name` (§14.4, "a date that is only a date"), which is a rule leaving
@@ -2448,7 +2775,6 @@ and a rule arriving: not the additive minor §4.8 describes, and not major eithe
 field changed and no enum member was removed. What settles it is the reason the constant exists at
 all — a stored `PIIScanResult` must name a detector whose behaviour reproduces it, and a `1.1.0`
 result carrying a date of birth nobody can re-derive is a historical verdict that has become a lie.
-Phase 16's NER is still additive; it simply earns `1.3.0`.
 
 ### Conventions
 

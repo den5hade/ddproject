@@ -527,17 +527,24 @@ def test_the_redacted_artifact_is_not_a_second_name_for_marker():
     assert MARKDOWN_ARTIFACTS[MARKDOWN_KIND_REDACTED] != MARKDOWN_ARTIFACTS["unstructured"]
 
 
-def test_the_versions_did_not_move():
-    """Neither constant describes what this phase changed.
+def test_the_versions_moved_only_for_a_decision_change():
+    """Phase 15 moved neither constant; Phase 17 moved the policy and not the detector.
 
-    The ``EXTERNAL_LLM`` override already existed in the table; Phase 15 changes
-    which destination is *supplied*, not any decision rule, so §4.8's "any
-    change that alters a decision" does not fire. A stored ``pii_result.json``
-    records ``destination: external_llm``, which is what makes such a verdict
+    ``EXTERNAL_LLM`` already existed in the table before Phase 15, which changes
+    which destination is *supplied*, not any decision rule, so §4.8's "any change
+    that alters a decision" did not fire: a stored ``pii_result.json`` records
+    ``destination: external_llm``, which is what makes such a verdict
     interpretable without a bump.
+
+    Phase 17 then moved the policy to 3.0.0 and left the detector at 1.2.0 —
+    two independently-bumped contracts, and the split is the assertion. A
+    combination rule is a *policy* change; it adds no finding and changes no
+    detector, so a detector bump would claim a behaviour change that did not
+    happen, and 1.3.0 belongs to a NER detector that Phase 16's deferral
+    deliberately did not ship.
     """
     assert DETECTOR_VERSION == "1.2.0"
-    assert PII_POLICY_VERSION == "2.0.0"
+    assert PII_POLICY_VERSION == "3.0.0"
 
 
 def test_the_document_gate_wire_produces_a_document_stage_context():

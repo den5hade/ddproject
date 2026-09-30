@@ -58,7 +58,7 @@ from app.pii.models import (
     PIIRiskLevel,
     PIIScanStage,
 )
-from app.pii.policy import build_policy_context, resolve_destination
+from app.pii.policy import PII_CATEGORY_GROUPS, build_policy_context, resolve_destination
 
 FIXTURES = iter_pii_fixtures()
 SETTINGS = Settings(_env_file=None, pii_fingerprint_secret="manifest-verification-secret")
@@ -193,6 +193,53 @@ def test_only_a_credential_blocks_at_every_boundary():
         malicious_result = _decided(malicious.path.read_text(encoding="utf-8"), context)
         assert patient_result.decision is not PIIDecision.BLOCK
         assert malicious_result.decision is PIIDecision.BLOCK
+
+
+# --- the Phase 17 availability guard ---------------------------------------
+
+
+@pytest.mark.parametrize("fixture", FIXTURES, ids=IDS)
+@pytest.mark.parametrize(
+    "context",
+    [MANIFEST_CONTEXT, PRODUCTION_CONTEXT],
+    ids=["failclosed", "prod"],
+)
+def test_no_fixture_trips_the_combination_threshold(fixture: PIIFixture, context):
+    """Acceptance criterion 6, stated as the *mechanism* and not just the outcome.
+
+    The decision assertions above already fail if a fixture's verdict moves, but
+    they would fail as a bare ``expected != detected`` and say nothing about
+    which rule moved. This asserts the cause directly: not one fixture carries a
+    government identifier, so the Phase 17 threshold cannot fire on the dataset
+    and every expected decision recorded in the manifest is still reachable.
+
+    That is the availability guarantee behind R15, and it is the thing a future
+    detector improvement is most likely to break — a fixture gaining a real СНИЛС
+    or ОМС row would flip a routine document to ``REVIEW`` and halt it in
+    production. When that happens the *rule* is not the bug and the fixture is
+    not the bug; the threshold needs re-measuring, and this test is the alarm.
+    """
+    result = _decided(fixture.path.read_text(encoding="utf-8"), context)
+
+    assert not any(reason.startswith("combination:") for reason in result.reasons), fixture.file
+
+
+def test_no_fixture_carries_a_government_identifier_at_all():
+    """The measurement, as an assertion.
+
+    Phase 17's decision to use ``{"government"}/2`` rather than ORDER §13.1's two
+    examples rested on counting these categories across the whole dataset, and the
+    count is zero. Recorded here so the reasoning cannot quietly become folklore:
+    the count was 0 government categories in all six fixtures (4 markdown,
+    2 canonical), and every HIGH count was 1.
+    """
+    government = {category.value for category in PII_CATEGORY_GROUPS["government"]}
+    present = {category for f in FIXTURES for category in f.expected_categories}
+
+    assert present & government == set(), (
+        f"dataset now carries {sorted(present & government)}; re-measure the threshold"
+    )
+
 
 
 # --- the Phase 13 acceptance pair, called out by name ---------------------

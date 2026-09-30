@@ -254,8 +254,8 @@ def test_version_constants_are_importable_from_their_home_modules():
     assert from_policy == PII_POLICY_VERSION
 
 
-def test_versions_are_the_m4_baseline_and_the_phase_9_minor_bump():
-    """Detector 1.2.0 (M5 Phase 14), policy 2.0.0 (M5 Phase 14) — two bumps, one phase.
+def test_versions_are_the_m4_baseline_the_phase_9_minor_and_the_phase_17_major():
+    """Detector 1.2.0, policy 3.0.0 — three bumps across three phases.
 
     Phase 9 changed the *detector* contract (``detect_text`` added, pattern
     layer implemented) for 1.0.0 → 1.1.0. Phase 14 then changed both lines, and
@@ -270,11 +270,17 @@ def test_versions_are_the_m4_baseline_and_the_phase_9_minor_bump():
       clause the whole constant exists for — a stored result must name a
       detector whose behaviour reproduces it.
 
+    Phase 17's combination rule then took the policy 2.0.0 → **3.0.0**, also
+    major and also by the same clause: a document carrying two government
+    identifiers returns ``review`` where it returned ``allow``, so minor's
+    backward-compatible half fails. The roadmap's ``2.1.0`` was corrected with
+    it. The detector stayed at 1.2.0 — a policy rule adds no finding.
+
     Asserted as two separate numbers because that is what they are: two
     independently-bumped contracts stamped into the same artifact.
     """
     assert DETECTOR_VERSION == "1.2.0"
-    assert PII_POLICY_VERSION == "2.0.0"
+    assert PII_POLICY_VERSION == "3.0.0"
 
 
 def test_scan_result_stamps_both_versions():

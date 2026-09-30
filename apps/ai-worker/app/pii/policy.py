@@ -88,7 +88,6 @@ claimed the document was merely reviewed.
 
 Where the context comes from
 ----------------------------
-
 :meth:`PIIGate.inspect` receives a ``ProcessingContext`` and a
 ``NormalizedDocument``, and neither carries ``destination``,
 ``redaction_available`` or ``organization_id`` — the three inputs that select
@@ -151,6 +150,7 @@ __all__ = [
     "DefaultPolicyEngine",
     "PolicyEngine",
     "PolicyEngineBase",
+    "PIICombinationRule",
     "PIIPolicy",
     "PIIPolicyContext",
     "PIIRule",
@@ -158,16 +158,22 @@ __all__ = [
     "resolve_destination",
 ]
 
-DEFAULT_POLICY_VERSION = "2.0.0"
+DEFAULT_POLICY_VERSION = "3.0.0"
 """Version of the locked baseline table, stamped onto every scan result.
 
-``2.0.0`` is the persistence escalation (M5 Phase 14). It is **major** because it
-changes a decision: at ``stage=CANONICAL, destination=PERSISTENCE`` the
-identity/contact/government/medical-id categories move from ``ALLOW`` to
-``REDACT`` (:data:`REDACT_ON_PERSIST`), so a document that previously persisted a
-patient's name now persists a placeholder. A stored ``policy_version`` has to be
-able to say which of those two worlds produced it, which is the whole reason the
-constant exists.
+``3.0.0`` is the combination threshold (M5 Phase 17). It is **major** because it
+changes a decision: a document carrying two distinct government identifiers
+(:data:`PII_CATEGORY_GROUPS`) resolves to ``REVIEW`` where the same document
+resolved to ``ALLOW`` before, so an input that produced ``ALLOW`` now produces
+``REVIEW``. §4.8 of the plan makes that the test — minor is additive *and*
+backward-compatible, major is "any change that alters a decision for any input" —
+and this rule fails the backward-compatible half of minor by the plan's own
+definition. The roadmap's ``2.1.0`` was corrected with it.
+
+The two prior majors are ``2.0.0``, the persistence escalation (Phase 14), and
+``1.0.0``, the initial table. The reasoning is the same in every case, and it is
+the reason the constant exists at all: a stored ``policy_version`` has to be
+able to say which of those worlds produced it.
 
 Single source of truth: :data:`PII_POLICY_VERSION` reads from
 ``DEFAULT_POLICY.version`` rather than repeating the literal, because two
@@ -363,6 +369,117 @@ class PIIRule(BaseModel):
     """Inherent sensitivity of the category; independent of destination."""
 
 
+class PIICombinationRule(BaseModel):
+    """What to do when several categories appear *together* (M5 Phase 17).
+
+    Every other rule in this module is per category, so the table has no way to
+    say that one finding is fine and two together are not. That gap is ORDER
+    §13.1's "unknown limitation", and this is its narrow resolution: a document
+    carrying two distinct government identifiers is ``REVIEW`` even though each
+    one on its own is ``ALLOW``.
+
+    The two thresholds ORDER §13.1 offers as examples — "≥2 distinct HIGH
+    categories" and "identity + government ID" — were measured against the whole
+    fixture dataset and **both rejected**: a Russian medical record carrying
+    СНИЛС + ОМС + № карты is three HIGH categories and would halt routine care,
+    while ФИО + СНИЛС is the single most normal pair in the domain and is
+    deliberately allowed today by ``IDENTIFIER_MARKER``. The narrower rule fires
+    on the §45.19 accept case exactly and is silent on all six existing fixtures.
+    Plan §4.13 records the measurement.
+
+    The escalation is applied to the **document decision** and never to
+    :attr:`~app.pii.models.PIIDecisionResult.actions`: §4.12 makes ``actions``
+    the remediation channel, and the canonical sanitizer masks a leaf iff that
+    action is ``REDACT``. Writing ``REVIEW`` into the participating categories
+    would stop the sanitizer masking those leaves in any future where ``REVIEW``
+    does not halt, and would make the per-category table lie about what it
+    decided. This is decision 14 holding structurally — ``REVIEW`` adds no
+    ``REDACT``, so a review still cannot rewrite the document it asks about.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requires_groups: frozenset[str]
+    """Names from :data:`PII_CATEGORY_GROUPS`. A category satisfies the rule if
+    it belongs to any one of them."""
+
+    min_count: int
+    """How many **distinct** categories, counted across the union of
+    :attr:`requires_groups`, fire the rule. Distinct, not total findings: a
+    document repeating one identifier is not a combination."""
+
+    decision: PIIDecision
+    """Escalation target. Constrained to ``REVIEW`` — see
+    :meth:`_require_review_only`."""
+
+    @model_validator(mode="after")
+    def _require_review_only(self) -> PIICombinationRule:
+        """Reject a rule that could ``BLOCK``.
+
+        A combination that blocks would make itself the second ``BLOCK`` source
+        and contradict the invariant in :func:`_default_rules`: ``SECRET`` is the
+        only thing that blocks, because a credential in a document is a
+        vulnerability rather than a fact about the document's subject. The
+        alternative — letting a combination block — is exactly the kind of change
+        that halts a clinic's morning on an untested hypothesis, and it is
+        rejected at construction rather than at decision time.
+        """
+        if self.decision is not PIIDecision.REVIEW:
+            raise PIIPolicyError(
+                f"Combination rule {sorted(self.requires_groups)}/x{self.min_count} escalates to "
+                f"{self.decision.value}; only '{PIIDecision.REVIEW.value}' is permitted. "
+                "BLOCK is reserved for SECRET (see _default_rules)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_a_reachable_threshold(self) -> PIICombinationRule:
+        """Reject a rule that can never mean anything.
+
+        ``min_count < 2`` is not a stricter rule, it is a rule that fires on a
+        single finding — that is a per-category rule wearing a combination's
+        syntax, and it would silently duplicate (or contradict) ``rules``. An
+        empty group set can never fire at all. Both are configuration bugs, and
+        the plan's convention is that a policy which cannot decide is a
+        construction-time error, not a runtime surprise.
+        """
+        if self.min_count < 2:
+            raise PIIPolicyError(
+                f"Combination rule {sorted(self.requires_groups)} has "
+                f"min_count={self.min_count}; a combination needs at least 2 distinct "
+                "categories. A threshold below 2 is a per-category rule and belongs in "
+                "PIIPolicy.rules."
+            )
+        if not self.requires_groups:
+            raise PIIPolicyError(
+                "Combination rule has an empty requires_groups; it can never fire."
+            )
+        return self
+
+    def matches(self, present: frozenset[PIICategory]) -> bool:
+        """Whether ``present`` — the document's distinct categories — trips this rule.
+
+        Counting is over categories, not findings, so a document that repeats one
+        identifier does not reach ``min_count`` on repetition alone.
+        """
+        members: set[PIICategory] = set()
+        for group in self.requires_groups:
+            members |= PII_CATEGORY_GROUPS[group]
+        return len(present & members) >= self.min_count
+
+    def reason(self) -> str:
+        """The line recorded in :attr:`~app.pii.models.PIIDecisionResult.reasons`.
+
+        ``reasons`` is the only account of a review a human will ever see, and
+        this rule fires on documents that are otherwise unremarkable — a bare
+        ``ALLOW`` that is now a ``REVIEW`` is a halt someone has to explain, so
+        the reason names the groups and the threshold rather than saying
+        "combination".
+        """
+        groups = ", ".join(sorted(self.requires_groups))
+        return f"combination: >={self.min_count} distinct categories from [{groups}] -> review"
+
+
 class PIIPolicy(BaseModel):
     """A versioned, complete category→rule table.
 
@@ -378,6 +495,37 @@ class PIIPolicy(BaseModel):
     version: str
     rules: dict[PIICategory, PIIRule]
     """Every category, exactly once — see the completeness check below."""
+
+    combinations: tuple[PIICombinationRule, ...] = ()
+    """Cross-category thresholds (Phase 17). Empty by default, which makes this
+    field additive: every policy built before it is still a valid policy.
+
+    Owned here rather than declared as a module constant because
+    :data:`PII_POLICY_VERSION` is ``DEFAULT_POLICY.version`` and the entire
+    reason that constant exists is that a stored scan result must be
+    re-derivable from the version it names. A threshold table the version does
+    not name is a table a stored verdict cannot be reproduced from."""
+
+    @model_validator(mode="after")
+    def _require_known_groups(self) -> PIIPolicy:
+        """Reject a combination rule naming a group that does not exist.
+
+        ``PIICombinationRule.matches`` indexes :data:`PII_CATEGORY_GROUPS`
+        directly, so a typo like ``"goverment"`` would not fail here — it would
+        raise a bare ``KeyError`` on the first document that reached the rule,
+        naming neither the group nor the policy version. A group name is a string
+        precisely because a misspelling is possible; this is what pays for that
+        choice.
+        """
+        for rule in self.combinations:
+            unknown = rule.requires_groups - set(PII_CATEGORY_GROUPS)
+            if unknown:
+                raise PIIPolicyError(
+                    f"Policy v{self.version} combination rule names unknown "
+                    f"{PII_CATEGORY_GROUPS} group(s) {sorted(unknown)}; "
+                    f"known groups are {sorted(PII_CATEGORY_GROUPS)}"
+                )
+        return self
 
     @model_validator(mode="after")
     def _require_full_coverage(self) -> PIIPolicy:
@@ -425,8 +573,39 @@ def _default_rules() -> dict[PIICategory, PIIRule]:
     }
 
 
-DEFAULT_POLICY = PIIPolicy(version=DEFAULT_POLICY_VERSION, rules=_default_rules())
-"""The locked baseline of §4.4, for ``destination=INTERNAL_LLM``."""
+def _default_combinations() -> tuple[PIICombinationRule, ...]:
+    """Build the §4.13 baseline: one narrow rule, and only one.
+
+    Two distinct *government* identifiers in one document is a combination worth
+    a human: it is the shape of a document assembled to carry someone else's
+    identifiers, and each identifier alone is exactly what a medical record is
+    expected to contain. The rule is deliberately narrower than ORDER §13.1's two
+    worked examples, because both of those were measured against the fixture
+    dataset and either would halt routine care (see :class:`PIICombinationRule`).
+
+    Written as a tuple of one so the *shape* is visible. The tempting alternative
+    is to add a row per pair (``SNILS`` + ``INSURANCE_NUMBER``,
+    ``SNILS`` + ``PASSPORT``, …), which is a table of ten near-identical rules
+    that has to be edited every time a category is added and would have to be
+    re-validated for consistency the model cannot check. Naming the group and the
+    count says the same thing in one row that cannot drift from
+    :data:`PII_CATEGORY_GROUPS`.
+    """
+    return (
+        PIICombinationRule(
+            requires_groups=frozenset({"government"}),
+            min_count=2,
+            decision=PIIDecision.REVIEW,
+        ),
+    )
+
+
+DEFAULT_POLICY = PIIPolicy(
+    version=DEFAULT_POLICY_VERSION,
+    rules=_default_rules(),
+    combinations=_default_combinations(),
+)
+"""The locked baseline of §4.4 plus the §4.13 combination table."""
 
 PII_POLICY_VERSION: str = DEFAULT_POLICY.version
 """Stamped onto :class:`~app.pii.models.PIIScanResult.policy_version` (Phase 1).
@@ -709,10 +888,10 @@ class DefaultPolicyEngine(PolicyEngineBase):
 
         Raises:
             PIIPolicyError: If a finding carries a category the bound policy has
-                no rule for. Unreachable through a constructed
-                :class:`PIIPolicy`; present because a hand-mutated ``rules`` dict
-                would otherwise raise a bare ``KeyError`` from deep inside the
-                loop, naming neither the category nor the policy version.
+            no rule for. Unreachable through a constructed
+            :class:`PIIPolicy`; present because a hand-mutated ``rules`` dict
+            would otherwise raise a bare ``KeyError`` from deep inside the
+            loop, naming neither the category nor the policy version.
         """
         if not findings:
             return PIIDecisionResult(
@@ -726,6 +905,7 @@ class DefaultPolicyEngine(PolicyEngineBase):
         reasons: list[str] = []
         warnings: list[str] = []
         risk_level = PIIRiskLevel.LOW
+        present: set[PIICategory] = set()
 
         for finding in findings:
             category = finding.category
@@ -737,14 +917,39 @@ class DefaultPolicyEngine(PolicyEngineBase):
             risk_level = max(risk_level, self.policy.risk_for(category), key=_RISK_RANK.__getitem__)
             action = self._action_for(finding, context, reasons, warnings)
             actions[category] = action
+            present.add(category)
+
+        escalation = self._combination(present, reasons)
 
         return PIIDecisionResult(
-            decision=self._decide(actions),
+            decision=self._decide(actions, escalation),
             risk_level=risk_level,
             actions=actions,
             reasons=reasons,
             warnings=warnings,
         )
+
+    def _combination(self, present: set[PIICategory], reasons: list[str]) -> PIIDecision | None:
+        """Return the cross-category escalation for this document, if any.
+
+        Deliberately returns a decision rather than mutating ``actions``: §4.12
+        makes ``actions`` the remediation channel, and the sanitizer masks a leaf
+        iff its action is ``REDACT``, so a combination that wrote ``REVIEW`` into
+        the participating categories would stop those leaves being masked in any
+        future where ``REVIEW`` does not halt, and would make the per-category
+        table misreport what it decided.
+
+        First match wins, in declared order — the table is short and ordered, and
+        a rule that could fire alongside another is a rule set whose interaction
+        nobody has reasoned about. A ``BLOCK`` is never returned: the combination
+        decision is constrained to ``REVIEW`` at construction, so ``BLOCK``
+        precedence stays where §4.4 put it.
+        """
+        for rule in self.policy.combinations:
+            if rule.matches(frozenset(present)):
+                reasons.append(rule.reason())
+                return rule.decision
+        return None
 
     def _action_for(
         self,
@@ -807,7 +1012,11 @@ class DefaultPolicyEngine(PolicyEngineBase):
 
         return action
 
-    def _decide(self, actions: dict[PIICategory, PIIAction]) -> PIIDecision:
+    def _decide(
+        self,
+        actions: dict[PIICategory, PIIAction],
+        escalation: PIIDecision | None = None,
+    ) -> PIIDecision:
         """Reduce per-category actions to one decision by strict precedence.
 
         ``ALLOW_WITH_WARNING`` is the residue of an applied ``WARN`` or
@@ -817,11 +1026,17 @@ class DefaultPolicyEngine(PolicyEngineBase):
         was redacted anywhere in a document keeps that action for the whole
         document regardless of what a later sighting of the same category
         resolved to.
+
+        ``escalation`` is the Phase 17 combination verdict, which joins the
+        precedence at ``REVIEW`` — not at the top. A document carrying a secret
+        and two government identifiers is a ``BLOCK``: the credential is a
+        vulnerability and outranks everything, and a combination rule must never
+        become the reason a ``BLOCK`` degrades into a review.
         """
         applied = set(actions.values())
         if PIIAction.BLOCK in applied:
             return PIIDecision.BLOCK
-        if PIIAction.REVIEW in applied:
+        if PIIAction.REVIEW in applied or escalation is PIIDecision.REVIEW:
             return PIIDecision.REVIEW
         if applied & {PIIAction.WARN, PIIAction.REDACT}:
             return PIIDecision.ALLOW_WITH_WARNING

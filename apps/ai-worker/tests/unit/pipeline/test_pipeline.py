@@ -468,6 +468,33 @@ never that the pipeline can reach one. Both halves of that are asserted in
 """
 
 
+COMBINATION_MARKER = """## Page 1
+
+# Справка
+
+| | |
+| :--- | :--- |
+| ФИО: | Шадеркин Денис Сергеевич |
+| СНИЛС: | 123-456-789 00 |
+| Номер полиса: | 7700012345001234 |
+"""
+"""A document carrying two distinct government identifiers — the review path.
+
+Added in M5 Phase 17, and the first document in this module that can drive the
+real gate to ``REVIEW``. Every halting test above it substitutes
+:class:`_StubGate` or reaches ``BLOCK`` through a credential, so before this
+phase nothing proved the pipeline could *reach* ``REVIEW`` on its own: at the
+internal destination ``REVIEW`` was unreachable by construction, which is the gap
+M4 Phase 5 recorded as gap 1 and Phase 17 closed.
+
+The 16-digit policy number is not incidental — ``INSURANCE_NUMBER`` is
+``(?<![\\d-])\\d{16}(?![\\d-])``, so a 10-digit card number would be detected as
+nothing and this document would quietly take the allow path again. Compare
+:data:`IDENTIFIER_MARKER`, which is the same document minus this row and must
+stay allowed: the pair is what keeps the threshold honest in both directions.
+"""
+
+
 def test_pipeline_refuses_to_start_without_fingerprint_secret(mock_s3, mock_publisher):
     """Fail closed at start-up, not on the first document."""
     settings = _settings(pii_fingerprint_secret="")
@@ -697,7 +724,73 @@ async def test_identifiers_alone_do_not_block_even_with_a_real_gate(
     assert completed.data["pii"]["findings_count"] > 0
 
 
+@pytest.mark.asyncio
+async def test_two_government_identifiers_review_through_the_real_gate(
+    pipeline, mock_s3, mock_publisher
+):
+    """The review path end-to-end: the first ``REVIEW`` the real gate has produced.
+
+    Until M5 Phase 17 no document could drive the real gate to ``REVIEW`` — at the
+    internal destination the engine returned only ``ALLOW``,
+    ``ALLOW_WITH_WARNING`` or ``BLOCK``, so ``PII_REVIEW_REQUIRED`` existed in the
+    error-code table and nothing had ever written it. The four assertions mean the
+    document is stopped *before* it is used, exactly as for the credential path:
+
+    - nothing is uploaded, not even the PII artifact recording the combination;
+    - the LLM is never called;
+    - only ``document.processing.failed`` is published, with ``PII_REVIEW_REQUIRED``;
+    - neither identifier appears in any published payload.
+
+    Paired with ``test_identifiers_alone_do_not_block_even_with_a_real_gate``, which
+    is the same document minus the policy-number row: the allow there and the
+    review here are attributable to the one row that differs.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = COMBINATION_MARKER.encode()
+
+    await pipeline.handle_structuring(_converted(event))
+
+    assert mock_s3.upload_bytes.call_args_list == []
+    assert pipeline._ai_client.extract_canonical.called is False
+
+    published_keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+    assert published_keys == ["document.processing.failed"]
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_GATE_JOB_TYPE
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.REVIEW]
+
+    serialised = json.dumps([c.args[1] for c in mock_publisher.publish.call_args_list], default=str)
+    assert "123-456-789 00" not in serialised
+    assert "7700012345001234" not in serialised
+
+
+@pytest.mark.asyncio
+async def test_the_combination_is_the_only_difference_between_allow_and_review(
+    pipeline, mock_s3, mock_publisher
+):
+    """The threshold is one row, and this is the row.
+
+    Asserted by running the real gate over both fixtures and comparing the
+    outcomes directly, so the two documents cannot drift apart as either is
+    edited: if a future change made them agree, this fails naming the row that
+    stopped separating them.
+    """
+    event = _event(DocumentUploaded)
+    completed = []
+    for text in (IDENTIFIER_MARKER, COMBINATION_MARKER):
+        mock_s3.download_bytes.return_value = text.encode()
+        mock_s3.upload_bytes.reset_mock()
+        mock_publisher.publish.reset_mock()
+
+        await pipeline.handle_structuring(_converted(event))
+        keys = [c.args[0] for c in mock_publisher.publish.call_args_list]
+        completed.append("document.analysis.completed" in keys)
+
+    assert completed == [True, False], "one policy-number row must separate allow from review"
+
+
 # --- contour 2: the canonical-output guard (M5 Phase 14) ----------------------
+
 #
 # Contour 1's tests above all feed the *marker* to the gate, which is correct and
 # insufficient: the observed leak never appeared in `marker.md` as a field the
@@ -915,6 +1008,45 @@ async def test_a_canonical_halt_keeps_the_contour_1_artifact_and_its_failure_is_
     assert failure.job_type == PII_CANONICAL_GATE_JOB_TYPE
     assert failure.job_type != PII_GATE_JOB_TYPE
     assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.BLOCK]
+
+
+@pytest.mark.asyncio
+async def test_a_combination_halts_contour_2_before_any_dump(mock_s3, mock_publisher):
+    """The combination reaches contour 2, and a ``REVIEW`` halts there too.
+
+    Contour 2 escalates the participating categories to ``REDACT`` (§4.11), so a
+    document whose model output carries two government identifiers would have been
+    *sanitized and written* — the combination's job is to stop that, since the
+    artifact is the durable copy. Phase 14's ordering (decision 16) says the halt
+    precedes the dump, and this is the first contour-2 halt driven by ``REVIEW``
+    rather than by a credential.
+
+    The ``REDACT`` in ``actions`` is the other half of the claim: the combination
+    must not have weakened §4.11, only outranked the decision. If it had downgraded
+    the actions, this document would persist its identifiers and the test above it
+    would not notice, because that one asserts a *credential* halts.
+    """
+    event = _event(DocumentUploaded)
+    mock_s3.download_bytes.return_value = IDENTIFIER_MARKER.encode()
+    pipeline = _pipeline_with_extraction(
+        mock_s3,
+        mock_publisher,
+        "Пациент: СНИЛС 123-456-789 00, полис 7700012345001234.",
+    )
+
+    await pipeline.handle_structuring(_converted(event))
+
+    keys = _uploaded_keys(mock_s3)
+    assert [k for k in keys if k.endswith("/pii_result.json")]  # contour 1's audit record
+    assert not any(k.endswith("/canonical.json") for k in keys)
+    assert not any(k.endswith("/structured.md") for k in keys)
+
+    failure = _published(mock_publisher, "document.processing.failed")
+    assert failure.job_type == PII_CANONICAL_GATE_JOB_TYPE
+    assert failure.error_code == PII_DECISION_ERROR_CODES[PIIDecision.REVIEW]
+
+    serialised = json.dumps([c.args[1] for c in mock_publisher.publish.call_args_list], default=str)
+    assert "7700012345001234" not in serialised
 
 
 @pytest.mark.asyncio

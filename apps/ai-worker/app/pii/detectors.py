@@ -65,8 +65,12 @@ be added without saying which category it serves.
 is **removed** from :data:`_PATTERNS` and ``date_of_birth.after_patient_name``
 is added to :data:`_FIELDS` (§4.11). A rule leaving is not an additive change, so
 the minor is spent here rather than on Phase 16's NER; the reasoning, including
-the recall the swap gives up, is on the constant. §8's acceptance smoke check
-("expected after Phase 14: ``1.2.0 2.0.0``") is the same fact stated as a number.
+the recall the swap gives up, is on the constant.
+
+The constant has not moved since. Phase 17 raised
+:data:`~app.pii.policy.PII_POLICY_VERSION` to ``3.0.0`` — the combination
+threshold is a *policy* change and adds no finding, so the detector half of §5's
+smoke check is still ``1.2.0`` and the pair is now ``1.2.0 3.0.0``.
 """
 
 from __future__ import annotations
