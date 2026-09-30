@@ -126,7 +126,7 @@ The report must state both and decide neither.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Evaluation core — `evaluate.py` CLI + `EvaluationDataset` abstraction + app-owned loaders | [x] |
-| 2 | Multi-label metrics + ground-truth audit of the manifest | [ ] |
+| 2 | Multi-label metrics + ground-truth audit of the manifest | [x] |
 | 3 | Real-corpus calibration pass — measure, report, calibrate the **detector** layer | [ ] |
 | 4 | Dataset-source-aware regression gates + derived fixtures + `make eval-pii` | [ ] |
 | 5 | Close-out — DoD, eval report artifact, docs addendum, decision hand-off | [ ] |
@@ -142,6 +142,8 @@ needs_review durable state          the R9/R15 fix, not an evaluation task
 PIIAuditRecord.destination          M4 Phase 7 gap; belongs to the first real audit sink
 numeric-leaf walk (Phase 6 gap)     report as a finding; the walk's contract is not M6's to change
 AGE masking on EXTERNAL_LLM         reported as a second decision candidate, not resolved
+F1 ticket_number label            PENDING_GROUND_TRUTH_RULING · manifest ground truth
+                                   is not an evaluation decision · Phase 5 hand-off
 ```
 
 ---
@@ -189,7 +191,7 @@ Per-fixture record: expected vs predicted categories, per-detector attribution (
 CLI: stdout summary, per-fixture detail, `--json`, `--report <path>`. `main()` always returns `0` — thresholds live in pytest, as in M3. Deps: M5 as-is.
 **Accept:** CLI runs on the committed corpus; output matches hand-audited expectations for 3 known fixtures (`patient/synthetic-consultation-01.md` → 7 categories / `review` at external; `appointment/synthetic-registration-01.md` → `person_name` + `ticket_number` only; `malicious/synthetic-injection-01.md` → `secret` + `ticket_number` / `block`); `--json` emits both dataset blocks with `real_corpus.available == false` and **no** `metrics` key; no test-side import from `app` (M3's subprocess guard, reused); the loader reaches nothing under `.dev/` when `PII_FIXTURES_DIR` is unset.
 
-### Phase 2 — Metrics & ground-truth audit [ ]
+### Phase 2 — Metrics & ground-truth audit [x]
 
 Metrics in `evaluate.py` (pure functions, Pydantic-typed results). **Multi-label, not single-label** — M3's `compute_metrics` is single-label by construction and `expected_categories` is a set of up to 7:
 
@@ -219,6 +221,19 @@ confidence reliability:  same 3-band table as M3, keyed on PIIFinding.confidence
 
 Audit both manifests entry by entry. Committed: confirm each `expected_categories` is human-verifiable from the derived text alone, and each `expected_detector_source` is justified. Local: build it, but **no raw PII values** in it. Deps: Phase 1.
 **Accept:** metrics unit-tested against hand-built mini sets with exact fractions (M3 Phase 2 pattern); the audit produces a numbered findings list; **no label flipped without a recorded rationale**; `MANIFEST_AUDIT.md` exists and every entry cites its provenance without reproducing a patient's data.
+
+**Delivered.** `EVALUATION_VERSION` `1.0.0` → `1.1.0` (additive metric layers; the detector and policy versions are untouched). The four reductions are `compute_category_metrics`, `compute_domain_rates`, `compute_detector_attribution` and `compute_confidence_stats`, exported and reachable as `DatasetEvaluation` properties, with the AST corpus-blindness guard parametrized over all five reductions plus `summarize` and a completeness check so a sixth cannot be added unguarded. Exact-fraction tests live in `tests/unit/pii/test_evaluate_metrics.py` (45), the audit's own obligations in `tests/unit/pii/test_manifest_audit.py` (12). Committed corpus: 6 fixtures / 10 boundary rows / 20 findings / 11 observed categories, every category at F1 1.0, 0 false-positive claims, 0 declared-layer mismatches.
+
+**Three unit decisions and one divergence are recorded in `MANIFEST_AUDIT.md` § Measurement decisions (D1–D4)**, because a unit is the part of a rate that is invisible in its output until it is wrong:
+
+| decision | subject | note |
+|---|---|---|
+| **D1** | claims and declared-source mismatches counted per fixture, not per boundary row | counting per row reported the corpus's 20 claims as 33; the committed corpus hid it because every claim in it is currently correct and `2 × 0 = 0` |
+| **D2** | `over_redacted` per category over `category_observations` (`Σ \|expected_categories\|` = 18 here) | the plan's "per category, not per document", with the row variant rejected: it reads a boundary difference as a fidelity defect. Structurally 0 today, which is the point |
+| **D3** | `source_expectation_mismatches` denominated by the 5 fixtures that declare a source | a corpus that declares nothing is not "mismatched 0 times"; 0/0 would print as 0.0% |
+| **D4** | per-detector attribution has **no `fn`** — diverges from this phase's `per-detector tp/fp/fn` | **ruled in Phase 2 review: accepted as delivered.** A miss has no claimant, and it is already published twice — `CategoryMetrics.fn` (the count, per category) and `DomainRates.missed_category_document` (the rate, per document) — so a per-rule copy would be a third statement of a fact with no new information. The attributable layer property is D3's `source_expectation_mismatches` |
+
+Two defects were found and fixed while verifying the phase, both recorded as findings rather than quietly patched: the per-boundary mark conflated "the category set agreed" with "the decision agreed" and printed `MISMATCH` on rows whose categories matched exactly (**F10**), and the same D1 accounting error (**D1**). **F1** — the committed corpus's labels were measured from the detector, so it has no false positive by construction — is **ruled in Phase 2 review: not applied**, filed as `PENDING_GROUND_TRUTH_RULING` and handed off as a product decision in **Phase 5**. It is deliberately *not* a third `PENDING_PRODUCT_DECISION`: the two existing items are policy questions, and this one changes what the corpus *is*, which no phase of M6 may decide. `ticket_number` stays in `expected_categories` for the whole milestone, and with it the standing constraint that **no committed-corpus figure may be quoted as a precision measurement**. Phase 3 cites F4 and F6 for its detector changes.
 
 ### Phase 3 — Real-corpus calibration pass [ ]
 
@@ -257,8 +272,8 @@ Makefile target `make eval-pii`. **The M3 gotcha applies**: the target must `cd 
 
 ### Phase 5 — Close-out (DoD) [ ]
 
-Verify ORDER.md §DoD against the PII Gate items and write the two decision hand-offs. The report artifact states which corpus produced each metric and whether the real corpus was available for the run. Add an M6 addendum to `IMPL_PLAN.md` (Revision 4) and a §17 to `IMPL_RPRT.md`. Record the dataset-scaling caveat: the real corpus is 6 unique documents, so every rate M6 publishes is report-grade, not a gate — the same N-is-small caveat M3 recorded, and the same reason gates stay in counts. Deps: Phase 4.
-**Accept:** deliverable files listed in §"Deliverables"; this plan's three-status mirrors (§1 table, §3 headings, §6 list) all `[x]`; the two `PENDING_PRODUCT_DECISION` items are recorded as findings with numbers, not resolved.
+Verify ORDER.md §DoD against the PII Gate items and write the decision hand-offs. The report artifact states which corpus produced each metric and whether the real corpus was available for the run. Add an M6 addendum to `IMPL_PLAN.md` (Revision 4) and a §17 to `IMPL_RPRT.md`. Record the dataset-scaling caveat: the real corpus is 6 unique documents, so every rate M6 publishes is report-grade, not a gate — the same N-is-small caveat M3 recorded, and the same reason gates stay in counts. Deps: Phase 4.
+**Accept:** deliverable files listed in §"Deliverables"; this plan's three-status mirrors (§1 table, §3 headings, §6 list) all `[x]`; the two `PENDING_PRODUCT_DECISION` items are recorded as findings with numbers, not resolved; and the `PENDING_GROUND_TRUTH_RULING` item (audit **F1**, the `ticket_number` label on `malicious-synthetic-injection-01.md`) is handed off as a **third, separate** decision — a manifest ground-truth change rather than a policy one, with the numbers, the four M5 assertions the flip breaks, and the projection of the corrected metrics.
 
 ---
 
@@ -319,7 +334,7 @@ Each phase runs its suites + lint before the status is flipped.
 ## 6. Implementation order
 
 1. **Phase 1 — Evaluation core** [x] (tooling foundation; needs nothing but the M5 implementation) — do first; every later phase reads its output
-2. **Phase 2 — Metrics & ground-truth audit** [ ] (consumes Phase 1 CLI; produces the evidence list)
+2. **Phase 2 — Metrics & ground-truth audit** [x] (consumes Phase 1 CLI; produces the evidence list)
 3. **Phase 3 — Real-corpus calibration pass** [ ] (consumes Phase 2 findings; the only phase that touches `detectors.py`)
 4. **Phase 4 — Regression gates & derived fixtures** [ ] (locks Phase 3 behaviour into the suite; makes the corpus committable)
 5. **Phase 5 — Close-out** [ ] (DoD report + docs addendum + decision hand-off)

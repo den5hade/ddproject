@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -373,6 +374,68 @@ def test_render_markdown_has_a_row_per_boundary():
             assert evaluation.id in markdown
 
 
+_ROW_BLOCK = re.compile(
+    r"^  (?P<boundary>\S+)\s+\S+/\S+\n"
+    r"    expected : (?P<expected>[^\n]*)\n"
+    r"    predicted: (?P<predicted>[^\n]*)\n"
+    r"    decision : (?P<decision>[^\n]*)$",
+    flags=re.MULTILINE,
+)
+
+
+def test_a_row_never_labels_a_matching_category_set_as_a_mismatch():
+    """The mark on the predicted line is about categories, and only categories.
+
+    `patient/synthetic-consultation-01` at the internal boundary is the case that
+    forced this: its seven expected and seven predicted categories are the same
+    set, and the gate's decision is `allow` where the manifest expects `review`.
+    A single verdict covering both printed `[MISMATCH]` on the line holding the
+    categories, so a reader auditing the category layer was told the set differed
+    when it did not — and the decision difference was already spelled out in the
+    same row's detail suffix.
+    """
+    sections: dict[str, list[str]] = {}
+    for line in render_text(_REPORT).splitlines():
+        if line.startswith("  == "):
+            sections[line.split("== ", 1)[1].split(" ", 1)[0]] = []
+        elif sections:
+            sections[next(reversed(sections))].append(line)
+
+    for evaluation in _SYNTHETIC.evaluations:
+        blocks = list(_ROW_BLOCK.finditer("\n".join(sections[evaluation.id])))
+        assert len(blocks) == len(evaluation.boundaries)
+        for row, block in zip(evaluation.boundaries, blocks, strict=True):
+            assert block["boundary"] == row.boundary
+            assert ("[SET MATCH]" in block["predicted"]) is row.exact_set_match
+            # The decision difference is reported on the decision line, where it
+            # happened, rather than on the category line above it.
+            assert ("decision: expected" in block["decision"]) is not row.decision_match
+
+
+def test_the_markdown_per_fixture_table_separates_the_two_verdicts():
+    """Two questions, two columns — and both answers visible.
+
+    The old table had one `match` column and no expected-decision column, so a
+    row could not be audited at all: it showed the actual decision and a single
+    word, and the reader had to guess which of the two comparisons had failed.
+    """
+    markdown = render_markdown(_REPORT)
+    header = [line for line in markdown.splitlines() if line.startswith("| id | file |")]
+    assert len(header) == 1
+    assert header[0].count("|") == 11
+    for column in ("categories", "actual decision", "expected decision", "decision"):
+        assert column in header[0]
+    for evaluation in _SYNTHETIC.evaluations:
+        for row in evaluation.boundaries:
+            line = next(
+                line
+                for line in markdown.splitlines()
+                if line.startswith(f"| `{evaluation.id}`") and f"`{row.boundary}`" in line
+            )
+            assert f"| {'match' if row.exact_set_match else '**differs**'} " in line + " "
+            assert f"| `{row.decision}` | `{row.expected_decision}` " in line
+
+
 def test_render_text_and_markdown_do_not_crash_on_an_empty_dataset():
     # A local manifest that lists nothing is a real state, and the renderers
     # must not divide by zero or index into an empty block while saying so.
@@ -424,7 +487,9 @@ def _json_of(report: EvaluationReport) -> str:
 def test_detector_and_policy_versions_are_the_locked_baseline():
     assert _REPORT.detector_version == "1.2.0"
     assert _REPORT.policy_version == "3.0.0"
-    assert EVALUATION_VERSION == "1.0.0"
+    # Phase 2 added the category layer; §4.8's rule is about decisions, and a
+    # measurement change moves none, so neither locked gate version moves.
+    assert EVALUATION_VERSION == "1.1.0"
 
 
 # ---------------------------------------------------------------------------

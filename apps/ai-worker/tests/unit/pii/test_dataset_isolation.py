@@ -1,4 +1,4 @@
-"""Phase 1: the two corpora stay separate, and neither one bends the metrics.
+"""The two corpora stay separate, and neither one bends the metrics.
 
 The failure this module exists to prevent is quiet. A harness that grew a
 "real corpus" branch would not announce itself: the real corpus is *local-only*
@@ -10,14 +10,19 @@ model's fields — rather than only against its output, because a corpus-blind
 metric and a corpus-blind metric that happens not to differ yet are the same
 code.
 
-Three properties, one per section:
+Four properties, one per section:
 
 * **Seam shape** — both corpora are reached through one protocol, the committed
   one never consults the environment, and the local one is inert when unset.
-* **Corpus blindness** — metrics, summaries and the per-row verdicts are pure
-  functions of the rows; relabelling every evaluation changes nothing.
+* **Corpus blindness** — every exported reduction (``compute_*`` plus
+  ``summarize``) is a pure function of the rows, and relabelling every
+  evaluation changes nothing. Phase 1 published two reductions; Phase 2 published
+  four more, and the guard is parametrized over all five with a completeness
+  check, because a guard covering only the reductions that existed when it was
+  written is not coverage.
 * **Absence is not zero** — an absent corpus publishes a reason and *no*
   metrics, in both renderings and in the JSON block.
+* **The committed corpus is the only one CI may gate on.**
 
 Deliberately *not* here: any assertion about the real corpus's real contents. It
 does not exist in CI, so such a test would either skip everywhere or pin numbers
@@ -36,12 +41,17 @@ import sys
 from dataclasses import fields
 from pathlib import Path
 
+import pytest
 from app.pii import evaluate as ev
 from app.pii.evaluate import (
     BOUNDARY_DOCUMENT_EXTERNAL,
     BOUNDARY_DOCUMENT_INTERNAL,
     DatasetEvaluation,
     FixtureEvaluation,
+    compute_category_metrics,
+    compute_confidence_stats,
+    compute_detector_attribution,
+    compute_domain_rates,
     compute_metrics,
     default_datasets,
     evaluate_dataset,
@@ -236,8 +246,33 @@ def _identifiers_used_in(func) -> set[str]:
     return names
 
 
-def test_compute_metrics_never_names_the_dataset_field():
-    assert "dataset" not in _identifiers_used_in(compute_metrics)
+# Every reduction `evaluate.py` exports. Phase 1 published two and Phase 2
+# published four; this tuple is the list the AST guard below is applied to, so a
+# fifth reduction added later is caught by the completeness test rather than
+# silently unguarded.
+_REDUCTIONS = (
+    compute_metrics,
+    compute_category_metrics,
+    compute_domain_rates,
+    compute_detector_attribution,
+    compute_confidence_stats,
+)
+
+
+def test_every_exported_reduction_in_the_module_is_guarded_by_this_file():
+    """A corpus-blindness guard that nobody keeps in step with the code is worse
+    than none, because it reads as coverage.
+
+    The completeness check is one line and is the only thing stopping the guard
+    from quietly covering two thirds of the metrics.
+    """
+    exported = {name for name in ev.__all__ if name.startswith("compute_")}
+    assert exported == {reduction.__name__ for reduction in _REDUCTIONS}
+
+
+@pytest.mark.parametrize("reduction", _REDUCTIONS, ids=lambda f: f.__name__)
+def test_no_reduction_ever_names_the_dataset_field(reduction):
+    assert "dataset" not in _identifiers_used_in(reduction)
 
 
 def test_summarize_never_names_the_dataset_field():

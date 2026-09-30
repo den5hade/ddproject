@@ -52,23 +52,39 @@ Three rows per document fixture, one per payload, because a report that printed 
 single decision column would be wrong at two of the three boundaries and would
 not know which one.
 
-What Phase 1 measures, and what Phase 2 adds
---------------------------------------------
+The two metric layers, and why they are separate
+-----------------------------------------------
 
-This module computes the **document-level** layer: per-boundary ground truth vs
+Phase 1 computed the **document-level** layer: per-boundary ground truth vs
 prediction, exact-set match, subset recall (the number that matters — did we find
 everything that is there), the spurious and missed category counts, the
-per-category ``over_redacted`` set, detector attribution and a confidence band.
-Phase 2 layers per-category precision/recall/F1 with macro/micro aggregates, the
-four domain rates, per-detector tp/fp/fn and the confidence-reliability table on
-top of the same records. The split is a phase boundary, not a design: the records
-below carry everything Phase 2 needs and nothing Phase 2 has to recompute.
+per-category ``over_redacted`` set and a confidence band per row. Phase 2 layers
+the **category-level** layer on top of the same records: per-category
+precision/recall/F1 with macro/micro aggregates, four domain rates, per-detector
+and per-source attribution, and the confidence-reliability table. The two live in
+separate models (:class:`PIIMetrics` / :class:`MultiLabelMetrics`) on purpose —
+Phase 1's block is the document verdict and stays a flat set of rates, while the
+per-category layer is a table that grows with the taxonomy and must never be
+folded into a single headline number.
 
-The one metric with no analogue in the M3 harness is ``over_redacted`` — a
-category masked that no detector claimed. It is the tripwire for the R7 class of
-bug, where a rule that was never asked about a field destroys it; it is computed
-per category rather than per document because ``document_date`` being masked is
-invisible at document granularity, which is precisely how that defect shipped.
+Two metrics have no analogue in the M3 harness:
+
+``over_redacted``
+    A category masked that no detector claimed. The tripwire for the R7 class of
+    bug, where a rule that was never asked about a field destroys it; computed
+    per **category** rather than per document because ``document_date`` being
+    masked is invisible at document granularity, which is precisely how that
+    defect shipped.
+
+``subset_recall``
+    Everything expected was found, extras tolerated. Not symmetric with the
+    converse: an extra claim is a masking-fidelity bug, while a missed identifier
+    is a leak, so both directions are counted and only this one is named recall.
+
+``false_positive_claims`` is the number the two open calibration findings need. It
+is the sum of every detector's ``fp``, published as a scalar so a report can print
+"the pattern layer produced N false positives" without summing a dictionary — and
+so Finding A and Finding B stop being arguments and become integers.
 
 Determinism and isolation, both structural
 ------------------------------------------
@@ -119,8 +135,16 @@ from app.pii.fixtures import (
     synthetic_manifest_version,
 )
 from app.pii.gate import REDACTION_AVAILABLE, DefaultPIIGate, build_document_gate
-from app.pii.models import PIIAction, PIIDecisionResult, PIIDestination, PIIFinding, PIIScanStage
+from app.pii.models import (
+    PIIAction,
+    PIICategory,
+    PIIDecisionResult,
+    PIIDestination,
+    PIIFinding,
+    PIIScanStage,
+)
 from app.pii.policy import (
+    DEFAULT_POLICY,
     PII_POLICY_VERSION,
     PIIPolicyContext,
     build_policy_context,
@@ -132,16 +156,30 @@ __all__ = [
     "BOUNDARY_DOCUMENT_INTERNAL",
     "CONFIDENCE_BANDS",
     "BoundaryEvaluation",
+    "CategoryAggregates",
+    "CategoryMetrics",
+    "ClaimDetail",
+    "ConfidenceStats",
     "CountRate",
     "DatasetEvaluation",
+    "DetectorAttribution",
+    "DetectorMetrics",
+    "DomainRates",
     "EVALUATION_VERSION",
     "EvaluationDataset",
     "EvaluationReport",
     "FixtureEvaluation",
     "LocalRealCorpusDataset",
+    "MultiLabelMetrics",
     "PIIMetrics",
+    "ReliabilityBand",
+    "SourceExpectationMiss",
     "SummaryMetrics",
     "SyntheticFixtureDataset",
+    "compute_category_metrics",
+    "compute_confidence_stats",
+    "compute_detector_attribution",
+    "compute_domain_rates",
     "compute_metrics",
     "confidence_band",
     "default_datasets",
@@ -154,7 +192,7 @@ __all__ = [
     "summarize",
 ]
 
-EVALUATION_VERSION = "1.0.0"
+EVALUATION_VERSION = "1.1.0"
 """Version of the harness, stamped into every report.
 
 A third constant beside ``DETECTOR_VERSION`` and ``PII_POLICY_VERSION``, and for
@@ -164,6 +202,13 @@ by the code before it. Detector and policy versions answer "which gate produced
 these numbers"; this one answers "which measurement compared them". It is stamped
 separately from both, because a harness change moves no decision and would
 therefore not license a policy bump.
+
+``1.0.0`` was Phase 1's document-level block; ``1.1.0`` is Phase 2's
+category-level layer, per-category P/R/F1 with macro/micro, the four domain rates,
+per-detector and per-source attribution and the confidence-reliability table. Minor
+because every field it adds is additive: a ``1.0.0`` reader reading a ``1.1.0``
+report sees a strictly larger superset, and a report with no per-category table in
+it is a ``1.0.0`` report, not a broken one.
 """
 
 EVALUATION_FINGERPRINT_SECRET = "pii-eval-offline-fingerprint-secret"
@@ -225,6 +270,28 @@ def confidence_band(confidences: Sequence[float]) -> str:
         if low <= lowest <= high:
             return label
     return CONFIDENCE_BANDS[-1][0]
+
+
+@dataclass(frozen=True)
+class ClaimDetail:
+    """One finding reduced to exactly what an evaluation metric may read.
+
+    The same argument as :class:`~app.pii.models.PIIFindingSummary`, for the
+    in-process object: a report has to say *which rule claimed which category at
+    which confidence*, and it must be able to say it without holding the value.
+    ``value`` and ``value_fingerprint`` are dropped here rather than excluded by a
+    ``Field(exclude=True)``, so no later addition to this dataclass can leak one
+    by accident — a new field has to be chosen, not inherited.
+
+    Deliberately not a Pydantic model: this is never serialized on its own, it
+    only ever lands inside a report block, and a dataclass keeps the construction
+    cheap enough that building one per finding per fixture is invisible.
+    """
+
+    category: str
+    detector: str
+    source: str
+    confidence: float
 
 
 @dataclass(frozen=True)
@@ -306,6 +373,26 @@ class BoundaryEvaluation:
         """``REVIEW`` or ``BLOCK`` — the decisions that stop a document (R9/R15)."""
         return self.decision in {"review", "block"}
 
+    @property
+    def combination_trip(self) -> bool:
+        """Whether a :class:`~app.pii.policy.PIICombinationRule` matched this row.
+
+        Measured by asking the locked rule table directly rather than by matching
+        the line the engine appends to ``reasons``: the reason string is prose a
+        human reads in an artifact, and a metric keyed on prose breaks silently
+        the day the sentence is reworded. ``PIICombinationRule.matches`` is the
+        engine's own predicate over the engine's own table, so this asks the same
+        question the decision was derived from.
+
+        Independent of the boundary, which is why the domain rate counts it per
+        fixture rather than per row: a document carrying ``SNILS`` +
+        ``INSURANCE_NUMBER`` trips the §4.13 rule at both document boundaries and
+        at persistence, and counting the trip three times would inflate a rate
+        whose whole purpose is to be quoted as a halt rate.
+        """
+        present = frozenset(PIICategory(category) for category in self.predicted_categories)
+        return any(rule.matches(present) for rule in DEFAULT_POLICY.combinations)
+
 
 @dataclass(frozen=True)
 class FixtureEvaluation:
@@ -313,14 +400,24 @@ class FixtureEvaluation:
 
     ``dataset`` is provenance and nothing else. It is carried so a report can say
     which corpus a number came from, and it is deliberately not read by
-    :func:`compute_metrics` or :func:`summarize` — a metrics function that
-    branched on it would publish synthetic recall under a real-corpus heading,
-    which is the one thing the M6 kickoff ruling rules out.
+    :func:`compute_metrics`, :func:`compute_category_metrics` or any other
+    reduction — a metrics function that branched on it would publish synthetic
+    recall under a real-corpus heading, which is the one thing the M6 kickoff
+    ruling rules out.
+
+    ``finding_details`` sits here rather than on :class:`BoundaryEvaluation`
+    because a *finding* is a fixture-level fact: :func:`evaluate_fixture` detects
+    once and decides twice, so a document's claim list is identical at both of its
+    rows. Anything that counts findings — the confidence distribution, the
+    per-detector attribution — therefore reads it from here, or it would report
+    every document claim twice and turn the distribution into a function of the
+    number of boundaries rather than the number of claims.
     """
 
     dataset: str
     fixture: PIIFixture
     boundaries: tuple[BoundaryEvaluation, ...]
+    finding_details: tuple[ClaimDetail, ...] = ()
     detector_version: str = DETECTOR_VERSION
     policy_version: str = PII_POLICY_VERSION
 
@@ -379,6 +476,26 @@ class DatasetEvaluation:
     @property
     def summary(self) -> SummaryMetrics:
         return summarize(self.evaluations)
+
+    @property
+    def category_metrics(self) -> MultiLabelMetrics:
+        """Per-category precision/recall/F1 plus macro/micro over the same rows."""
+        return compute_category_metrics(self.evaluations)
+
+    @property
+    def domain_rates(self) -> DomainRates:
+        """The four domain rates, each over the denominator its docstring names."""
+        return compute_domain_rates(self.evaluations)
+
+    @property
+    def detector_attribution(self) -> DetectorAttribution:
+        """Which rule claimed what, and where the manifest's declaration was not met."""
+        return compute_detector_attribution(self.evaluations)
+
+    @property
+    def confidence_stats(self) -> ConfidenceStats:
+        """The M3 three-band table, keyed on :attr:`PIIFinding.confidence`."""
+        return compute_confidence_stats(self.evaluations)
 
 
 @dataclass(frozen=True)
@@ -468,6 +585,212 @@ class SummaryMetrics(BaseModel):
     spurious_categories: int
     over_redacted_categories: int
     decisions: dict[str, int]
+
+
+class CategoryMetrics(BaseModel):
+    """One category's confusion counts and derived precision/recall/F1.
+
+    Multi-label, so the denominators are not the row count: ``precision`` is over
+    the rows that *claimed* this category and ``recall`` over the rows whose
+    ground truth *names* it. A row that expected six categories and predicted
+    exactly those six contributes one tp to each of six categories and no
+    denominator anywhere — which is the whole reason a single accuracy number
+    cannot describe a PII evaluation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: str
+    tp: int
+    fp: int
+    fn: int
+    support: int
+    precision: float
+    recall: float
+    f1: float
+
+
+class CategoryAggregates(BaseModel):
+    """Macro (unweighted over categories) or micro (summed counts) averages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    precision: float
+    recall: float
+    f1: float
+
+
+class MultiLabelMetrics(BaseModel):
+    """The category-level layer: per-category P/R/F1 with macro and micro.
+
+    Macro is over the categories that actually appear in expected or predicted
+    positions, which is what keeps a taxonomy of 25 from being diluted by 18
+    categories no fixture mentions. Micro is the summed-count average, i.e. the
+    answer to "of every category claim this corpus produced, how many were right"
+    — the complement of macro's "how good is the average category".
+
+    The two disagree on purpose and a report should print both. A detector layer
+    that claims one extra category on every document scores high micro precision
+    and terrible macro precision, and quoting either alone tells a reader half the
+    story.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    boundaries: int
+    categories: int
+    per_category: dict[str, CategoryMetrics]
+    macro: CategoryAggregates
+    micro: CategoryAggregates
+
+
+class DomainRates(BaseModel):
+    """The four domain rates, each with the count and the denominator beside it.
+
+    Three denominators, because the rates are not all the same kind of fact.
+    ``fixtures`` counts manifest entries, collapsing the boundary rows of a
+    document into one observation — correct for the three rates that depend only
+    on *which categories were detected*, which are identical at every boundary by
+    construction. ``category_observations`` counts ``(fixture, category)`` pairs
+    the corpus's ground truth names, and is the denominator for ``over_redacted``:
+    masking is counted **per category**, not per document and not per row, because
+    ``document_date`` being masked is invisible at either of those — which is
+    exactly how the R7-class defect shipped undetected in Phase 14. ``boundaries``
+    is published for the per-row Phase 1 rates it shares a report with; no rate in
+    this table is denominated by it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fixtures: int
+    boundaries: int
+    category_observations: int
+    false_positive_document: CountRate
+    missed_category_document: CountRate
+    combination_trip: CountRate
+    over_redacted: CountRate
+
+
+class DetectorMetrics(BaseModel):
+    """One detector's (or one source's) claims, split by whether they were right.
+
+    No ``fn`` here, and its absence is the load-bearing part. A miss has no
+    claimant by definition — there is no rule to charge it to — so a false negative
+    is counted against the *category*, in :class:`CategoryMetrics`, and never
+    against a detector. Inventing one would mean attributing a miss to whichever
+    rule happened to be nearby, which is how a layer gets blamed for a gap it was
+    never designed to close. What the detector layer does own is declared
+    silence, and that is :attr:`DetectorAttribution.source_expectation_mismatches`
+    rather than a per-detector recall.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    detector: str
+    tp: int
+    fp: int
+    claimed: int
+    precision: float
+
+
+class SourceExpectationMiss(BaseModel):
+    """One place the manifest's ``expected_detector_source`` was not satisfied.
+
+    Carries both sets — what was declared and what actually claimed — because the
+    two failure shapes need opposite fixes and a reader cannot tell them apart
+    from a count. An empty ``claiming_sources`` means the category was **not
+    found at all** by any layer, which is a recall defect; a non-empty set
+    disjoint from ``declared_sources`` means the category **was** found, by a layer
+    the manifest did not allow, which is a calibration defect in the rules.
+
+    No boundary, deliberately: ``expected_detector_source`` is declared per
+    fixture and a finding is a per-fixture fact, so a violated declaration is one
+    fact per (fixture, category). Recording it per row would double every miss on
+    a two-boundary document and turn the count into a function of the contour
+    rather than of the manifests.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fixture_id: str
+    category: str
+    declared_sources: tuple[str, ...]
+    claiming_sources: tuple[str, ...]
+
+
+class DetectorAttribution(BaseModel):
+    """Per-detector and per-source attribution, plus the manifest's own declaration.
+
+    Two granularities because the questions differ. ``per_detector`` names the
+    *rule* (``pattern.ticket_number.long_digits``), which is what has to change
+    when a false positive is fixed. ``per_source`` names the *layer*
+    (``pattern`` / ``structured_field``), which is what the manifest declares and
+    what the two open calibration findings are actually about: a layer that goes
+    silent on a layout it was written for is invisible in a per-rule table.
+
+    ``false_positive_claims`` is ``Σ per_detector[*].fp``, published as a scalar
+    because a report needs one number for "the pattern layer invented this" and a
+    reader should not have to sum a dictionary to get it.
+
+    Every figure here is counted over **fixtures**, not over boundary rows: a
+    finding is detected once and a declaration is made once, so a per-row
+    reduction would report every document claim and every violated declaration
+    once per boundary.
+
+    ``declared_fixtures`` is the denominator for
+    :attr:`source_expectation_mismatches` — the fixtures carrying at least one
+    ``expected_detector_source`` entry. A corpus that declares nothing is not
+    "mismatched 0 times", it is a corpus with nothing to check, and the two
+    deserve different numbers.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    per_detector: dict[str, DetectorMetrics]
+    per_source: dict[str, DetectorMetrics]
+    false_positive_claims: int
+    declared_fixtures: int
+    source_expectation_mismatches: CountRate
+    source_expectation_details: tuple[SourceExpectationMiss, ...]
+
+
+class ReliabilityBand(BaseModel):
+    """How often the claims made inside one confidence band were right.
+
+    No recall column, for the same reason :class:`DetectorMetrics` has no ``fn``:
+    a miss has no confidence to band. What this answers is the question a
+    reviewer actually has — *when the gate says 0.60, how often is it wrong* —
+    which is precision over the band's claims, not recall over the corpus.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    band: str
+    findings: int
+    correct: int
+    incorrect: int
+    accuracy: float
+
+
+class ConfidenceStats(BaseModel):
+    """Confidence distribution over findings, with the same three bands as M3.
+
+    Counted over **findings**, not over boundary rows: a document's findings are
+    detected once and decided twice, so a per-row count would report every
+    document claim twice and make the distribution a function of the number of
+    boundaries. ``findings`` is therefore the number of claims the corpus actually
+    produced, and the boundaries it came from are in
+    :attr:`MultiLabelMetrics.boundaries`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    findings: int
+    minimum: float
+    maximum: float
+    mean: float
+    distribution: dict[str, int]
+    reliability: list[ReliabilityBand]
 
 
 def _rows(evaluations: Sequence[FixtureEvaluation]) -> list[BoundaryEvaluation]:
@@ -572,6 +895,361 @@ def summarize(evaluations: Sequence[FixtureEvaluation]) -> SummaryMetrics:
     )
 
 
+# --- Phase 2: the category layer -------------------------------------------
+
+
+def _band_of(confidence: float) -> str:
+    """The single band a confidence falls in — a partition, unlike the min-band.
+
+    ``confidence_band`` takes the *minimum* over a row's findings and reports the
+    band of that one number, which is a summary. A distribution needs a
+    partition, so the upper edge is exclusive except on the top band: 0.90 and 0.70
+    belong to ``0.90-1.00`` and ``0.70-0.90`` respectively, exactly as in M3's
+    ``compute_confidence_stats``. Both readings agree on which band a given
+    confidence lands in; only the double-count at a shared edge differs, and only
+    a distribution is sensitive to that.
+    """
+    for label, low, high in CONFIDENCE_BANDS:
+        if high >= 1.0:
+            if low <= confidence <= high:
+                return label
+        elif low <= confidence < high:
+            return label
+    return CONFIDENCE_BANDS[-1][0]
+
+
+def _f1(precision: float, recall: float) -> float:
+    """Harmonic mean, with the zero-denominator case pinned to 0.0.
+
+    A category that was never predicted has ``precision == 0.0`` and a real
+    ``recall``; a category never expected and never predicted is absent from the
+    table entirely rather than present with three zeros, so this only ever sees
+    the first shape.
+    """
+    return _safe_div(2 * precision * recall, precision + recall)
+
+
+def compute_category_metrics(evaluations: Sequence[FixtureEvaluation]) -> MultiLabelMetrics:
+    """Per-category TP/FP/FN → precision/recall/F1, with macro and micro averages.
+
+    **Multi-label, not single-label.** ``expected_categories`` is a set of up to
+    seven, so a document is never "right or wrong" — it is right about some
+    categories and wrong about others, and the only useful question is which. That
+    rules out the accuracy M3 reports: a five-of-seven result would score zero on
+    a single-label accuracy while having missed nothing that mattered, and a
+    perfect result with one spurious extra would score zero while having leaked
+    nothing.
+
+    For each category ``c``, over boundary rows:
+
+    * ``tp`` — ``c`` in ``expected ∩ predicted``
+    * ``fp`` — ``c`` in ``predicted \\ expected``
+    * ``fn`` — ``c`` in ``expected \\ predicted``
+    * ``support`` — ``tp + fn``, the rows whose ground truth names ``c``
+
+    Categories appearing in neither an expected nor a predicted set are omitted
+    rather than carried as zeros, which is what makes the macro average a mean
+    over *observed* categories. A 25-member taxonomy with 6 members exercised
+    would otherwise drag every average toward the 19 silent ones — and a rule that
+    never fires is a coverage gap, not a low score.
+
+    Macro and micro are both reported and they answer different questions. Micro
+    pools every category claim in the corpus; macro gives a small category the
+    same weight as a ubiquitous one. A layout bug that makes one category silent
+    everywhere is invisible in micro and dominates in macro.
+    """
+    rows = _rows(evaluations)
+    observed = sorted(
+        {category for row in rows for category in row.expected_categories}
+        | {category for row in rows for category in row.predicted_categories}
+    )
+
+    per_category: dict[str, CategoryMetrics] = {}
+    sum_tp = sum_fp = sum_fn = 0
+    for category in observed:
+        tp = sum(
+            1
+            for row in rows
+            if category in row.predicted_categories and category in row.expected_categories
+        )
+        fp = sum(
+            1
+            for row in rows
+            if category in row.predicted_categories and category not in row.expected_categories
+        )
+        fn = sum(
+            1
+            for row in rows
+            if category not in row.predicted_categories and category in row.expected_categories
+        )
+        precision = _safe_div(tp, tp + fp)
+        recall = _safe_div(tp, tp + fn)
+        per_category[category] = CategoryMetrics(
+            category=category,
+            tp=tp,
+            fp=fp,
+            fn=fn,
+            support=tp + fn,
+            precision=precision,
+            recall=recall,
+            f1=_f1(precision, recall),
+        )
+        sum_tp += tp
+        sum_fp += fp
+        sum_fn += fn
+
+    if per_category:
+        macro = CategoryAggregates(
+            precision=sum(m.precision for m in per_category.values()) / len(per_category),
+            recall=sum(m.recall for m in per_category.values()) / len(per_category),
+            f1=sum(m.f1 for m in per_category.values()) / len(per_category),
+        )
+    else:
+        macro = CategoryAggregates(precision=0.0, recall=0.0, f1=0.0)
+    micro_precision = _safe_div(sum_tp, sum_tp + sum_fp)
+    micro_recall = _safe_div(sum_tp, sum_tp + sum_fn)
+    return MultiLabelMetrics(
+        boundaries=len(rows),
+        categories=len(observed),
+        per_category=per_category,
+        macro=macro,
+        micro=CategoryAggregates(
+            precision=micro_precision,
+            recall=micro_recall,
+            f1=_f1(micro_precision, micro_recall),
+        ),
+    )
+
+
+def compute_domain_rates(evaluations: Sequence[FixtureEvaluation]) -> DomainRates:
+    """The four domain rates, each with its count and its own denominator.
+
+    ``fixtures`` — one observation per manifest entry — is the denominator for the
+    three rates that depend only on which categories were detected, because a
+    document's category set is identical at both of its rows and counting it twice
+    would double the very halt rate this milestone exists to publish. A fixture is
+    a *false-positive document* when any of its rows claims a category its ground
+    truth does not name; it is a *missed-category document* when any of its rows
+    fails to claim a category its ground truth names; it *trips a combination rule*
+    when any of its rows matches one.
+
+    ``over_redacted`` is counted **per category**, over ``category_observations``
+    (``Σ |expected_categories|``), and it is the one rate whose unit is not a row
+    and not a document. A category that no detector claimed yet a rule masked is
+    the R7-class defect — data destroyed that nothing asked for — and it is
+    invisible at document granularity (one category among seven) and at row
+    granularity (one row among ten, or two rows out of two for a document masked
+    at both boundaries, which would read as a 100% policy difference rather than
+    one defect). Collapsing a fixture's rows before counting keeps a document
+    masked at one boundary and a document masked at both equal to one masked
+    category each.
+    """
+    rows = _rows(evaluations)
+    total_rows = len(rows)
+    total_fixtures = len(evaluations)
+    category_observations = sum(
+        len(set(evaluation.fixture.expected_categories)) for evaluation in evaluations
+    )
+    return DomainRates(
+        fixtures=total_fixtures,
+        boundaries=total_rows,
+        category_observations=category_observations,
+        false_positive_document=_count_rate(
+            sum(
+                1
+                for evaluation in evaluations
+                if any(row.over_fire for row in evaluation.boundaries)
+            ),
+            total_fixtures,
+        ),
+        missed_category_document=_count_rate(
+            sum(
+                1
+                for evaluation in evaluations
+                if any(row.under_fire for row in evaluation.boundaries)
+            ),
+            total_fixtures,
+        ),
+        combination_trip=_count_rate(
+            sum(
+                1
+                for evaluation in evaluations
+                if any(row.combination_trip for row in evaluation.boundaries)
+            ),
+            total_fixtures,
+        ),
+        over_redacted=_count_rate(
+            sum(
+                len(
+                    {
+                        category
+                        for row in evaluation.boundaries
+                        for category in row.over_redacted
+                    }
+                )
+                for evaluation in evaluations
+            ),
+            category_observations,
+        ),
+    )
+
+
+def compute_detector_attribution(
+    evaluations: Sequence[FixtureEvaluation],
+) -> DetectorAttribution:
+    """Per-rule and per-layer attribution, and where the manifest's declaration failed.
+
+    A *claim* is a (fixture, category) pair one detector made, so the tables count
+    categories rather than findings: a document carrying three phone numbers
+    produces one aggregated finding and therefore one claim, and counting the raw
+    regex hits instead would make the numbers a statement about how many times a
+    value repeated.
+
+    ``source_expectation_mismatches`` compares the manifest's
+    ``expected_detector_source`` against the sources that actually claimed each
+    category. It is the machine-checkable form of the finding that the
+    structured layer goes silent on the real colonless layouts: a category that
+    the manifest requires ``structured_field`` to find, found only by ``pattern``,
+    shows up here as a mismatch with both sets attached, which is exactly what a
+    silent 0.95-confidence layer looks like from the outside. Without it the same
+    regression is a clean ``exact_set_match`` and a changed confidence band, which
+    is how it shipped unnoticed in the first place.
+
+    Counted over fixtures, and compared as an exact set: a declared layer that
+    fires *in addition to* the expected one is still a miss, because the
+    declaration is the manifest pinning which layer is load-bearing on a layout,
+    not listing the layers allowed near it.
+    """
+    per_detector_tp: dict[str, int] = {}
+    per_detector_fp: dict[str, int] = {}
+    per_source_tp: dict[str, int] = {}
+    per_source_fp: dict[str, int] = {}
+    mismatches: list[SourceExpectationMiss] = []
+    declared_fixtures = 0
+
+    for evaluation in evaluations:
+        expected_categories = set(evaluation.fixture.expected_categories)
+        declared = {
+            category: set(sources)
+            for category, sources in evaluation.fixture.expected_detector_source.items()
+        }
+        declared_fixtures += 1 if declared else 0
+
+        # One claim table per fixture. Findings are detected once and decided at
+        # each boundary, so this loop must not sit inside the row loop: counted
+        # per row it would report the committed corpus's 20 claims as 33, and
+        # ``false_positive_claims`` — the number Finding B has to move — would
+        # scale with how many boundaries a contour happens to have.
+        claiming_by_category: dict[str, set[str]] = {}
+        for claim in evaluation.finding_details:
+            claiming_by_category.setdefault(claim.category, set()).add(claim.source)
+            correct = claim.category in expected_categories
+            detector_bucket = per_detector_tp if correct else per_detector_fp
+            detector_bucket[claim.detector] = detector_bucket.get(claim.detector, 0) + 1
+            source_bucket = per_source_tp if correct else per_source_fp
+            source_bucket[claim.source] = source_bucket.get(claim.source, 0) + 1
+
+        for category, sources in sorted(declared.items()):
+            claiming = claiming_by_category.get(category, set())
+            if claiming != sources:
+                mismatches.append(
+                    SourceExpectationMiss(
+                        fixture_id=evaluation.id,
+                        category=category,
+                        declared_sources=tuple(sorted(sources)),
+                        claiming_sources=tuple(sorted(claiming)),
+                    )
+                )
+
+    detectors = sorted(set(per_detector_tp) | set(per_detector_fp))
+    sources = sorted(set(per_source_tp) | set(per_source_fp))
+    return DetectorAttribution(
+        per_detector={
+            detector: _detector_metrics(
+                detector, per_detector_tp.get(detector, 0), per_detector_fp.get(detector, 0)
+            )
+            for detector in detectors
+        },
+        per_source={
+            source: _detector_metrics(
+                source, per_source_tp.get(source, 0), per_source_fp.get(source, 0)
+            )
+            for source in sources
+        },
+        false_positive_claims=sum(per_detector_fp.values()),
+        declared_fixtures=declared_fixtures,
+        source_expectation_mismatches=_count_rate(len(mismatches), declared_fixtures),
+        source_expectation_details=tuple(mismatches),
+    )
+
+
+def _detector_metrics(detector: str, tp: int, fp: int) -> DetectorMetrics:
+    return DetectorMetrics(
+        detector=detector,
+        tp=tp,
+        fp=fp,
+        claimed=tp + fp,
+        precision=_safe_div(tp, tp + fp),
+    )
+
+
+def compute_confidence_stats(evaluations: Sequence[FixtureEvaluation]) -> ConfidenceStats:
+    """The M3 three-band table, keyed on :attr:`PIIFinding.confidence`.
+
+    Counted over findings, not over rows — see :class:`ConfidenceStats`. A finding
+    is *correct* when its category is in the fixture's ground truth and
+    *incorrect* otherwise, so the table answers the reviewer's question directly:
+    of the claims made at 0.60, how many were wrong. On the committed corpus that
+    is the sharpest thing in the report, because the single false positive in the
+    whole corpus is a 0.60 pattern claim while every 0.90-and-above structured
+    claim is right.
+
+    The band edge is taken from :func:`_band_of` (a partition) rather than from
+    :func:`confidence_band` (a row-level minimum), so the three row counts in the
+    distribution sum to ``findings``.
+    """
+    claims = [
+        (claim, claim.category in evaluation.fixture.expected_categories)
+        for evaluation in evaluations
+        for claim in evaluation.finding_details
+    ]
+    values = [claim.confidence for claim, _ in claims]
+
+    distribution: dict[str, int] = {label: 0 for label, _, _ in CONFIDENCE_BANDS}
+    reliability: list[ReliabilityBand] = []
+    for label, _, _ in CONFIDENCE_BANDS:
+        banded = [correct for claim, correct in claims if _band_of(claim.confidence) == label]
+        correct = sum(1 for value in banded if value)
+        distribution[label] = len(banded)
+        reliability.append(
+            ReliabilityBand(
+                band=label,
+                findings=len(banded),
+                correct=correct,
+                incorrect=len(banded) - correct,
+                accuracy=_safe_div(correct, len(banded)),
+            )
+        )
+
+    if not values:
+        return ConfidenceStats(
+            findings=0,
+            minimum=0.0,
+            maximum=0.0,
+            mean=0.0,
+            distribution=distribution,
+            reliability=reliability,
+        )
+    return ConfidenceStats(
+        findings=len(values),
+        minimum=min(values),
+        maximum=max(values),
+        mean=sum(values) / len(values),
+        distribution=distribution,
+        reliability=reliability,
+    )
+
+
 # --- evaluation ----------------------------------------------------------
 
 
@@ -624,6 +1302,25 @@ def _attribution(findings: Sequence[PIIFinding]) -> dict[str, tuple[str, ...]]:
     for finding in findings:
         collected.setdefault(finding.detector, set()).add(finding.category.value)
     return {detector: tuple(sorted(cats)) for detector, cats in sorted(collected.items())}
+
+
+def _claims(findings: Sequence[PIIFinding]) -> tuple[ClaimDetail, ...]:
+    """The value-free reduction of a finding set, in the order the gate produced it.
+
+    Order is the aggregator's, not sorted, so ``finding_details`` and the report's
+    per-fixture detector listing agree on which rule spoke first. Nothing in the
+    metrics depends on it — every reduction is order-insensitive — so there is no
+    reason to spend a sort to lose it.
+    """
+    return tuple(
+        ClaimDetail(
+            category=finding.category.value,
+            detector=finding.detector,
+            source=finding.source.value,
+            confidence=finding.confidence,
+        )
+        for finding in findings
+    )
 
 
 def _document_row(
@@ -706,10 +1403,12 @@ def evaluate_fixture(
     normalizer = normalizer or MarkdownNormalizer()
 
     if fixture.contour == CONTOUR_CANONICAL:
+        row, claims = _canonical_row(fixture, guard)
         return FixtureEvaluation(
             dataset=fixture.dataset,
             fixture=fixture,
-            boundaries=(_canonical_row(fixture, guard),),
+            boundaries=(row,),
+            finding_details=claims,
         )
     if fixture.contour != CONTOUR_DOCUMENT:
         raise ValueError(f"unknown fixture contour {fixture.contour!r} on {fixture.file!r}")
@@ -724,11 +1423,24 @@ def evaluate_fixture(
                 fixture, boundary, findings, gate.policy_engine.evaluate(findings, context), context
             )
         )
-    return FixtureEvaluation(dataset=fixture.dataset, fixture=fixture, boundaries=tuple(rows))
+    return FixtureEvaluation(
+        dataset=fixture.dataset,
+        fixture=fixture,
+        boundaries=tuple(rows),
+        finding_details=_claims(findings),
+    )
 
 
-def _canonical_row(fixture: PIIFixture, guard: DefaultCanonicalPIIInspector) -> BoundaryEvaluation:
-    """Contour 2 row: the payload guard's own verdict, at its own stage/destination.
+def _canonical_row(
+    fixture: PIIFixture, guard: DefaultCanonicalPIIInspector
+) -> tuple[BoundaryEvaluation, tuple[ClaimDetail, ...]]:
+    """Contour 2 row plus its value-free claim list, at the guard's own stage/destination.
+
+    Returns ``(row, claims)`` rather than the row alone because the claims belong to
+    the *fixture* (:attr:`FixtureEvaluation.finding_details`), not to this row — the
+    contour has one row per fixture today, but the metrics that consume the claims
+    would have to reach back through the row for them, and a contour that gained a
+    second boundary would then double-count every finding.
 
     The stage and destination are read off the guard's policy context rather than
     restated, because they are the two inputs that make the same value evaluate
@@ -771,7 +1483,7 @@ def _canonical_row(fixture: PIIFixture, guard: DefaultCanonicalPIIInspector) -> 
         confidence_band=confidence_band([finding.confidence for finding in findings]),
         findings_count=len(findings),
         reasons=tuple(result.reasons),
-    )
+    ), _claims(findings)
 
 
 # --- the dataset boundary -------------------------------------------------
@@ -948,7 +1660,7 @@ def _dataset_line(dataset: DatasetEvaluation) -> str:
 def _row_line(row: BoundaryEvaluation) -> str:
     expected = ",".join(row.expected_categories) or "-"
     predicted = ",".join(row.predicted_categories) or "-"
-    mark = "MATCH" if row.exact_set_match and row.decision_match else "MISMATCH"
+    mark = "SET MATCH" if row.exact_set_match else "SET MISMATCH"
     detail = []
     if row.spurious_categories:
         detail.append(f"extra: {','.join(row.spurious_categories)}")
@@ -968,6 +1680,43 @@ def _row_line(row: BoundaryEvaluation) -> str:
     )
 
 
+def _category_metric_lines(dataset: DatasetEvaluation) -> list[str]:
+    """Per-category P/R/F1 for the text report, worst-first on F1.
+
+    Worst-first rather than alphabetical because the reader is looking for the
+    categories that need work, and alphabetical order would put ``age`` above
+    ``secret`` in a table where one of them once cost a clinic a morning. Ties
+    break on the category name so two runs of the same corpus render identically.
+    """
+    per_category = dataset.category_metrics.per_category
+    ordered = sorted(per_category.values(), key=lambda m: (m.f1, m.category))
+    width = max((len(m.category) for m in ordered), default=1)
+    lines = []
+    for metrics in ordered:
+        lines.append(
+            f"    {metrics.category:<{width}} P {metrics.precision:.3f}  R {metrics.recall:.3f}"
+            f"  F1 {metrics.f1:.3f}  (tp {metrics.tp} fp {metrics.fp} fn {metrics.fn})"
+        )
+    if not ordered:
+        lines.append("    (no category was expected or predicted)")
+    return lines
+
+
+def _false_positive_lines(dataset: DatasetEvaluation) -> list[str]:
+    """Only the detectors that actually claimed something wrong, worst-first.
+
+    Every detector with ``fp == 0`` is omitted. A table of all twenty-odd rules
+    with a zero in every column is unreadable and buries the one line that says
+    ``pattern.ticket_number.long_digits`` invented a category from a digit run —
+    which is Finding B, stated as an integer.
+    """
+    guilty = sorted(
+        (m for m in dataset.detector_attribution.per_detector.values() if m.fp),
+        key=lambda m: (-m.fp, m.detector),
+    )
+    return [f"    {m.detector}: {m.fp} false positive(s) of {m.claimed} claim(s)" for m in guilty]
+
+
 def _dataset_block_lines(dataset: DatasetEvaluation) -> list[str]:
     lines = [_dataset_line(dataset), ""]
     if not dataset.available:
@@ -976,6 +1725,10 @@ def _dataset_block_lines(dataset: DatasetEvaluation) -> list[str]:
         return lines
     metrics = dataset.metrics
     summary = dataset.summary
+    category_metrics = dataset.category_metrics
+    domain = dataset.domain_rates
+    attribution = dataset.detector_attribution
+    confidence = dataset.confidence_stats
     lines.append(f"  root: {dataset.root}")
     lines.append("")
     lines.append(
@@ -1010,6 +1763,51 @@ def _dataset_block_lines(dataset: DatasetEvaluation) -> list[str]:
         f"  Halted rows     : {metrics.halted.count}/{metrics.boundaries}"
         f" ({metrics.halted.rate:.1%})  decisions: {metrics.decisions}"
     )
+    lines.append("")
+    lines.append(
+        f"  Domain rates    : false-positive documents "
+        f"{domain.false_positive_document.count}/{domain.fixtures}, missed-category documents "
+        f"{domain.missed_category_document.count}/{domain.fixtures}, combination trips "
+        f"{domain.combination_trip.count}/{domain.fixtures}, over-redacted categories "
+        f"{domain.over_redacted.count}/{domain.category_observations}"
+    )
+    lines.append("")
+    lines.append(f"  Per-category metrics ({category_metrics.categories} categories observed):")
+    lines.extend(_category_metric_lines(dataset))
+    lines.append(
+        f"    {'macro':<14} P {category_metrics.macro.precision:.3f}"
+        f"  R {category_metrics.macro.recall:.3f}  F1 {category_metrics.macro.f1:.3f}"
+    )
+    lines.append(
+        f"    {'micro':<14} P {category_metrics.micro.precision:.3f}"
+        f"  R {category_metrics.micro.recall:.3f}  F1 {category_metrics.micro.f1:.3f}"
+    )
+    lines.append("")
+    lines.append(
+        f"  Detector attribution ({attribution.false_positive_claims} false positive claim(s)):"
+    )
+    lines.extend(_false_positive_lines(dataset) or ["    (none: every detector claim was correct)"])
+    mismatches = attribution.source_expectation_details
+    lines.append(
+        "    expected_detector_source mismatches: "
+        f"{attribution.source_expectation_mismatches.count}"
+        f"/{attribution.declared_fixtures} fixture(s) declaring a source"
+    )
+    for miss in mismatches:
+        claimed = ",".join(miss.claiming_sources) or "-"
+        lines.append(
+            f"      {miss.fixture_id}: {miss.category} declared "
+            f"[{','.join(miss.declared_sources)}] claimed [{claimed}]"
+        )
+    lines.append("")
+    lines.append(
+        f"  Confidence: {confidence.findings} finding(s)  min {confidence.minimum:.2f}"
+        f"  mean {confidence.mean:.2f}  max {confidence.maximum:.2f}"
+    )
+    for band in confidence.reliability:
+        lines.append(
+            f"    {band.band:<10} {band.correct}/{band.findings} correct  ({band.accuracy:.1%})"
+        )
     lines.append("")
     for evaluation in dataset.evaluations:
         lines.append(f"  == {evaluation.id} ({evaluation.fixture.file}, {evaluation.contour})")
@@ -1114,21 +1912,30 @@ def render_markdown(report: EvaluationReport) -> str:
         )
         lines.append(f"| Decisions | `{metrics.decisions}` |")
         lines.append("")
+        lines.extend(_markdown_category_block(dataset))
+        lines.extend(_markdown_attribution_block(dataset))
         lines.append("### Per-fixture")
         lines.append("")
         lines.append(
-            "| id | file | boundary | stage/destination | expected | predicted | decision | match |"
+            "| id | file | boundary | stage/destination | expected | predicted | categories "
+            "| actual decision | expected decision | decision |"
         )
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         for evaluation in dataset.evaluations:
             for row in evaluation.boundaries:
-                mark = "MATCH" if row.exact_set_match and row.decision_match else "MISMATCH"
+                # Two verdicts, two columns. A single `match` column collapsed
+                # "the category set agreed" and "the decision agreed" into one
+                # word, and the word sat in a table that never showed the
+                # expected decision — so a row whose categories matched exactly
+                # and whose decision did not read as a category failure.
                 lines.append(
                     f"| `{evaluation.id}` | `{evaluation.fixture.file}` | `{row.boundary}` "
                     f"| {row.stage}/{row.destination} "
                     f"| {', '.join(row.expected_categories) or '-'} "
                     f"| {', '.join(row.predicted_categories) or '-'} "
-                    f"| {row.decision} | {mark} |"
+                    f"| {'match' if row.exact_set_match else '**differs**'} "
+                    f"| `{row.decision}` | `{row.expected_decision}` "
+                    f"| {'match' if row.decision_match else '**differs**'} |"
                 )
         lines.append("")
     lines.append("## Notes")
@@ -1142,8 +1949,128 @@ def render_markdown(report: EvaluationReport) -> str:
         "- Counts are reported alongside rates. Both corpora are small, so a percentage "
         "is a statement about a handful of documents."
     )
+    lines.append(
+        "- Categories are multi-label. Macro averages weight every observed category "
+        "equally; micro pools every category claim. Neither is accuracy, and neither "
+        "substitutes for the per-fixture table below."
+    )
+    lines.append(
+        "- A category is never charged with a false negative against a detector: a miss "
+        "has no claimant. `fn` is counted against the category, and a layer that stays "
+        "silent where the manifest required it shows up as an `expected_detector_source` "
+        "mismatch instead."
+    )
     lines.append("")
     return "\n".join(lines)
+
+
+def _markdown_category_block(dataset: DatasetEvaluation) -> list[str]:
+    """Domain rates, per-category P/R/F1 and the confidence table."""
+    domain = dataset.domain_rates
+    category_metrics = dataset.category_metrics
+    confidence = dataset.confidence_stats
+    lines = [
+        "### Domain rates",
+        "",
+        "| Rate | Count | Denominator | Rate |",
+        "|---|---|---|---|",
+    ]
+    for label, rate, denominator in (
+        ("False-positive document", domain.false_positive_document, domain.fixtures),
+        ("Missed-category document", domain.missed_category_document, domain.fixtures),
+        ("Combination-rule trip", domain.combination_trip, domain.fixtures),
+        ("Over-redacted category", domain.over_redacted, domain.category_observations),
+    ):
+        lines.append(f"| {label} | {rate.count} | {denominator} | {rate.rate:.1%} |")
+    lines.append("")
+    lines.append("### Per-category metrics")
+    lines.append("")
+    lines.append(
+        f"{category_metrics.categories} categories observed over "
+        f"{category_metrics.boundaries} boundary rows."
+    )
+    lines.append("")
+    lines.append("| category | tp | fp | fn | support | precision | recall | F1 |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+    for metrics in category_metrics.per_category.values():
+        lines.append(
+            f"| `{metrics.category}` | {metrics.tp} | {metrics.fp} | {metrics.fn} "
+            f"| {metrics.support} | {metrics.precision:.3f} | {metrics.recall:.3f} "
+            f"| {metrics.f1:.3f} |"
+        )
+    lines.append(
+        f"| **macro** | | | | | {category_metrics.macro.precision:.3f} "
+        f"| {category_metrics.macro.recall:.3f} | {category_metrics.macro.f1:.3f} |"
+    )
+    lines.append(
+        f"| **micro** | | | | | {category_metrics.micro.precision:.3f} "
+        f"| {category_metrics.micro.recall:.3f} | {category_metrics.micro.f1:.3f} |"
+    )
+    lines.append("")
+    lines.append("### Confidence reliability")
+    lines.append("")
+    lines.append(
+        f"{confidence.findings} finding(s), min {confidence.minimum:.2f}, "
+        f"mean {confidence.mean:.2f}, max {confidence.maximum:.2f}. Counted over "
+        "findings, not boundary rows — a document's findings are detected once and "
+        "decided at both boundaries."
+    )
+    lines.append("")
+    lines.append("| band | findings | correct | incorrect | accuracy |")
+    lines.append("|---|---|---|---|---|")
+    for band in confidence.reliability:
+        lines.append(
+            f"| `{band.band}` | {band.findings} | {band.correct} | {band.incorrect} "
+            f"| {band.accuracy:.1%} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _markdown_attribution_block(dataset: DatasetEvaluation) -> list[str]:
+    """Per-detector and per-source claims, with the false positives called out."""
+    attribution = dataset.detector_attribution
+    lines = [
+        "### Detector attribution",
+        "",
+        f"{attribution.false_positive_claims} false-positive claim(s) across "
+        f"{len(attribution.per_detector)} detector(s) and "
+        f"{len(attribution.per_source)} source(s).",
+        "",
+        "| detector | tp | fp | claimed | precision |",
+        "|---|---|---|---|---|",
+    ]
+    for metrics in attribution.per_detector.values():
+        lines.append(
+            f"| `{metrics.detector}` | {metrics.tp} | {metrics.fp} | {metrics.claimed} "
+            f"| {metrics.precision:.3f} |"
+        )
+    lines.append("")
+    lines.append("| source | tp | fp | claimed | precision |")
+    lines.append("|---|---|---|---|---|")
+    for metrics in attribution.per_source.values():
+        lines.append(
+            f"| `{metrics.detector}` | {metrics.tp} | {metrics.fp} | {metrics.claimed} "
+            f"| {metrics.precision:.3f} |"
+        )
+    lines.append("")
+    lines.append(
+        f"`expected_detector_source` mismatches: "
+        f"{attribution.source_expectation_mismatches.count}"
+        f"/{attribution.declared_fixtures} fixture(s) declaring a source."
+    )
+    lines.append("")
+    if attribution.source_expectation_details:
+        lines.append("| fixture | category | declared sources | claiming sources |")
+        lines.append("|---|---|---|---|")
+        for miss in attribution.source_expectation_details:
+            lines.append(
+                f"| `{miss.fixture_id}` | `{miss.category}` "
+                f"| {', '.join(miss.declared_sources) or '-'} "
+                f"| {', '.join(miss.claiming_sources) or '**nothing**'} |"
+            )
+        lines.append("")
+    return lines
 
 
 def _evaluation_to_dict(evaluation: FixtureEvaluation) -> dict[str, Any]:
@@ -1154,6 +2081,15 @@ def _evaluation_to_dict(evaluation: FixtureEvaluation) -> dict[str, Any]:
         "source": evaluation.fixture.source,
         "derived_from": evaluation.fixture.derived_from,
         "provenance": evaluation.fixture.provenance,
+        "finding_details": [
+            {
+                "category": claim.category,
+                "detector": claim.detector,
+                "source": claim.source,
+                "confidence": claim.confidence,
+            }
+            for claim in evaluation.finding_details
+        ],
         "boundaries": [
             {
                 "boundary": row.boundary,
@@ -1198,10 +2134,17 @@ def _dataset_to_dict(dataset: DatasetEvaluation) -> dict[str, Any]:
 
     Hand-built rather than ``model_dump`` because the **absence** of ``metrics`` is
     the contract: an unavailable corpus emits ``available: false``, its reason, and
-    no ``metrics`` key at all. A synthesised empty block — ``"metrics": {}`` or
+    no measurement keys at all. A synthesised empty block — ``"metrics": {}`` or
     zeroes — reads as a measurement of zero rather than an absent measurement, and
     that is the false precision the M6 ruling rules out. Key presence is therefore
     the load-bearing part of this function.
+
+    The four Phase 2 layers are sibling keys rather than fields of ``metrics``:
+    ``metrics`` is the document-level verdict Phase 1 froze and its shape is
+    asserted field-by-field in ``test_dataset_isolation.py``, so growing it would
+    break a test that exists to catch exactly that kind of quiet extension. A
+    ``1.1.0`` report is therefore readable as a ``1.0.0`` report plus four new
+    top-level keys.
     """
     block: dict[str, Any] = {
         "available": dataset.available,
@@ -1214,6 +2157,10 @@ def _dataset_to_dict(dataset: DatasetEvaluation) -> dict[str, Any]:
     block["manifest_version"] = dataset.manifest_version
     block["metrics"] = dataset.metrics.model_dump()
     block["summary"] = dataset.summary.model_dump()
+    block["category_metrics"] = dataset.category_metrics.model_dump()
+    block["domain_rates"] = dataset.domain_rates.model_dump()
+    block["detector_attribution"] = dataset.detector_attribution.model_dump()
+    block["confidence_stats"] = dataset.confidence_stats.model_dump()
     block["evaluations"] = [_evaluation_to_dict(item) for item in dataset.evaluations]
     return block
 
